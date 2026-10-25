@@ -1,0 +1,130 @@
+:root {
+  --bg: #f4f2ed;
+  --surface: #ffffff;
+  --ink: #1b1b1f;
+  --ink-soft: #5c5b63;
+  --line: #dedbd3;
+  --accent: #2f5bd3;
+  --shadow: 0 1px 2px rgb(20 20 30 / 0.06), 0 10px 30px rgb(20 20 30 / 0.08);
+  --font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111215;
+    --surface: #1b1c21;
+    --ink: #ecebe8;
+    --ink-soft: #a9a7a2;
+    --line: #2d2f36;
+    --accent: #8aa8ff;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.3);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #111215;
+  --surface: #1b1c21;
+  --ink: #ecebe8;
+  --ink-soft: #a9a7a2;
+  --line: #2d2f36;
+  --accent: #8aa8ff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px rgb(0 0 0 / 0.3);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Home */
+.home {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: clamp(48px, 10vh, 112px) 16px 64px;
+}
+
+.home h1 {
+  margin: 0 0 28px;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.projects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 16px;
+}
+
+.project {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.project:hover { transform: translateY(-2px); border-color: var(--accent); }
+.project:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.project-name { font-size: 1.25rem; font-weight: 600; }
+.project-desc { color: var(--ink-soft); font-size: 0.95rem; }
+.project-go { margin-top: 10px; color: var(--accent); font-weight: 600; font-size: 0.95rem; }
+
+/* Game pages: a slim bar with Back, and the game filling the rest of the screen */
+.game-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.backbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 max(16px, env(safe-area-inset-left, 0px));
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.back:hover { background: var(--bg); }
+.back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.back svg { width: 16px; height: 16px; }
+
+.game-frame {
+  flex: 1;
+  display: block;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+}
