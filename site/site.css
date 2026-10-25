@@ -123,8 +123,40 @@ html { scroll-behavior: smooth; }
   list-style: none;
 }
 
-.cards-small { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
-.cards-small .card { padding: 18px 20px; }
+.hobbies { grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 12px; }
+
+.hobby {
+  align-items: center;
+  gap: 12px;
+  padding: 22px 16px 20px;
+  text-align: center;
+}
+
+.hobby .card-name { font-size: 1rem; }
+
+.hobby-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.hobby-icon svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hobby-icon .fill { fill: currentColor; fill-opacity: 0.2; }
+.hobby-icon .thick { stroke-width: 3.6; }
+.hobby-icon .dot { fill: currentColor; stroke: none; }
 
 .card {
   display: flex;
