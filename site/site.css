@@ -76,7 +76,8 @@ html { scroll-behavior: smooth; }
 }
 
 .topnav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.topnav-name { font-weight: 700; letter-spacing: -0.01em; }
+.topnav-home { padding: 6px 12px; margin-left: -12px; font-weight: 600; font-size: 0.95rem; }
+.topnav-home:hover { background: var(--surface); }
 .topnav-links { display: flex; gap: 4px; }
 .topnav-links a { padding: 6px 12px; font-weight: 600; font-size: 0.95rem; color: var(--ink-soft); }
 .topnav-links a:hover { color: var(--ink); background: var(--surface); }
