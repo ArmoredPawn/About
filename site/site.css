@@ -124,6 +124,10 @@ html { scroll-behavior: smooth; }
   list-style: none;
 }
 
+/* At most two wide cards per row; an odd last card fills the row instead of sitting alone */
+.cards:not(.hobbies) { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.cards:not(.hobbies) > :last-child:nth-child(odd):not(:only-child) { grid-column: 1 / -1; }
+
 .hobbies { grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 12px; }
 
 .hobby {
