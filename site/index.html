@@ -3,27 +3,102 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fun Projects</title>
+  <title>Ayush Srivastava</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="site.css">
 </head>
 <body>
+  <header class="topnav">
+    <div class="topnav-inner">
+      <a class="topnav-name" href="#about">Ayush Srivastava</a>
+      <nav class="topnav-links" aria-label="Sections">
+        <a href="#about">About</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
   <main class="home">
-    <h1>Fun Projects</h1>
-    <nav class="projects" aria-label="Fun Projects">
-      <a class="project" href="countries-game.html">
-        <span class="project-name">Ranked: the Countries Game</span>
-        <span class="project-desc">Name the top 10 or bottom 10 countries in a new category every round.</span>
-        <span class="project-go">Play →</span>
-      </a>
-      <a class="project" href="ww2-map.html">
-        <span class="project-name">Europe at War, 1939–1945</span>
-        <span class="project-desc">An interactive map of the Second World War in Europe, month by month.</span>
-        <span class="project-go">Explore →</span>
-      </a>
-    </nav>
+    <section id="about" class="intro">
+      <h1>Ayush Srivastava</h1>
+      <p class="lede">I'm a student at North Allegheny Senior High School who builds machine-learning tools for health research, leads computing and science outreach, and makes the occasional geography game.</p>
+    </section>
+
+    <section class="section" aria-labelledby="research-h">
+      <h2 id="research-h">Research</h2>
+      <div class="cards">
+        <article class="card">
+          <span class="card-tag">Published · NHSJS</span>
+          <h3 class="card-name">Diabetes Risk Analyzer</h3>
+          <p class="card-desc">Using lifestyle markers and machine learning to detect diabetes. Answer a set of health and lifestyle questions and the model returns a risk estimate.</p>
+          <div class="card-links">
+            <a href="https://diabetesriskanalyzer.org">Try the analyzer →</a>
+            <a href="https://nhsjs.com/wp-content/uploads/2026/07/Using-Lifestyle-Markers-and-Machine-Learning-to-Detect-Diabetes.pdf">Read the paper →</a>
+          </div>
+        </article>
+        <article class="card">
+          <span class="card-tag">Presented · BMES &amp; IEEE Baltimore</span>
+          <h3 class="card-name">Predicting Liver Cirrhosis Survival</h3>
+          <p class="card-desc">A two-stage approach: a Random Forest predicts patient survival (ROC-AUC 0.83), then a second model estimates whether each prediction is correct (ROC-AUC 0.78).</p>
+          <div class="card-links">
+            <a href="https://zenodo.org/records/19985511">Read the preprint →</a>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="leadership-h">
+      <h2 id="leadership-h">Leadership</h2>
+      <div class="cards">
+        <article class="card">
+          <span class="card-tag">Leadership</span>
+          <h3 class="card-name">Steel City Codes</h3>
+          <p class="card-desc">Helping lead Steel City Codes and its work in computing.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">Leadership</span>
+          <h3 class="card-name">ScienceGlimpse</h3>
+          <p class="card-desc">Helping lead ScienceGlimpse and its work in science.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="projects-h">
+      <h2 id="projects-h">Fun Projects</h2>
+      <nav class="cards" aria-labelledby="projects-h">
+        <a class="card card-link" href="countries-game.html">
+          <h3 class="card-name">Ranked: the Countries Game</h3>
+          <p class="card-desc">Name the top 10 or bottom 10 countries in a new category every round.</p>
+          <span class="card-go">Play →</span>
+        </a>
+        <a class="card card-link" href="ww2-map.html">
+          <h3 class="card-name">Europe at War, 1939–1945</h3>
+          <p class="card-desc">An interactive map of the Second World War in Europe, month by month.</p>
+          <span class="card-go">Explore →</span>
+        </a>
+      </nav>
+    </section>
+
+    <section class="section" aria-labelledby="hobbies-h">
+      <h2 id="hobbies-h">Hobbies</h2>
+      <ul class="cards cards-small">
+        <li class="card"><h3 class="card-name">Running</h3></li>
+        <li class="card"><h3 class="card-name">Chess</h3></li>
+        <li class="card"><h3 class="card-name">Investing</h3></li>
+        <li class="card"><h3 class="card-name">Table Tennis</h3></li>
+        <li class="card"><h3 class="card-name">Geography</h3><p class="card-desc">The reason for the games above.</p></li>
+      </ul>
+    </section>
+
+    <section id="contact" class="section" aria-labelledby="contact-h">
+      <h2 id="contact-h">Contact</h2>
+      <div class="card contact">
+        <p class="card-desc">The best way to reach me is by email.</p>
+        <a class="contact-email" href="mailto:asrivastava1125@gmail.com">asrivastava1125@gmail.com</a>
+      </div>
+    </section>
   </main>
 </body>
 </html>

@@ -1,6 +1,7 @@
-# Fun Projects
+# Ayush Srivastava
 
-A home page linking to two projects, each shown exactly as it is in its own repo:
+A personal home page (research, leadership, hobbies and contact) that also links to two fun projects,
+each shown exactly as it is in its own repo:
 
 - [Ranked: the Countries Game](https://github.com/Armoredpawn/Countries-Game) (`Countries Game/`)
 - [Europe at War, 1939–1945](https://github.com/ArmoredPawn/WW2-Map) (`WW2 map/`)

@@ -44,28 +44,89 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* Top nav */
+.topnav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topnav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 880px;
+  height: 56px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.topnav a {
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+.topnav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.topnav-name { font-weight: 700; letter-spacing: -0.01em; }
+.topnav-links { display: flex; gap: 4px; }
+.topnav-links a { padding: 6px 12px; font-weight: 600; font-size: 0.95rem; color: var(--ink-soft); }
+.topnav-links a:hover { color: var(--ink); background: var(--surface); }
+
 /* Home */
 .home {
   max-width: 880px;
   margin: 0 auto;
-  padding: clamp(48px, 10vh, 112px) 16px 64px;
+  padding: clamp(40px, 8vh, 96px) 16px 80px;
 }
 
+.home section { scroll-margin-top: 72px; }
+
 .home h1 {
-  margin: 0 0 28px;
+  margin: 0 0 16px;
   font-size: clamp(2rem, 5vw, 3rem);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
 }
 
-.projects {
+.lede {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+}
+
+.section { margin-top: 56px; }
+
+.section h2 {
+  margin: 0 0 16px;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.project {
+.cards-small { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
+.cards-small .card { padding: 18px 20px; }
+
+.card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -75,16 +136,49 @@ body {
   border-radius: 16px;
   box-shadow: var(--shadow);
   color: inherit;
+}
+
+.card-link {
   text-decoration: none;
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
-.project:hover { transform: translateY(-2px); border-color: var(--accent); }
-.project:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.card-link:hover { transform: translateY(-2px); border-color: var(--accent); }
+.card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-.project-name { font-size: 1.25rem; font-weight: 600; }
-.project-desc { color: var(--ink-soft); font-size: 0.95rem; }
-.project-go { margin-top: 10px; color: var(--accent); font-weight: 600; font-size: 0.95rem; }
+.card-tag {
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card-name { margin: 0; font-size: 1.15rem; font-weight: 600; line-height: 1.3; }
+.card-desc { margin: 0; color: var(--ink-soft); font-size: 0.95rem; }
+.card-go { margin-top: auto; padding-top: 10px; color: var(--accent); font-weight: 600; font-size: 0.95rem; }
+
+.card-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.card-links a, .contact-email {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+  border-radius: 4px;
+}
+
+.card-links a:hover, .contact-email:hover { text-decoration: underline; }
+.card-links a:focus-visible, .contact-email:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.contact { gap: 8px; }
+.contact-email { font-size: 1.15rem; overflow-wrap: anywhere; }
 
 /* Game pages: a slim bar with Back, and the game filling the rest of the screen */
 .game-page {
