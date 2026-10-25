@@ -1,8 +1,0 @@
-[submodule "Countries Game"]
-	path = Countries Game
-	url = https://github.com/Armoredpawn/Countries-Game.git
-	branch = main
-[submodule "WW2 map"]
-	path = WW2 map
-	url = https://github.com/ArmoredPawn/WW2-Map.git
-	branch = main

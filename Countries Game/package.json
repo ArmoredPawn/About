@@ -1,0 +1,16 @@
+{
+  "name": "countries-game",
+  "version": "1.0.0",
+  "description": "Name the top 10 or bottom 10 countries in a new category every round.",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

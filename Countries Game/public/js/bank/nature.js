@@ -1,0 +1,78 @@
+// Climate and land cover.
+// Answers are [country, value] pairs ordered by rank: rank 1 is the highest
+// value for a top 10 and the lowest value for a bottom 10.
+
+export default [
+  {
+    title: 'Forest area',
+    direction: 'top',
+    description: 'Largest total area of forest.',
+    source: 'FAO, 2022',
+    answers: [
+      ['Russia', '8.15 million km²'],
+      ['Brazil', '4.94 million km²'],
+      ['Canada', '3.47 million km²'],
+      ['United States', '3.10 million km²'],
+      ['China', '2.24 million km²'],
+      ['Australia', '1.34 million km²'],
+      ['DR Congo', '1.24 million km²'],
+      ['Indonesia', '909,000 km²'],
+      ['India', '727,000 km²'],
+      ['Peru', '720,000 km²'],
+    ],
+  },
+  {
+    title: 'Forest cover',
+    direction: 'top',
+    description: 'Highest share of land area covered by forest.',
+    source: 'FAO, 2022',
+    answers: [
+      ['Suriname', '94.5%'],
+      ['Guyana', '93.5%'],
+      ['Micronesia', '92.1%'],
+      ['Gabon', '91.2%'],
+      ['Palau', '90.4%'],
+      ['Solomon Islands', '90.1%'],
+      ['Equatorial Guinea', '86.7%'],
+      ['Papua New Guinea', '79.0%'],
+      ['Liberia', '78.5%'],
+      ['Finland', '73.7%'],
+    ],
+  },
+  {
+    title: 'Average temperature',
+    direction: 'top',
+    description: 'Hottest countries by average yearly temperature across the whole country.',
+    source: 'World Bank Climate Knowledge Portal, 1991–2020',
+    answers: [
+      ['Burkina Faso', '30.4 °C'],
+      ['Mali', '29.2 °C'],
+      ['Senegal', '28.9 °C'],
+      ['Mauritania', '28.8 °C'],
+      ['Tuvalu', '28.6 °C'],
+      ['Djibouti', '28.5 °C'],
+      ['Gambia', '28.4 °C'],
+      ['United Arab Emirates', '28.2 °C'],
+      ['Maldives', '28.1 °C'],
+      ['Niger', '28.0 °C'],
+    ],
+  },
+  {
+    title: 'Average temperature',
+    direction: 'bottom',
+    description: 'Coldest countries by average yearly temperature across the whole country.',
+    source: 'World Bank Climate Knowledge Portal, 1991–2020',
+    answers: [
+      ['Canada', '−4.0 °C'],
+      ['Russia', '−3.8 °C'],
+      ['Mongolia', '1.1 °C'],
+      ['Iceland', '1.9 °C'],
+      ['Norway', '2.2 °C'],
+      ['Finland', '2.5 °C'],
+      ['Kyrgyzstan', '2.7 °C'],
+      ['Sweden', '3.2 °C'],
+      ['Tajikistan', '3.9 °C'],
+      ['Estonia', '6.3 °C'],
+    ],
+  },
+];

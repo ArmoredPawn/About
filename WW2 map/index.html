@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Europe at War, 1939–1945</title>
+<meta name="description" content="An interactive map of the Second World War in Europe, month by month from September 1939 to May 1945.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil+Display:wght@600;800&family=Libre+Franklin:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <header class="masthead">
+    <div class="readout">
+      <h1 class="brand">Europe at War <span>1939–1945</span></h1>
+      <div class="date" id="date-label" aria-live="polite">1 SEP 1939</div>
+    </div>
+    <section class="brief" id="brief" aria-label="Briefing" aria-live="polite">
+      <div class="brief-head">Briefing <span id="brief-when">1 September 1939</span></div>
+      <ul id="brief-list"><li>Germany invades Poland from the west, north and south</li></ul>
+      <div class="brief-meta">
+        <span class="brief-bar"><i id="brief-bar"></i></span>
+        <span id="brief-next"></span>
+      </div>
+    </section>
+    <section class="manpower" id="manpower" aria-label="Men under arms">
+      <div class="brief-head">Men under arms <span>all theaters · estimates</span></div>
+      <div class="mp-rows" id="mp-rows"></div>
+      <div class="mp-foot" id="mp-foot"></div>
+    </section>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="pane" id="pane-a">
+      <div class="pane-tag" id="pane-a-tag" hidden></div>
+    </div>
+    <div class="pane" id="pane-b" hidden>
+      <div class="pane-tag" id="pane-b-tag"></div>
+    </div>
+    <div class="tooltip" id="tooltip" role="status" hidden></div>
+  </main>
+
+  <aside class="controls" id="controls" aria-label="Map options">
+    <button class="controls-toggle" id="controls-toggle" aria-expanded="true" aria-controls="controls-body">
+      <span>Map options</span>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <div class="controls-body" id="controls-body">
+      <section>
+        <h2>Theater</h2>
+        <div class="chips" id="theaters" role="radiogroup" aria-label="Theater"></div>
+      </section>
+      <section>
+        <h2>Layers</h2>
+        <div class="layers" id="layers"></div>
+        <p class="holocaust-note" id="holocaust-note" hidden></p>
+      </section>
+      <section>
+        <h2>Compare two dates</h2>
+        <button class="btn" id="compare-toggle" aria-pressed="false">Side-by-side view</button>
+      </section>
+    </div>
+  </aside>
+
+  <section class="legend" aria-label="Legend">
+    <div><i class="sw sw-axis"></i>Axis &amp; aligned</div>
+    <div><i class="sw sw-occupied"></i>Axis-occupied</div>
+    <div><i class="sw sw-allied"></i>Western Allies</div>
+    <div><i class="sw sw-soviet"></i>Soviet Union</div>
+    <div><i class="sw sw-neutral"></i>Neutral</div>
+    <div><i class="sw sw-front"></i>Front line</div>
+    <p class="legend-note">Modern borders; fronts simplified</p>
+  </section>
+
+  <footer class="timeline" id="timeline">
+    <div class="tl-main" id="tl-main">
+      <button class="play" id="play" aria-label="Play the war">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path id="play-icon" d="M7 4.5v15l12-7.5z"/></svg>
+      </button>
+      <button class="speed" id="speed" aria-label="Playback speed">1×</button>
+      <div class="track-wrap">
+        <div class="ticks" id="ticks" aria-hidden="true"></div>
+        <input type="range" id="slider" min="0" max="2075" step="1" value="0" aria-label="Date">
+        <div class="years" id="years" aria-hidden="true"></div>
+      </div>
+    </div>
+    <div class="tl-compare" id="tl-compare" hidden>
+      <label class="cmp"><span>Left</span><input type="month" id="cmp-a" min="1939-09" max="1945-05" value="1941-06"></label>
+      <button class="btn" id="cmp-swap">Swap</button>
+      <label class="cmp"><span>Right</span><input type="month" id="cmp-b" min="1939-09" max="1945-05" value="1944-06"></label>
+      <div class="presets" id="presets"></div>
+    </div>
+  </footer>
+
+  <article class="card" id="card" hidden aria-live="polite">
+    <button class="card-close" id="card-close" aria-label="Close">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <div class="card-media" id="card-media"></div>
+    <div class="card-body">
+      <div class="card-kicker" id="card-kicker"></div>
+      <h2 id="card-title"></h2>
+      <div class="card-meta" id="card-meta"></div>
+      <p id="card-summary"></p>
+      <dl class="card-figs" id="card-figs"></dl>
+      <div class="why" id="card-why">
+        <div class="why-label" id="card-why-label">Why it mattered</div>
+        <p id="card-why-text"></p>
+      </div>
+      <a class="card-link" id="card-link" target="_blank" rel="noopener">Read more on Wikipedia</a>
+    </div>
+  </article>
+</div>
+
+<script src="vendor/d3.min.js"></script>
+<script src="vendor/topojson-client.min.js"></script>
+<script src="js/geo/world.js"></script>
+<script src="js/data/control.js"></script>
+<script src="js/data/fronts.js"></script>
+<script src="js/data/events.js"></script>
+<script src="js/data/memory.js"></script>
+<script src="js/data/armies.js"></script>
+<script src="js/data/airsea.js"></script>
+<script src="js/data/forces.js"></script>
+<script src="js/data/manpower.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

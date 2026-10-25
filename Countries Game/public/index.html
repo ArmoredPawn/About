@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ranked — The Countries Game</title>
+  <meta name="description" content="Name the top 10 or bottom 10 countries in a new category every round.">
+  <meta name="theme-color" content="#f5f1e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121418" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Ranked home">
+      <span class="brand-mark" aria-hidden="true">10</span>
+      <span class="brand-name">Ranked</span>
+    </a>
+    <dl class="stats" id="stats" aria-label="Your stats">
+      <div><dt>Played</dt><dd id="stat-played">0</dd></div>
+      <div><dt>Avg</dt><dd id="stat-avg">–</dd></div>
+      <div><dt>Perfect</dt><dd id="stat-perfect">0</dd></div>
+    </dl>
+  </header>
+
+  <main class="layout">
+    <section class="card round" id="round" aria-busy="true">
+      <div class="round-head">
+        <div class="round-meta">
+          <span class="round-tags">
+            <span class="badge" id="badge">Loading</span>
+            <span class="theme-tag" id="theme-label" hidden></span>
+          </span>
+          <span class="lives" id="lives" aria-label="Strikes left"></span>
+        </div>
+        <h1 class="round-title" id="title"><span class="skeleton skeleton-title"></span></h1>
+        <p class="round-desc" id="desc"><span class="skeleton skeleton-line"></span></p>
+        <p class="round-source" id="source"></p>
+      </div>
+
+      <form class="guess" id="guess-form" autocomplete="off">
+        <label class="visually-hidden" for="guess">Name a country</label>
+        <input id="guess" name="guess" type="text" placeholder="Name a country…" spellcheck="false"
+               autocapitalize="words" enterkeyhint="go" disabled>
+        <button type="submit" class="btn btn-primary" id="guess-btn" disabled>Guess</button>
+      </form>
+      <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
+
+      <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress-bar"></div></div>
+      <p class="progress-label" id="progress-label">0 of 10 found</p>
+
+      <ol class="slots" id="slots" aria-label="Ranked answers"></ol>
+
+      <div class="wrong" id="wrong" hidden>
+        <h2 class="wrong-heading">Not on the list</h2>
+        <ul class="chips" id="wrong-list"></ul>
+      </div>
+
+      <div class="result" id="result" hidden>
+        <p class="result-score" id="result-score"></p>
+        <p class="result-note" id="result-note"></p>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" id="skip" disabled title="Skip to a new random category">Skip ↷</button>
+        <button type="button" class="btn btn-ghost" id="give-up" disabled>Give up</button>
+        <button type="button" class="btn btn-ghost" id="share" hidden>Copy result</button>
+        <button type="button" class="btn btn-primary" id="next" hidden>Next round →</button>
+      </div>
+
+      <div class="error" id="error" hidden>
+        <p>We couldn't load a round. Check your connection and try again.</p>
+        <button type="button" class="btn btn-primary" id="retry">Try again</button>
+      </div>
+    </section>
+
+    <aside class="card settings" aria-label="Game settings">
+      <h2 class="settings-heading">How to play</h2>
+      <p class="settings-copy">
+        Each round names a category and asks for its <strong>top 10</strong> or <strong>bottom 10</strong> countries.
+        Name as many as you can. A country that isn't on the list costs a strike.
+      </p>
+
+      <fieldset class="segmented" id="dir-setting">
+        <legend>Rounds</legend>
+        <label><input type="radio" name="dir" value="mix" checked><span>Mixed</span></label>
+        <label><input type="radio" name="dir" value="top"><span>Top 10</span></label>
+        <label><input type="radio" name="dir" value="bottom"><span>Bottom 10</span></label>
+      </fieldset>
+
+      <fieldset class="segmented" id="lives-setting">
+        <legend>Strikes</legend>
+        <label><input type="radio" name="lives" value="3" checked><span>3</span></label>
+        <label><input type="radio" name="lives" value="5"><span>5</span></label>
+        <label><input type="radio" name="lives" value="0"><span>Unlimited</span></label>
+      </fieldset>
+
+      <fieldset class="theme-picker" id="theme-setting">
+        <legend>Categories</legend>
+        <label><input type="radio" name="theme" value="all" checked><span>All</span></label>
+        <label><input type="radio" name="theme" value="economy"><span>Economy</span></label>
+        <label><input type="radio" name="theme" value="people"><span>People</span></label>
+        <label><input type="radio" name="theme" value="geography"><span>Geography</span></label>
+        <label><input type="radio" name="theme" value="regions"><span>Regions</span></label>
+        <label><input type="radio" name="theme" value="nature"><span>Nature</span></label>
+        <label><input type="radio" name="theme" value="energy"><span>Energy</span></label>
+        <label><input type="radio" name="theme" value="food"><span>Food</span></label>
+        <label><input type="radio" name="theme" value="society"><span>Society</span></label>
+        <label><input type="radio" name="theme" value="sport"><span>Sport</span></label>
+      </fieldset>
+      <p class="settings-hint">Changes apply from the next round, or press Skip.</p>
+
+      <div class="deck">
+        <p class="deck-status" id="deck-status"></p>
+        <button type="button" class="link-btn" id="reshuffle">Reshuffle</button>
+      </div>
+      <p class="settings-hint">Categories come up in random order and won’t repeat until you’ve played them all.</p>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    Figures are approximate and drawn from public sources such as the UN, World Bank and IMF.
+  </footer>
+</body>
+</html>

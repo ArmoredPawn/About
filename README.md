@@ -1,11 +1,10 @@
 # Ayush Srivastava
 
-A personal home page (research, leadership, hobbies and contact) that also links to two fun projects,
-each shown exactly as it is in its own repo:
+A personal home page (research, leadership, hobbies and contact) that also links to two fun projects:
 
-- [Ranked: the Countries Game](https://github.com/Armoredpawn/Countries-Game) (`Countries Game/`)
-- [Europe at War, 1939–1945](https://github.com/ArmoredPawn/WW2-Map) (`WW2 map/`)
+- Ranked: the Countries Game (`Countries Game/`)
+- Europe at War, 1939–1945 (`WW2 map/`)
 
-Both are git submodules. `site/` holds the home page and the two pages that show each game under a Back bar.
-`sh build.sh` assembles everything into `_site/`, which the Pages workflow deploys. The workflow always
-pulls the latest version of each game, so re-run it (Actions → Deploy site to Pages) after updating a game.
+Each game lives in its own folder, unchanged from its original repo. `site/` holds the home page and the two
+pages that show each game under a Back bar. `sh build.sh` assembles everything into `_site/`, which the Pages
+workflow deploys on every push to `main`.

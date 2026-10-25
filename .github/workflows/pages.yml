@@ -1,4 +1,4 @@
-# Builds the Fun Projects site (home page + both games) and deploys it to GitHub Pages
+# Builds the site (home page + both games) and deploys it to GitHub Pages
 name: Deploy site to Pages
 
 on:
@@ -24,10 +24,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Use the latest version of each game
-        run: git submodule update --remote
       - name: Build
         run: sh build.sh
       - name: Setup Pages
