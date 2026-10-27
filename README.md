@@ -1,6 +1,6 @@
 # Ayush Srivastava
 
-A personal home page (projects, leadership, hobbies and contact) that also links to two side projects:
+A personal home page (projects, leadership, hobbies and contact) that also links to side projects, including two games:
 
 - Ranked: the Countries Game (`Countries Game/`)
 - Europe at War, 1939–1945 (`WW2 map/`)
