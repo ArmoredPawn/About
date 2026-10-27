@@ -811,6 +811,11 @@ kbd {
   .menu-side { order: 2; }
 }
 
+/* In a round the score, streak and lives need the room, so the name gives way to the logo */
+@media (max-width: 760px) {
+  .app[data-screen="game"] .brand-name { display: none; }
+}
+
 @media (max-width: 560px) {
   .topbar { gap: 10px; }
   .brand-name { display: none; }

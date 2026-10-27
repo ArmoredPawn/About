@@ -1,4 +1,4 @@
-# By Ear
+# Test Your Pitch
 
 An ear-training game. It plays a note, an interval, a chord or a short tune, and you find it on the piano.
 
