@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>By Ear — An Ear-Training Game</title>
+  <meta name="description" content="Hear a note, a chord or a short tune, then find it on the piano with your laptop keys, a click or a real keyboard.">
+  <meta name="theme-color" content="#f5f1e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121418" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="app" id="app" data-screen="menu">
+    <header class="topbar">
+      <button class="brand" id="brand" type="button" aria-label="By Ear: back to the menu">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
+        </span>
+        <span class="brand-name">By Ear</span>
+      </button>
+
+      <div class="hud" id="hud" hidden>
+        <div class="hud-score">
+          <span class="hud-label" id="score-label">Score</span>
+          <span class="hud-value" id="score">0</span>
+        </div>
+        <div class="streak" id="streak" title="Answer in a row to raise your multiplier">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5c.6 3.6 4.8 5.6 4.8 10.6a4.8 4.8 0 0 1-9.6 0c0-2.3 1.1-3.6 2.2-4.8.3 1.6 1.2 2.6 2.1 2.9C10.9 8.6 11.6 5.6 12 2.5z"/></svg>
+          <span class="streak-mult" id="mult">×1</span>
+          <span class="streak-count" id="streak-count">0 in a row</span>
+        </div>
+        <div class="lives" id="lives" aria-label="3 lives left"></div>
+      </div>
+
+      <div class="top-actions">
+        <button class="icon-btn" id="help-btn" type="button" aria-label="Key map and controls" title="Key map (?)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h1M9.5 10h1M13 10h1M16.5 10h1M7.5 14h9"/></svg>
+        </button>
+        <button class="icon-btn" id="pause-btn" type="button" aria-label="Pause" title="Pause (Esc)" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6v12M15 6v12"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="stage">
+      <!-- Menu -->
+      <section class="screen menu" id="screen-menu" aria-labelledby="menu-title">
+        <div class="menu-main">
+          <p class="eyebrow">An ear-training game</p>
+          <h1 class="title" id="menu-title">Hear it. <span>Find it.</span> Play&nbsp;it.</h1>
+          <p class="lede">The game plays a note, a chord or a short tune. Find it on the piano below with your laptop keys, a click or a real keyboard.</p>
+
+          <div class="play-row">
+            <button class="btn btn-primary btn-big" id="play-btn" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+              Play
+              <kbd>Enter</kbd>
+            </button>
+            <div class="best" id="menu-best" hidden>
+              <span class="best-label">Personal best</span>
+              <span class="best-value" id="menu-best-value">0</span>
+            </div>
+          </div>
+          <p class="play-note">Five stages, then an endless encore that speeds up. You have three lives, and answering in a row multiplies your points.</p>
+
+          <h2 class="label">Or practise one drill</h2>
+          <p class="label-note">No clock and no lives. It gets harder as you get answers right.</p>
+          <div class="drills" id="drills"></div>
+        </div>
+
+        <aside class="menu-side">
+          <div class="panel keymap-panel">
+            <h2 class="label">Your laptop is the piano</h2>
+            <div class="keymap" id="keymap-menu" aria-hidden="true"></div>
+            <p class="panel-note">The home row plays the white keys and the row above plays the black keys. Every piano key below shows its letter.</p>
+          </div>
+          <div class="panel">
+            <h2 class="label">Other ways to play</h2>
+            <ul class="ways">
+              <li>
+                <span class="way-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0v4a6 6 0 0 1-6 6h-.6a5 5 0 0 1-3.9-1.9L5 15.5a1.5 1.5 0 0 1 2.3-1.9L9 15.3"/></svg></span>
+                <span><b>Click or tap</b> the keys on screen.</span>
+              </li>
+              <li>
+                <span class="way-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M7 6v7M12 6v7M17 6v7M7 13v5M12 13v5M17 13v5"/></svg></span>
+                <span class="way-midi">
+                  <span><b>A MIDI keyboard</b> plugged into your laptop. Any octave counts.</span>
+                  <span class="midi-row">
+                    <button class="btn btn-small" id="midi-btn" type="button">Connect keyboard</button>
+                    <button class="btn btn-small btn-quiet" id="midi-sound" type="button" hidden aria-pressed="true">Game sound: on</button>
+                  </span>
+                  <span class="midi-status" id="midi-status" role="status"></span>
+                </span>
+              </li>
+              <li>
+                <span class="way-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.5"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.5"/></svg></span>
+                <span><b>Headphones help</b>, most of all with chords.</span>
+              </li>
+            </ul>
+          </div>
+        </aside>
+      </section>
+
+      <!-- A round -->
+      <section class="screen game" id="screen-game" hidden aria-label="Game">
+        <div class="stagebar">
+          <span class="stage-name" id="stage-name">Stage 1 · Notes</span>
+          <ol class="dots" id="dots" aria-hidden="true"></ol>
+        </div>
+
+        <div class="prompt" id="prompt" data-state="listen">
+          <div class="prompt-state">
+            <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <span id="state-text">Listen</span>
+          </div>
+          <h2 class="prompt-title" id="q-title">Which note is it?</h2>
+          <p class="prompt-sub" id="q-sub"></p>
+          <div class="slots" id="slots"></div>
+          <p class="verdict" id="verdict"></p>
+          <div class="prompt-foot">
+            <button class="btn btn-quiet" id="replay-btn" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4.5v4h4"/></svg>
+              Hear it again <kbd>Space</kbd>
+            </button>
+            <button class="btn btn-quiet" id="finish-btn" type="button" hidden>Finish practice</button>
+          </div>
+          <div class="timer" id="timer" aria-hidden="true"><i id="timer-fill"></i></div>
+
+          <div class="banner" id="banner" hidden>
+            <p class="banner-kicker" id="banner-kicker">Stage 1 of 5</p>
+            <h2 class="banner-title" id="banner-title">Notes</h2>
+            <p class="banner-text" id="banner-text"></p>
+            <p class="banner-bonus" id="banner-bonus" hidden></p>
+            <button class="btn btn-primary" id="banner-go" type="button">Start <kbd>Enter</kbd></button>
+            <span class="banner-bar"><i></i></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Results -->
+      <section class="screen end" id="screen-end" hidden aria-labelledby="end-eyebrow">
+        <div class="end-hero">
+          <p class="eyebrow" id="end-eyebrow">Game over</p>
+          <p class="end-score" id="end-score">0</p>
+          <p class="end-best" id="end-best"></p>
+          <div class="end-actions">
+            <button class="btn btn-primary" id="again-btn" type="button">Play again <kbd>Enter</kbd></button>
+            <button class="btn btn-quiet" id="menu-btn" type="button">Menu <kbd>Esc</kbd></button>
+          </div>
+          <dl class="end-stats" id="end-stats"></dl>
+        </div>
+        <div class="end-side">
+          <div class="panel">
+            <h2 class="label">By drill</h2>
+            <ul class="bars" id="end-drills"></ul>
+          </div>
+          <div class="panel">
+            <h2 class="label">Practise next</h2>
+            <ul class="weak" id="end-weak"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <p class="hint" id="hint" aria-live="polite"></p>
+
+    <div class="piano-wrap" id="piano-wrap">
+      <div class="piano" id="piano" role="group" aria-label="Piano keyboard, C to E"></div>
+    </div>
+
+    <!-- Pause -->
+    <div class="overlay" id="pause" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+        <h2 class="sheet-title" id="pause-title">Paused</h2>
+        <p class="sheet-text" id="pause-text">The clock has stopped. The sound will replay when you come back.</p>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" id="resume-btn" type="button">Resume <kbd>Esc</kbd></button>
+          <button class="btn btn-quiet" id="results-btn" type="button">End and see results</button>
+          <button class="btn btn-quiet" id="quit-btn" type="button">Quit to menu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key map -->
+    <div class="overlay" id="help" hidden>
+      <div class="sheet sheet-wide" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <button class="icon-btn sheet-close" id="help-close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <h2 class="sheet-title" id="help-title">Key map</h2>
+        <p class="sheet-text">Each laptop key plays the piano key in the same spot. The home row is the white keys and the row above is the black keys.</p>
+        <div class="keymap keymap-big" id="keymap-help" aria-hidden="true"></div>
+        <table class="keytable">
+          <caption class="visually-hidden">Laptop keys and the notes they play</caption>
+          <tbody id="keytable"></tbody>
+        </table>
+        <h3 class="label">Controls</h3>
+        <ul class="controls">
+          <li><kbd>Space</kbd> Hear it again</li>
+          <li><kbd>Enter</kbd> Start or continue</li>
+          <li><kbd>Esc</kbd> Pause</li>
+          <li><kbd>?</kbd> This key map</li>
+        </ul>
+        <label class="toggle">
+          <input type="checkbox" id="names-toggle" checked>
+          <span>Show note names on the piano</span>
+        </label>
+      </div>
+    </div>
+
+    <p class="visually-hidden" id="announce" aria-live="assertive"></p>
+  </div>
+</body>
+</html>
