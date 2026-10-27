@@ -137,6 +137,55 @@ html { scroll-behavior: smooth; }
   object-fit: cover;
 }
 
+/* Languages: a row of pills under the bio */
+.langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 18px;
+}
+
+.langs-label {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.langs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.langs-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--surface-top, var(--surface)), var(--surface));
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.lang-letter {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+  font: 600 0.9rem/1 'Nirmala UI', 'Noto Sans Devanagari', 'Noto Sans Bengali', var(--font);
+}
+
 @media (max-width: 560px) {
   .intro { flex-direction: column; align-items: flex-start; gap: 20px; }
   .avatar { width: 96px; height: 96px; }
