@@ -34,6 +34,45 @@
   color-scheme: dark;
 }
 
+/* Home page palette: cool neutrals with an indigo accent. The game pages keep the palette above. */
+.home-page {
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --ink: #111827;
+  --ink-soft: #5b6476;
+  --line: #e2e6ee;
+  --accent: #4f46e5;
+  --accent-2: #db2777;
+  --shadow: 0 1px 2px rgb(17 24 39 / 0.04), 0 8px 24px rgb(17 24 39 / 0.06);
+  --glow: 12%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .home-page {
+    --bg: #0b0d13;
+    --surface: #141823;
+    --ink: #e9ebf1;
+    --ink-soft: #9aa2b3;
+    --line: #252b38;
+    --accent: #8f95ff;
+    --accent-2: #f472b6;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+    --glow: 18%;
+  }
+}
+
+:root[data-theme="dark"] .home-page {
+  --bg: #0b0d13;
+  --surface: #141823;
+  --ink: #e9ebf1;
+  --ink-soft: #9aa2b3;
+  --line: #252b38;
+  --accent: #8f95ff;
+  --accent-2: #f472b6;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+  --glow: 18%;
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -42,6 +81,14 @@ body {
   color: var(--ink);
   font: 16px/1.5 var(--font);
   -webkit-font-smoothing: antialiased;
+}
+
+/* A soft wash of the two accents behind the intro, fading out before the first section */
+.home-page {
+  background:
+    radial-gradient(56rem 30rem at 10% -8rem, color-mix(in srgb, var(--accent) var(--glow), transparent), transparent 70%) no-repeat,
+    radial-gradient(40rem 26rem at 95% -6rem, color-mix(in srgb, var(--accent-2) calc(var(--glow) * 0.7), transparent), transparent 70%) no-repeat,
+    var(--bg);
 }
 
 html { scroll-behavior: smooth; }
@@ -106,8 +153,9 @@ html { scroll-behavior: smooth; }
   flex: none;
   width: 128px;
   height: 128px;
+  padding: 4px;
   border-radius: 50%;
-  border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
   box-shadow: var(--shadow);
   object-fit: cover;
 }
@@ -135,10 +183,22 @@ html { scroll-behavior: smooth; }
 .section { margin-top: 56px; }
 
 .section h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 0 16px;
   font-size: 1.4rem;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+.section h2::before {
+  content: '';
+  flex: none;
+  width: 4px;
+  height: 1.1em;
+  border-radius: 2px;
+  background: linear-gradient(var(--accent), var(--accent-2));
 }
 
 .cards {
@@ -206,7 +266,9 @@ html { scroll-behavior: smooth; }
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
-.card-link:hover { transform: translateY(-2px); border-color: var(--accent); }
+.home .card { transition: border-color 0.15s ease, transform 0.15s ease; }
+.home .card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.card-link:hover, .home .card-link:hover { transform: translateY(-2px); border-color: var(--accent); }
 .card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .card-tag {
