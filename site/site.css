@@ -34,43 +34,20 @@
   color-scheme: dark;
 }
 
-/* Home page palette: cool neutrals with an indigo accent. The game pages keep the palette above. */
+/* Home page palette: always dark, deep navy with indigo and pink accents. The game pages keep the palette above. */
+:root:has(.home-page) { color-scheme: dark; }
+
 .home-page {
-  --bg: #f6f7fb;
-  --surface: #ffffff;
-  --ink: #111827;
-  --ink-soft: #5b6476;
-  --line: #e2e6ee;
-  --accent: #4f46e5;
-  --accent-2: #db2777;
-  --shadow: 0 1px 2px rgb(17 24 39 / 0.04), 0 8px 24px rgb(17 24 39 / 0.06);
-  --glow: 12%;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .home-page {
-    --bg: #0b0d13;
-    --surface: #141823;
-    --ink: #e9ebf1;
-    --ink-soft: #9aa2b3;
-    --line: #252b38;
-    --accent: #8f95ff;
-    --accent-2: #f472b6;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
-    --glow: 18%;
-  }
-}
-
-:root[data-theme="dark"] .home-page {
-  --bg: #0b0d13;
-  --surface: #141823;
-  --ink: #e9ebf1;
-  --ink-soft: #9aa2b3;
-  --line: #252b38;
+  --bg: #07090f;
+  --surface: #10141f;
+  --surface-top: #151a28;
+  --ink: #eceef5;
+  --ink-soft: #98a1b5;
+  --line: #1f2535;
   --accent: #8f95ff;
   --accent-2: #f472b6;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
-  --glow: 18%;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px rgb(0 0 0 / 0.45);
+  --glow: 22%;
 }
 
 * { box-sizing: border-box; }
@@ -266,7 +243,10 @@ html { scroll-behavior: smooth; }
   transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
-.home .card { transition: border-color 0.15s ease, transform 0.15s ease; }
+.home .card {
+  background: linear-gradient(180deg, var(--surface-top), var(--surface));
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
 .home .card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .card-link:hover, .home .card-link:hover { transform: translateY(-2px); border-color: var(--accent); }
 .card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
