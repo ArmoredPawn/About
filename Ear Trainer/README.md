@@ -2,7 +2,8 @@
 
 An ear-training game. It plays a note, an interval, a chord or a short tune, and you find it on the piano.
 
-- **Laptop keys:** the home row (`A S D F G H J K L ;`) plays the white keys from C to E, and the row above (`W E T Y U O P`) plays the black keys.
+- **Laptop keys:** two octaves, C to C to C, laid out as in most music software. `Z X C V B N M` play the lower white keys and
+  `S D G H J` its black keys; `Q W E R T Y U` play the upper white keys and `2 3 5 6 7` its black keys; `I` is the top C.
 - **Mouse or touch:** click or tap the on-screen keys.
 - **MIDI keyboard:** connect one from the menu (Chrome and Edge). Any octave counts.
 

@@ -2,33 +2,43 @@
 
 export const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 
-// The on-screen piano runs C4–E5. Each key maps to a physical key (event.code), so the
-// layout works the same on any keyboard: the home row plays white keys, the row above plays black keys.
+// The on-screen piano runs two octaves, C4–C6. Each key maps to a physical key (event.code), so the
+// layout works the same on any keyboard. As in most music software, the bottom two letter rows play the
+// lower octave (Z row white, A row black) and the top two rows the upper one (Q row white, number row black).
 export const KEYS = [
-  { midi: 60, code: 'KeyA', label: 'A' },
-  { midi: 61, code: 'KeyW', label: 'W' },
-  { midi: 62, code: 'KeyS', label: 'S' },
-  { midi: 63, code: 'KeyE', label: 'E' },
-  { midi: 64, code: 'KeyD', label: 'D' },
-  { midi: 65, code: 'KeyF', label: 'F' },
-  { midi: 66, code: 'KeyT', label: 'T' },
-  { midi: 67, code: 'KeyG', label: 'G' },
-  { midi: 68, code: 'KeyY', label: 'Y' },
-  { midi: 69, code: 'KeyH', label: 'H' },
-  { midi: 70, code: 'KeyU', label: 'U' },
-  { midi: 71, code: 'KeyJ', label: 'J' },
-  { midi: 72, code: 'KeyK', label: 'K' },
-  { midi: 73, code: 'KeyO', label: 'O' },
-  { midi: 74, code: 'KeyL', label: 'L' },
-  { midi: 75, code: 'KeyP', label: 'P' },
-  { midi: 76, code: 'Semicolon', label: ';' },
+  { midi: 60, code: 'KeyZ', label: 'Z' },
+  { midi: 61, code: 'KeyS', label: 'S' },
+  { midi: 62, code: 'KeyX', label: 'X' },
+  { midi: 63, code: 'KeyD', label: 'D' },
+  { midi: 64, code: 'KeyC', label: 'C' },
+  { midi: 65, code: 'KeyV', label: 'V' },
+  { midi: 66, code: 'KeyG', label: 'G' },
+  { midi: 67, code: 'KeyB', label: 'B' },
+  { midi: 68, code: 'KeyH', label: 'H' },
+  { midi: 69, code: 'KeyN', label: 'N' },
+  { midi: 70, code: 'KeyJ', label: 'J' },
+  { midi: 71, code: 'KeyM', label: 'M' },
+  { midi: 72, code: 'KeyQ', label: 'Q' },
+  { midi: 73, code: 'Digit2', label: '2' },
+  { midi: 74, code: 'KeyW', label: 'W' },
+  { midi: 75, code: 'Digit3', label: '3' },
+  { midi: 76, code: 'KeyE', label: 'E' },
+  { midi: 77, code: 'KeyR', label: 'R' },
+  { midi: 78, code: 'Digit5', label: '5' },
+  { midi: 79, code: 'KeyT', label: 'T' },
+  { midi: 80, code: 'Digit6', label: '6' },
+  { midi: 81, code: 'KeyY', label: 'Y' },
+  { midi: 82, code: 'Digit7', label: '7' },
+  { midi: 83, code: 'KeyU', label: 'U' },
+  { midi: 84, code: 'KeyI', label: 'I' },
 ];
 
 export const LOW = 60;
-export const HIGH = 76;
+export const HIGH = 84;
 
 export const isBlack = midi => [1, 3, 6, 8, 10].includes(midi % 12);
 export const noteName = midi => NOTE_NAMES[((midi % 12) + 12) % 12];
+export const fullName = midi => `${noteName(midi)}${Math.floor(midi / 12) - 1}`;
 export const sameNote = (a, b) => ((a - b) % 12 + 12) % 12 === 0;
 
 export const INTERVALS = [
@@ -86,15 +96,16 @@ const WHITE = KEYS.map(k => k.midi).filter(m => !isBlack(m));
 //   answer   how the answer is written in the reveal; `weak` groups misses for the end screen
 // `level` is 1 (easy), 2 (harder) or 3 (encore).
 const GENERATORS = {
+  // From level 2 the mystery note may sit in the upper octave; any octave still counts as right
   notes(level, last) {
     let t;
-    do t = pick([62, 64, 65, 67, 69, 71]); while (t === last);
+    do t = pick([62, 64, 65, 67, 69, 71]) + (level > 1 && Math.random() < 0.5 ? 12 : 0); while (t === last);
     return fromC(t);
   },
 
   chromatic(level, last) {
     let t;
-    do t = between(61, 71); while (t === last);
+    do t = between(61, 71) + (level > 1 && Math.random() < 0.5 ? 12 : 0); while (t === last);
     return fromC(t);
   },
 

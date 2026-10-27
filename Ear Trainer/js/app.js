@@ -1,4 +1,4 @@
-import { KEYS, LOW, DRILLS, drillById, makeQuestion, describeMiss, noteName, isBlack, sameNote } from './music.js';
+import { KEYS, LOW, DRILLS, drillById, makeQuestion, describeMiss, noteName, fullName, isBlack, sameNote } from './music.js';
 import * as audio from './audio.js';
 
 const $ = id => document.getElementById(id);
@@ -31,6 +31,7 @@ let midiSound = true;
 function buildPiano() {
   const piano = $('piano');
   const whites = KEYS.filter(k => !isBlack(k.midi)).length;
+  piano.style.setProperty('--whites', whites);
   let whiteIndex = 0;
   for (const k of KEYS) {
     const el = document.createElement('button');
@@ -38,7 +39,7 @@ function buildPiano() {
     el.tabIndex = -1;
     el.className = `key ${isBlack(k.midi) ? 'black' : 'white'}`;
     el.dataset.midi = k.midi;
-    el.setAttribute('aria-label', `${noteName(k.midi)}, laptop key ${k.label === ';' ? 'semicolon' : k.label}`);
+    el.setAttribute('aria-label', `${fullName(k.midi)}, laptop key ${k.label}`);
     el.innerHTML = `<span class="key-note">${noteName(k.midi)}</span><kbd class="key-cap">${k.label}</kbd>`;
     if (isBlack(k.midi)) el.style.left = `${(whiteIndex / whites) * 100}%`;
     else whiteIndex++;
@@ -111,9 +112,12 @@ const capFor = midi => capEls.get(midi) ?? capEls.get(LOW + (((midi % 12) + 12) 
 
 function buildKeymap(container) {
   const byLabel = new Map(KEYS.map(k => [k.label, k.midi]));
-  for (const [row, letters] of [['top', 'QWERTYUIOP'], ['home', 'ASDFGHJKL;']]) {
+  // Each row is offset as on a real keyboard, which also puts every black-key cap between its two white keys
+  const rows = [['1234567890', 0, 'upper'], ['QWERTYUIOP', 0.5, 'upper'], ['ASDFGHJKL;', 0.75, 'lower'], ['ZXCVBNM,./', 1.25, 'lower']];
+  for (const [letters, offset, octave] of rows) {
     const line = document.createElement('div');
-    line.className = `keymap-row ${row}`;
+    line.className = `keymap-row is-${octave}`;
+    line.style.setProperty('--offset', offset);
     for (const letter of letters) {
       const midi = byLabel.get(letter);
       const cap = document.createElement('span');
@@ -128,7 +132,7 @@ function buildKeymap(container) {
 
 function buildKeyTable() {
   $('keytable').innerHTML = KEYS.map(k =>
-    `<tr><th scope="row">${k.label === ';' ? 'Semicolon' : k.label}</th><td>${noteName(k.midi)}${isBlack(k.midi) ? ' (black key)' : ''}</td></tr>`).join('');
+    `<tr><th scope="row">${k.label}</th><td>${fullName(k.midi)}${isBlack(k.midi) ? ' (black key)' : ''}</td></tr>`).join('');
 }
 
 /* ---------- Screens, timers and the hint line ---------- */
@@ -170,8 +174,9 @@ function setHint(html) {
   if (screen === 'menu') {
     if (coarse.matches) hint.innerHTML = 'Tap any key to hear it, then press <b>Play</b>.';
     else hint.innerHTML = [
-      'Try it: press <kbd>A</kbd> to hear <b>C</b>.',
-      'Black keys are on the row above. Press <kbd>W</kbd> for <b>C♯</b>.',
+      'Try it: press <kbd>Z</kbd> to hear <b>C</b>.',
+      'Black keys are on the row above. Press <kbd>S</kbd> for <b>C♯</b>.',
+      'The top two rows are the octave above. Press <kbd>Q</kbd> for the higher <b>C</b>.',
       'You’re ready. Press <kbd>Enter</kbd> to play.',
     ][hintStep];
   } else if (screen === 'game') {
@@ -200,8 +205,9 @@ function nudge(html) {
 
 function tutorial(midi) {
   if (coarse.matches) return;
-  if (hintStep === 0 && midi % 12 === 0) hintStep = 1;
-  else if (hintStep === 1 && midi % 12 === 1) hintStep = 2;
+  if (hintStep === 0 && midi === 60) hintStep = 1;
+  else if (hintStep === 1 && midi === 61) hintStep = 2;
+  else if (hintStep === 2 && midi === 72) hintStep = 3;
   setHint();
 }
 
