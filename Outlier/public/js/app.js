@@ -4,7 +4,6 @@ import * as solo from './solo.js';
 import * as multi from './multi.js';
 import { $, show } from './ui.js';
 import { DAILY_PROMPTS } from './shared.js';
-import { store } from './data.js';
 
 function home() {
   if ($('app').dataset.screen === 'mp' && !multi.close()) return;
@@ -21,8 +20,8 @@ function renderMenu() {
   else if (status.inProgress) parts.push(`In progress: ${status.answered} of ${DAILY_PROMPTS} answered`);
   if (stats.streak) parts.push(`${stats.streak}-day streak`);
   $('daily-meta').textContent = parts.join(' · ');
-  const life = store.get('unlimited.stats', { rounds: 0, points: 0 });
-  $('unlimited-meta').textContent = life.rounds ? `${life.rounds} played · ${Math.round(life.points / life.rounds)} points on average` : '';
+  const games = solo.unlimitedStats();
+  $('unlimited-meta').textContent = games.played ? `${games.played} game${games.played === 1 ? '' : 's'} played · best ${games.best}` : '';
 }
 
 $('brand').addEventListener('click', home);

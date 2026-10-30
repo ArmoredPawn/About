@@ -1,6 +1,6 @@
 // Daily and Unlimited: one player, scored in the browser against scrambled answer keys.
 
-import { TIERS, MISS_EMOJI, SECONDS_PER_PROMPT, normalize, lookupKeys, hashKey, todayKey, addDays, dayStartMs } from './shared.js';
+import { TIERS, MISS_EMOJI, SECONDS_PER_PROMPT, UNLIMITED_ROUNDS, normalize, lookupKeys, hashKey, todayKey, addDays, dayStartMs } from './shared.js';
 import { getDoc, store, NotSetUpError } from './data.js';
 import { $, show, toast, escapeHtml, tierBadge, picksHtml, feedback, shake, copyText, pageUrl, Countdown } from './ui.js';
 
@@ -29,6 +29,7 @@ export async function startDaily() {
     mode: 'daily',
     day,
     prompts: doc.prompts,
+    total: doc.prompts.length,
     answers: saved?.answers ?? [],
     startedAt: saved?.startedAt ?? null,
   };
@@ -39,7 +40,8 @@ export async function startUnlimited() {
   const meta = await load(() => getDoc('meta/public'), startUnlimited);
   if (meta === undefined) return;
   if (!meta?.unlimited?.length) return notice('No Unlimited prompts yet', 'Check back soon.');
-  session = { mode: 'unlimited', ids: meta.unlimited, prompts: [], answers: [], upcoming: null };
+  // A game of seven prompts; play again for another seven
+  session = { mode: 'unlimited', ids: meta.unlimited, prompts: [], total: UNLIMITED_ROUNDS, answers: [], upcoming: null };
   const first = await load(() => drawPrompt(), startUnlimited);
   if (!first) return;
   session.prompts.push(first);
@@ -104,7 +106,7 @@ function playCurrent() {
   locked = false;
   tried = new Set();
   $('play-mode').textContent = daily ? `Daily · ${dayLabel(session.day)}` : 'Unlimited';
-  $('prompt-count').textContent = daily ? `Prompt ${session.answers.length + 1} of ${session.prompts.length}` : `Prompt ${session.answers.length + 1}`;
+  $('prompt-count').textContent = `Prompt ${session.answers.length + 1} of ${session.total}`;
   $('prompt-text').textContent = p.text;
   $('result').hidden = true;
   $('answer-form').hidden = false;
@@ -116,7 +118,7 @@ function playCurrent() {
   if (remaining <= 0) return lock(null);
   countdown.start(remaining, TOTAL_MS, () => lock(null));
   $('answer').focus();
-  if (!daily && !session.upcoming) session.upcoming = drawPrompt().catch(() => null);
+  if (!daily && !session.upcoming && session.answers.length + 1 < session.total) session.upcoming = drawPrompt().catch(() => null);
 }
 
 async function submit() {
@@ -159,9 +161,8 @@ function lock(answer) {
   if (session.mode === 'daily') {
     saveDaily();
     if (finished()) recordDaily();
-  } else {
-    const stats = store.get('unlimited.stats', { rounds: 0, points: 0 });
-    store.set('unlimited.stats', { rounds: stats.rounds + 1, points: stats.points + entry.points });
+  } else if (finished()) {
+    recordUnlimited();
   }
 
   $('answer').disabled = true;
@@ -172,7 +173,6 @@ function lock(answer) {
   // Don't suggest the answer the player just gave
   const given = entry.text == null ? [] : lookupKeys(normalize(entry.text));
   $('result-picks').innerHTML = picksHtml(p.examples.filter((e) => !given.includes(normalize(e.name))));
-  $('end-btn').hidden = session.mode !== 'unlimited';
   $('result').hidden = false;
   renderProgress();
   $('next-btn').focus();
@@ -184,6 +184,7 @@ async function next() {
     if (finished()) return dailySummary(session.day, session.answers);
     return playCurrent();
   }
+  if (finished()) return unlimitedSummary();
   $('next-btn').disabled = true;
   try {
     const doc = (await session.upcoming) ?? (await drawPrompt());
@@ -199,7 +200,7 @@ async function next() {
 }
 
 function finished() {
-  return session.answers.length >= session.prompts.length;
+  return session.answers.length >= session.total;
 }
 
 function total(answers) {
@@ -208,10 +209,7 @@ function total(answers) {
 
 function renderProgress() {
   $('play-score').textContent = total(session.answers);
-  const dots = $('dots');
-  dots.hidden = session.mode !== 'daily';
-  if (dots.hidden) return;
-  dots.innerHTML = session.prompts.map((_, i) => {
+  $('dots').innerHTML = Array.from({ length: session.total }, (_, i) => {
     const a = session.answers[i];
     if (a) return `<li data-tier="${a.tier ?? 'miss'}" title="${a.points} points"></li>`;
     return `<li class="${i === session.answers.length ? 'current' : ''}"></li>`;
@@ -222,6 +220,17 @@ function renderProgress() {
 
 function saveDaily() {
   store.set(`daily.${session.day}`, { answers: session.answers, startedAt: session.startedAt, done: finished() });
+}
+
+// Each finished Unlimited game: how many, the best and the total, for averages
+function recordUnlimited() {
+  const games = store.get('unlimited.games', { played: 0, best: 0, points: 0 });
+  const score = total(session.answers);
+  store.set('unlimited.games', { played: games.played + 1, best: Math.max(games.best, score), points: games.points + score });
+}
+
+export function unlimitedStats() {
+  return store.get('unlimited.games', { played: 0, best: 0, points: 0 });
 }
 
 function recordDaily() {
@@ -294,6 +303,7 @@ function dailySummary(day, answers) {
   nextDailyTimer = setInterval(tick, 30_000);
 
   $('summary-unlimited').hidden = false;
+  $('summary-unlimited').textContent = 'Play Unlimited';
   show('summary');
 }
 
@@ -302,16 +312,18 @@ function unlimitedSummary() {
   const answers = session.answers;
   const score = total(answers);
   $('summary-eyebrow').textContent = 'Unlimited';
-  $('summary-score').textContent = score;
+  $('summary-score').textContent = `${score} / ${answers.length * 100}`;
   renderSummaryList(answers);
   $('share-box').hidden = true;
-  const life = store.get('unlimited.stats', { rounds: 0, points: 0 });
+  const games = unlimitedStats();
   $('stats').innerHTML = [
-    ['This session', answers.length], ['Average', answers.length ? Math.round(score / answers.length) : 0],
-    ['All prompts', life.rounds], ['All-time average', life.rounds ? Math.round(life.points / life.rounds) : 0],
+    ['Games played', games.played], ['Best game', games.best],
+    ['Average game', games.played ? Math.round(games.points / games.played) : 0],
+    ['Average per prompt', answers.length ? Math.round(score / answers.length) : 0],
   ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('');
   $('next-daily').textContent = '';
-  $('summary-unlimited').hidden = true;
+  $('summary-unlimited').hidden = false;
+  $('summary-unlimited').textContent = 'Play again';
   session = null;
   show('summary');
 }
@@ -345,7 +357,6 @@ export function stop() {
 
 $('answer-form').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
 $('next-btn').addEventListener('click', next);
-$('end-btn').addEventListener('click', unlimitedSummary);
 $('summary-unlimited').addEventListener('click', startUnlimited);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || $('app').dataset.screen !== 'play' || !locked || e.target.tagName === 'BUTTON') return;

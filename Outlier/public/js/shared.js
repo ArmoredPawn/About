@@ -11,6 +11,7 @@ export const TIERS = [
 export const MISS_EMOJI = '⬛';
 
 export const DAILY_PROMPTS = 5;
+export const UNLIMITED_ROUNDS = 7;
 export const SECONDS_PER_PROMPT = 20;
 // The daily puzzle changes at midnight in this time zone
 export const DAILY_TIME_ZONE = 'America/New_York';
