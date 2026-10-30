@@ -19,7 +19,7 @@ cp -R "Countries Game/public/." _site/games/countries-game/
 # Ear Trainer: static files only, no build step
 (cd "Ear Trainer" && tar cf - --exclude=README.md .) | (cd _site/games/ear-trainer && tar xf -)
 
-# Outlier: only its front end (public/). The answer lists and the server stay out of the site.
+# Deep Dive (folder Outlier/): only its front end (public/). The answer lists and the server stay out of the site.
 cp -R "Outlier/public/." _site/games/outlier/
 
 echo "Built _site/"

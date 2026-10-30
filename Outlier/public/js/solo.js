@@ -273,7 +273,7 @@ function dailySummary(day, answers) {
   $('summary-score').textContent = `${score} / ${answers.length * 100}`;
   renderSummaryList(answers);
 
-  const shareText = `Outlier · ${dayLabel(day)}\n${answers.map((a) => (a.tier == null ? MISS_EMOJI : TIERS[a.tier].emoji)).join('')} ${score}\n${pageUrl()}`;
+  const shareText = `Deep Dive · ${dayLabel(day)}\n${answers.map((a) => (a.tier == null ? MISS_EMOJI : TIERS[a.tier].emoji)).join('')} ${score}\n${pageUrl()}`;
   $('share-box').hidden = false;
   $('share-text').hidden = true;
   $('share-text').value = shareText;

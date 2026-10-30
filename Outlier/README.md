@@ -1,4 +1,6 @@
-# Outlier
+# Deep Dive
+
+The folder is still called `Outlier/` (its first name), which the Render service builds from.
 
 A trivia game where rarer answers score more. Each prompt ("Name a fruit") has a list of accepted answers, and each
 answer is in one of five rarity tiers: Common 10, Familiar 25, Uncommon 50, Rare 75 and Outlier 100.

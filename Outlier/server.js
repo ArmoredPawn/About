@@ -116,7 +116,7 @@ const heartbeat = setInterval(() => {
 wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(PORT, () => {
-  console.log(`Outlier server running at http://localhost:${PORT}`);
+  console.log(`Deep Dive server running at http://localhost:${PORT}`);
   console.log(local
     ? 'No Firebase settings: using dev-data/ and serving the game at the address above.'
     : `Using ${store.label}.`);
