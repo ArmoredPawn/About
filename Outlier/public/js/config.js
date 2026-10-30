@@ -4,5 +4,5 @@ export const CONFIG = {
   firebaseProjectId: 'outlier-736d6',
   // Address of the multiplayer server on Render, e.g. 'https://outlier-server.onrender.com'.
   // Empty: the local server, when the page is opened from localhost.
-  serverUrl: '',
+  serverUrl: 'https://outlier-jw93.onrender.com',
 };
