@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outlier — Rare Answers Score More</title>
+  <link rel="icon" href="games/outlier/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body class="game-page">
+  <nav class="backbar">
+    <a class="back" href="./">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Back
+    </a>
+  </nav>
+  <!-- The game runs from its own folder; focus moves into it so typing works straight away.
+       An invite link (outlier.html?room=ABCD) is passed on so the game opens that room. -->
+  <iframe class="game-frame" id="game" title="Outlier — Rare Answers Score More"
+          allow="clipboard-write; fullscreen" onload="this.contentWindow.focus()"></iframe>
+  <script>document.getElementById('game').src = 'games/outlier/' + location.search;</script>
+</body>
+</html>

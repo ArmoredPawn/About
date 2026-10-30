@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outlier — Rare Answers Score More</title>
+  <meta name="description" content="Every prompt has lots of right answers. The rarer yours is, the more it scores. A daily puzzle, an unlimited mode and live rooms for up to 10 friends.">
+  <meta name="theme-color" content="#f5f1e8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121418" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="app" id="app" data-screen="home">
+    <header class="topbar">
+      <button class="brand" id="brand" type="button" aria-label="Outlier: back to the menu">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="6" cy="16" r="2"/><circle cx="10" cy="17.5" r="2"/><circle cx="8" cy="12.5" r="2"/><circle cx="18" cy="6" r="2.6"/></svg>
+        </span>
+        <span class="brand-name">Outlier</span>
+      </button>
+      <button class="icon-btn" id="help-btn" type="button" aria-label="How to play" title="How to play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8M12 17.2v.1"/></svg>
+      </button>
+    </header>
+
+    <main class="stage">
+      <!-- Menu -->
+      <section class="screen" id="screen-home" aria-labelledby="home-title">
+        <p class="eyebrow">A trivia game for rare answers</p>
+        <h1 class="title" id="home-title">Think past <span>the obvious.</span></h1>
+        <p class="lede">Every prompt has lots of right answers. Name one in 20 seconds. The rarer your answer, the more it scores.</p>
+
+        <div class="tiers" aria-label="Points for each rarity">
+          <span class="tier-chip" data-tier="0">Common <b>10</b></span>
+          <span class="tier-chip" data-tier="1">Familiar <b>25</b></span>
+          <span class="tier-chip" data-tier="2">Uncommon <b>50</b></span>
+          <span class="tier-chip" data-tier="3">Rare <b>75</b></span>
+          <span class="tier-chip" data-tier="4">Outlier <b>100</b></span>
+        </div>
+
+        <div class="modes">
+          <button class="mode" id="mode-daily" type="button">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></span>
+            <span class="mode-name">Daily</span>
+            <span class="mode-desc" id="daily-desc">Five prompts, the same for everyone. A new set every day at midnight Eastern time.</span>
+            <span class="mode-meta" id="daily-meta"></span>
+          </button>
+          <button class="mode" id="mode-unlimited" type="button">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8.2 8.5a4 4 0 1 0 0 7c2.4 0 5.2-7 7.6-7a4 4 0 1 1 0 7c-2.4 0-5.2-7-7.6-7z"/></svg></span>
+            <span class="mode-name">Unlimited</span>
+            <span class="mode-desc">Prompt after prompt, for as long as you like.</span>
+            <span class="mode-meta" id="unlimited-meta"></span>
+          </button>
+          <button class="mode" id="mode-multi" type="button">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3 19.5c.6-3.3 3-5.2 6-5.2s5.4 1.9 6 5.2"/><path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.8M17.6 14.6c1.8.7 3 2.4 3.4 4.9"/></svg></span>
+            <span class="mode-name">Play with friends</span>
+            <span class="mode-desc">A live room for up to 10 players. Everyone gets the same prompts at the same time.</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- One prompt, in Daily or Unlimited -->
+      <section class="screen" id="screen-play" aria-label="Prompt">
+        <div class="play-head">
+          <span class="play-mode" id="play-mode">Daily</span>
+          <ol class="dots" id="dots" aria-label="Progress"></ol>
+          <span class="play-score"><span id="play-score">0</span> pts</span>
+        </div>
+
+        <div class="card prompt-card">
+          <p class="prompt-count" id="prompt-count"></p>
+          <h2 class="prompt-text" id="prompt-text" aria-live="polite"></h2>
+          <div class="timer" id="timer" role="timer" aria-label="Time left">
+            <div class="timer-bar"><span id="timer-fill"></span></div>
+            <span class="timer-num" id="timer-num">20</span>
+          </div>
+
+          <form class="answer-form" id="answer-form" autocomplete="off">
+            <label class="visually-hidden" for="answer">Your answer</label>
+            <input class="answer-input" id="answer" name="answer" maxlength="60" placeholder="Type an answer" enterkeyhint="send" autocapitalize="words" spellcheck="false">
+            <button class="btn btn-primary" type="submit">Submit</button>
+          </form>
+          <p class="feedback" id="feedback" aria-live="assertive"></p>
+
+          <div class="result" id="result" hidden>
+            <div class="result-main">
+              <span class="tier-badge" id="result-badge"></span>
+              <span class="result-answer" id="result-answer"></span>
+            </div>
+            <p class="picks" id="result-picks"></p>
+            <div class="result-actions">
+              <button class="btn btn-primary" id="next-btn" type="button">Next <kbd>Enter</kbd></button>
+              <button class="btn btn-quiet" id="end-btn" type="button" hidden>End session</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- End of a Daily or Unlimited session -->
+      <section class="screen" id="screen-summary" aria-labelledby="summary-title">
+        <p class="eyebrow" id="summary-eyebrow">Daily</p>
+        <h1 class="title" id="summary-title">Your score: <span id="summary-score">0</span></h1>
+        <ol class="summary-list" id="summary-list"></ol>
+
+        <div class="share" id="share-box">
+          <button class="btn btn-primary" id="share-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></svg>
+            Copy result
+          </button>
+          <textarea class="share-text" id="share-text" rows="4" readonly hidden aria-label="Your result to copy"></textarea>
+        </div>
+
+        <dl class="stats" id="stats"></dl>
+        <p class="next-daily" id="next-daily"></p>
+
+        <div class="summary-actions">
+          <button class="btn btn-primary" id="summary-unlimited" type="button">Play Unlimited</button>
+          <button class="btn btn-quiet" id="summary-home" type="button">Menu</button>
+        </div>
+      </section>
+
+      <!-- Notice when something isn't available (no puzzle today, not set up yet) -->
+      <section class="screen" id="screen-notice" aria-labelledby="notice-title">
+        <h1 class="title small" id="notice-title"></h1>
+        <p class="lede" id="notice-text"></p>
+        <div class="summary-actions">
+          <button class="btn btn-primary" id="notice-action" type="button" hidden></button>
+          <button class="btn btn-quiet" id="notice-home" type="button">Menu</button>
+        </div>
+      </section>
+
+      <!-- Multiplayer -->
+      <section class="screen" id="screen-mp" data-view="entry" aria-label="Play with friends">
+        <p class="mp-status" id="mp-status" hidden></p>
+
+        <div class="mp-view" data-for="entry">
+          <p class="eyebrow">Play with friends</p>
+          <h1 class="title small">Start a room or join one</h1>
+          <form class="mp-form" id="mp-form" autocomplete="off">
+            <label class="field">
+              <span>Your name</span>
+              <input id="mp-name" maxlength="16" required placeholder="Name" autocapitalize="words" spellcheck="false">
+            </label>
+            <div class="mp-choices">
+              <div class="mp-choice">
+                <h2>New room</h2>
+                <p>You'll get a code to send your friends.</p>
+                <button class="btn btn-primary" id="mp-create" type="submit" value="create">Create a room</button>
+              </div>
+              <div class="mp-choice">
+                <h2>Join a room</h2>
+                <label class="field">
+                  <span>Room code</span>
+                  <input id="mp-code" maxlength="4" placeholder="ABCD" autocapitalize="characters" spellcheck="false">
+                </label>
+                <button class="btn" id="mp-join" type="submit" value="join">Join</button>
+              </div>
+            </div>
+          </form>
+          <p class="feedback" id="mp-error" aria-live="assertive"></p>
+        </div>
+
+        <div class="mp-view" data-for="lobby">
+          <div class="room-code-box">
+            <span class="room-code-label">Room code</span>
+            <span class="room-code" id="room-code"></span>
+            <button class="btn btn-quiet" id="invite-btn" type="button">Copy invite link</button>
+          </div>
+          <div class="lobby-grid">
+            <div class="card">
+              <h2 class="card-title">Players <span id="player-count"></span></h2>
+              <ul class="player-list" id="lobby-players"></ul>
+            </div>
+            <div class="card">
+              <h2 class="card-title">Game</h2>
+              <div class="setting">
+                <span class="setting-label" id="rounds-label">Prompts</span>
+                <div class="seg" id="rounds-seg" role="radiogroup" aria-labelledby="rounds-label"></div>
+              </div>
+              <div class="setting">
+                <span class="setting-label" id="seconds-label">Seconds each</span>
+                <div class="seg" id="seconds-seg" role="radiogroup" aria-labelledby="seconds-label"></div>
+              </div>
+              <button class="btn btn-primary btn-wide" id="start-btn" type="button">Start game</button>
+              <p class="hint" id="lobby-hint"></p>
+            </div>
+          </div>
+          <button class="btn btn-quiet" id="leave-btn" type="button">Leave room</button>
+        </div>
+
+        <div class="mp-view" data-for="question">
+          <div class="play-head">
+            <span class="play-mode">Room <span id="q-code"></span></span>
+            <span class="play-round" id="q-round"></span>
+            <span class="play-score"><span id="q-score">0</span> pts</span>
+          </div>
+          <div class="card prompt-card">
+            <h2 class="prompt-text" id="q-prompt" aria-live="polite"></h2>
+            <div class="timer" role="timer" aria-label="Time left">
+              <div class="timer-bar"><span id="q-timer-fill"></span></div>
+              <span class="timer-num" id="q-timer-num"></span>
+            </div>
+            <form class="answer-form" id="q-form" autocomplete="off">
+              <label class="visually-hidden" for="q-answer">Your answer</label>
+              <input class="answer-input" id="q-answer" maxlength="60" placeholder="Type an answer" enterkeyhint="send" autocapitalize="words" spellcheck="false">
+              <button class="btn btn-primary" type="submit">Submit</button>
+            </form>
+            <p class="feedback" id="q-feedback" aria-live="assertive"></p>
+            <div class="result-main" id="q-locked" hidden>
+              <span class="tier-badge" id="q-badge"></span>
+              <span class="result-answer" id="q-locked-answer"></span>
+              <span class="hint">Waiting for the others…</span>
+            </div>
+          </div>
+          <ul class="chips" id="q-players" aria-label="Who has answered"></ul>
+        </div>
+
+        <div class="mp-view" data-for="results">
+          <div class="play-head">
+            <span class="play-mode">Room <span id="r-code"></span></span>
+            <span class="play-round" id="r-round"></span>
+            <span class="play-next" id="r-next"></span>
+          </div>
+          <div class="card">
+            <h2 class="prompt-text small" id="r-prompt"></h2>
+            <ul class="answers-list" id="r-answers"></ul>
+            <p class="picks" id="r-picks"></p>
+          </div>
+          <div class="card">
+            <h2 class="card-title">Scores</h2>
+            <ol class="scoreboard" id="r-scores"></ol>
+          </div>
+        </div>
+
+        <div class="mp-view" data-for="final">
+          <p class="eyebrow">Final scores</p>
+          <h1 class="title small" id="f-title"></h1>
+          <ol class="scoreboard big" id="f-scores"></ol>
+          <div class="summary-actions">
+            <button class="btn btn-primary" id="again-btn" type="button">Play again</button>
+            <button class="btn btn-quiet" id="f-leave-btn" type="button">Leave room</button>
+          </div>
+          <p class="hint" id="f-hint"></p>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="dialog" id="help" aria-labelledby="help-title">
+      <form method="dialog">
+        <h2 id="help-title">How to play</h2>
+        <p>Each prompt has lots of right answers. You have 20 seconds to type one.</p>
+        <ul>
+          <li><b>Rarer answers score more.</b> A common answer is worth 10 points; an outlier is worth 100.</li>
+          <li><b>Wrong answers cost nothing.</b> If yours isn't on the list, try another until time runs out.</li>
+          <li><b>Your first accepted answer counts</b>, so think before you type the obvious one.</li>
+          <li>Spelling has to be close: capitals, accents, "the" and plurals don't matter.</li>
+        </ul>
+        <div class="tiers">
+          <span class="tier-chip" data-tier="0">Common <b>10</b></span>
+          <span class="tier-chip" data-tier="1">Familiar <b>25</b></span>
+          <span class="tier-chip" data-tier="2">Uncommon <b>50</b></span>
+          <span class="tier-chip" data-tier="3">Rare <b>75</b></span>
+          <span class="tier-chip" data-tier="4">Outlier <b>100</b></span>
+        </div>
+        <p class="hint">Rarity is set by hand for each answer: how few people would think of it, not how many players typed it.</p>
+        <button class="btn btn-primary" value="close">Got it</button>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+</body>
+</html>

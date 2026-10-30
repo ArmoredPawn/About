@@ -1,0 +1,22 @@
+{
+  "name": "outlier",
+  "version": "1.0.0",
+  "description": "A daily trivia game where rarer answers score more, with an unlimited mode and live rooms for up to 10 players.",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node scripts/seed.js",
+    "seed:local": "node scripts/seed.js --local",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.0",
+    "ws": "8.22.0"
+  }
+}
