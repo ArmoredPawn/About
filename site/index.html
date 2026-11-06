@@ -8,6 +8,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="site.css">
+  <script>
+    // Sections start hidden and fly in from home3d.js. If that script never runs, show everything.
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObserver' in window) {
+      document.documentElement.classList.add('reveal-on');
+      setTimeout(function () { if (!window.__home3d) document.documentElement.classList.remove('reveal-on'); }, 2500);
+    }
+  </script>
 </head>
 <body class="home-page">
   <header class="topnav">
@@ -27,7 +34,11 @@
 
   <main class="home">
     <section id="about" class="intro">
-      <img class="avatar" src="profile.jpg" width="400" height="400" alt="Profile picture of Ayush Srivastava">
+      <div class="avatar-3d">
+        <img class="avatar" src="profile.jpg" width="400" height="400" alt="Profile picture of Ayush Srivastava">
+        <span class="orbit orbit-a" aria-hidden="true"></span>
+        <span class="orbit orbit-b" aria-hidden="true"></span>
+      </div>
       <div>
         <h1>Ayush Srivastava</h1>
         <p class="lede">I'm a senior at North Allegheny Senior High School interested in computer science and technology.</p>
@@ -241,5 +252,6 @@
       </ul>
     </section>
   </main>
+  <script type="module" src="home3d.js"></script>
 </body>
 </html>

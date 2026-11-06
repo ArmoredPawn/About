@@ -236,9 +236,8 @@ html { scroll-behavior: smooth; }
   list-style: none;
 }
 
-/* At most two wide cards per row; an odd last card fills the row instead of sitting alone */
+/* At most two wide cards per row; an odd last card keeps the same size as the rest */
 .cards:not(.hobbies) { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
-.cards:not(.hobbies) > :last-child:nth-child(odd):not(:only-child) { grid-column: 1 / -1; }
 
 .hobbies { grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 12px; }
 
@@ -380,6 +379,148 @@ html { scroll-behavior: smooth; }
 }
 
 .contact-handle { font-weight: 600; overflow-wrap: anywhere; }
+
+/* ---------- Home page 3-D (driven by home3d.js; nothing here reaches the game pages) ---------- */
+
+/* The WebGL scene sits behind everything, over the navy wash */
+.home-page .scene3d {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.4s ease;
+}
+.home-page .scene3d.ready { opacity: 1; }
+
+/* Rings and lifted cards must not widen the page on phones */
+.home { overflow-x: clip; }
+
+/* Cards are slightly see-through so the scene glows behind them */
+.home .card {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--surface-top) 84%, transparent),
+    color-mix(in srgb, var(--surface) 84%, transparent));
+}
+
+/* Name with a short extruded edge */
+.home .intro h1 {
+  text-shadow:
+    0 1px 0 #2e3460,
+    0 2px 0 #252a4d,
+    0 3px 0 #1d213c,
+    0 4px 0 #161a2f,
+    0 12px 28px rgb(0 0 0 / 0.6);
+}
+
+/* Avatar: turns toward the pointer, with two rings orbiting it in 3-D.
+   The back half of each ring passes behind the photo. */
+.avatar-3d {
+  position: relative;
+  flex: none;
+  transform-style: preserve-3d;
+  transform: perspective(700px) rotateX(var(--ax, 0deg)) rotateY(var(--ay, 0deg));
+  transition: transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.avatar-3d .avatar { display: block; transform: translateZ(0); }
+
+.orbit {
+  position: absolute;
+  inset: -18px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 50%;
+  pointer-events: none;
+  transform: rotateX(74deg);
+  animation: orbit-a 12s linear infinite;
+}
+.orbit-b {
+  inset: -32px;
+  border-color: color-mix(in srgb, var(--accent-2) 50%, transparent);
+  transform: rotateZ(-28deg) rotateX(74deg);
+  animation: orbit-b 19s linear infinite reverse;
+}
+/* A glowing moon on each ring */
+.orbit::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px 3px var(--accent);
+}
+.orbit-b::before { background: var(--accent-2); box-shadow: 0 0 12px 3px var(--accent-2); }
+
+@keyframes orbit-a {
+  from { transform: rotateX(74deg) rotateZ(0deg); }
+  to { transform: rotateX(74deg) rotateZ(360deg); }
+}
+@keyframes orbit-b {
+  from { transform: rotateZ(-28deg) rotateX(74deg) rotateZ(0deg); }
+  to { transform: rotateZ(-28deg) rotateX(74deg) rotateZ(360deg); }
+}
+
+@media (max-width: 560px) {
+  .avatar-3d { margin-left: 8px; }
+  .orbit { inset: -12px; }
+  .orbit-b { inset: -22px; }
+}
+
+/* Cards tilt toward the pointer; on hover they lift and their contents float above the face */
+.home .card.tilt {
+  position: relative;
+  transform-style: preserve-3d;
+  transform: perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateZ(var(--lift, 0px));
+  transition: transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1), border-color 0.15s ease, box-shadow 0.3s ease;
+}
+.home .card.tilt:hover {
+  --lift: 12px;
+  transition: transform 0.15s ease-out, border-color 0.15s ease, box-shadow 0.3s ease;
+  box-shadow:
+    0 28px 60px -22px rgb(0 0 0 / 0.8),
+    0 0 44px -14px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.home .card.tilt > * { transition: transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.home .card.tilt:hover > * { transform: translateZ(22px); }
+.home .card.tilt:hover > .card-tag,
+.home .card.tilt:hover > .hobby-icon,
+.home .card.tilt:hover > .contact-icon { transform: translateZ(36px); }
+
+/* A soft highlight that follows the pointer */
+.home .card.tilt::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at var(--mx, 50%) var(--my, 0%), rgb(255 255 255 / 0.09), transparent 55%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateZ(1px);
+  transition: opacity 0.3s ease;
+}
+.home .card.tilt:hover::after { opacity: 1; }
+
+/* Scroll-in: each block swings up out of the page as it enters the screen.
+   html.reveal-on is set in the page head; home3d.js adds .in, then .revealed when done. */
+html.reveal-on .home :is(.intro, .section > h2, .section-note, .cards > *):not(.revealed) {
+  opacity: 0;
+  transform: perspective(900px) translateY(56px) rotateX(24deg);
+}
+html.reveal-on .home :is(.intro, .section > h2, .section-note, .cards > *).in:not(.revealed) {
+  opacity: 1;
+  transform: perspective(900px) translateY(0) rotateX(0deg);
+  transition:
+    opacity 0.8s ease var(--d, 0ms),
+    transform 1s cubic-bezier(0.16, 0.84, 0.3, 1) var(--d, 0ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit, .orbit-b { animation: none; }
+}
 
 /* Game pages: a slim bar with Back, and the game filling the rest of the screen */
 .game-page {
