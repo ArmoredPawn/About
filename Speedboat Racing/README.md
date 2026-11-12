@@ -1,11 +1,16 @@
-# Hydro Rush: Multiplayer Speedboat Mayhem
+# Hydro Rush: 3D Speedboat Mayhem
 
-A top-down 2D multiplayer speedboat racing game featuring hydrodynamic water physics, wake trails, kicker jump ramps, and **lots and lots of obstacles**!
+A realistic 3D multiplayer speedboat racing game featuring hydrodynamic water physics, 3D rolling waves, wake trails, kicker jump ramps, and **lots and lots of obstacles**!
 
 Race head-to-head with friends across local network or online by sharing a 4-letter room code, or challenge intelligent AI bot racers.
 
 ## Features
 
+- **Realistic 3D Perspective & Camera Views**:
+  - **🏎️ Cockpit / Bow POV (First Person)**: Positioned directly in front of the boat looking out over the sleek prow and windshield into the oncoming waves and obstacle gauntlets!
+  - **📹 Chase POV (Third Person)**: Dynamic video-game camera following behind the boat, showing realistic 3D hull banking into sharp turns, planing pitch under acceleration, and airtime jumps!
+  - Toggle anytime during race with key **`C`** or on-screen button.
+- **Dynamic 3D Ocean Waves & Hydrodynamics**: Rolling Gerstner waves, specular sunlight glints, twin foaming hull wake ribbons, bow spray, and realistic water physics.
 - **Single Player Mode**: Jump straight into a race anytime without needing a server or room code! Choose **Solo Time Trial** to master your racing line and practice dodging obstacles against the clock, or challenge **1 to 6 AI Bot Racers** with full race rankings and podium finish.
 - **Room Code Multiplayer**: Create a room, share the 4-letter code or instant join link with friends. Up to 8 racers per room with real-time boat position, wake, boost, and obstacle synchronization.
 - **Lots and Lots of Obstacles (Configurable Density)**:

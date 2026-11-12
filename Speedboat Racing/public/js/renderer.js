@@ -1,804 +1,682 @@
-// Canvas Renderer and Particle System for Hydro Rush
+import * as THREE from 'three';
 
+// 3D Realistic WebGL Speedboat Renderer for Hydro Rush
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.time = 0;
+    this.cameraMode = 'cockpit'; // 'cockpit' (POV directly in front / at the bow) | 'chase' (behind boat)
+
+    // Scene & Camera
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.2, 8000);
+
+    // Renderer
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Lighting
+    this.setupLighting();
+
+    // Ocean Mesh & Wave Simulation
+    this.setupOcean();
+
+    // Meshes cache
+    this.boatMeshes = new Map(); // boatId -> THREE.Group
+    this.obstacleMeshes = new Map(); // obstacleId -> THREE.Group
     this.particles = [];
-    this.wakeTrails = [];
-    this.waterTime = 0;
+    this.wakeMeshes = [];
 
-    this.camera = {
-      x: 0,
-      y: 0,
-      zoom: 1.0,
-      targetZoom: 1.0,
-    };
+    // Screen Shake
+    this.screenShake = 0;
 
-    this.resize();
     window.addEventListener('resize', () => this.resize());
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyC') {
+        this.toggleCamera();
+      }
+    });
+  }
+
+  toggleCamera() {
+    this.cameraMode = this.cameraMode === 'cockpit' ? 'chase' : 'cockpit';
+    const btn = document.getElementById('btn-camera-toggle');
+    if (btn) {
+      btn.textContent = this.cameraMode === 'cockpit' ? '📹 View: Cockpit [C]' : '📹 View: Chase [C]';
+    }
   }
 
   resize() {
-    this.canvas.width = window.innerWidth;
-    this.canvas.height = window.innerHeight;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h);
   }
 
-  addParticle(p) {
-    this.particles.push(p);
+  setupLighting() {
+    // Atmospheric Sun
+    this.sunLight = new THREE.DirectionalLight(0xfff5e6, 2.0);
+    this.sunLight.position.set(400, 600, 400);
+    this.sunLight.castShadow = true;
+    this.sunLight.shadow.mapSize.width = 2048;
+    this.sunLight.shadow.mapSize.height = 2048;
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 1500;
+    const d = 250;
+    this.sunLight.shadow.camera.left = -d;
+    this.sunLight.shadow.camera.right = d;
+    this.sunLight.shadow.camera.top = d;
+    this.sunLight.shadow.camera.bottom = -d;
+    this.scene.add(this.sunLight);
+
+    // Sky & Ocean Ambience
+    this.hemiLight = new THREE.HemisphereLight(0x70c0ff, 0x003366, 1.2);
+    this.scene.add(this.hemiLight);
+
+    // Fog
+    this.scene.fog = new THREE.FogExp2(0x88ccee, 0.0006);
+    this.scene.background = new THREE.Color(0x88ccee);
   }
 
-  createSplash(x, y, count = 20, speed = 120, color = 'rgba(255, 255, 255, 0.8)') {
+  setupOcean() {
+    // High-detail dynamic ocean wave plane
+    this.oceanSize = 6000;
+    this.oceanSegments = 96;
+    this.oceanGeo = new THREE.PlaneGeometry(this.oceanSize, this.oceanSize, this.oceanSegments, this.oceanSegments);
+    this.oceanGeo.rotateX(-Math.PI / 2);
+
+    this.oceanMat = new THREE.MeshStandardMaterial({
+      color: 0x0a6c9e,
+      roughness: 0.15,
+      metalness: 0.55,
+      transparent: true,
+      opacity: 0.94,
+      flatShading: true,
+    });
+
+    this.oceanMesh = new THREE.Mesh(this.oceanGeo, this.oceanMat);
+    this.oceanMesh.receiveShadow = true;
+    this.scene.add(this.oceanMesh);
+  }
+
+  // Multi-frequency realistic Gerstner wave displacement
+  getWaveHeight(x, z, t) {
+    const w1 = Math.sin(x * 0.02 + t * 2.2) * 0.45;
+    const w2 = Math.cos(z * 0.015 + t * 1.8) * 0.35;
+    const w3 = Math.sin((x + z) * 0.035 + t * 2.8) * 0.25;
+    return w1 + w2 + w3;
+  }
+
+  createBoat3D(boat) {
+    const group = new THREE.Group();
+    const color = new THREE.Color(boat.color || '#00e5ff');
+    const hullMat = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.2,
+      metalness: 0.35,
+    });
+    const whiteMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.25,
+      metalness: 0.2,
+    });
+    const darkMat = new THREE.MeshStandardMaterial({
+      color: 0x15181c,
+      roughness: 0.4,
+      metalness: 0.7,
+    });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x112233,
+      roughness: 0.1,
+      metalness: 0.9,
+      transparent: true,
+      opacity: 0.65,
+    });
+    const chromeMat = new THREE.MeshStandardMaterial({
+      color: 0xeeeeee,
+      roughness: 0.1,
+      metalness: 0.95,
+    });
+
+    // 1. Lower Deep-V Hull
+    const hullGeo = new THREE.ConeGeometry(2.2, 9.5, 5);
+    hullGeo.rotateX(Math.PI / 2);
+    hullGeo.scale(1.0, 0.45, 1.0);
+    const hullMesh = new THREE.Mesh(hullGeo, whiteMat);
+    hullMesh.position.set(0, 0.45, 0);
+    hullMesh.castShadow = true;
+    group.add(hullMesh);
+
+    // 2. Upper Deck in Custom Livery Color
+    const deckGeo = new THREE.BoxGeometry(2.4, 0.4, 6.5);
+    const deckMesh = new THREE.Mesh(deckGeo, hullMat);
+    deckMesh.position.set(0, 0.75, -0.6);
+    deckMesh.castShadow = true;
+    group.add(deckMesh);
+
+    // Pointed Bow Nose Deck
+    const bowGeo = new THREE.ConeGeometry(1.2, 3.2, 4);
+    bowGeo.rotateX(Math.PI / 2);
+    bowGeo.scale(1.0, 0.25, 1.0);
+    const bowMesh = new THREE.Mesh(bowGeo, hullMat);
+    bowMesh.position.set(0, 0.75, 4.0);
+    bowMesh.castShadow = true;
+    group.add(bowMesh);
+
+    // 3. Cockpit Tub
+    const cockpitGeo = new THREE.BoxGeometry(1.7, 0.5, 2.8);
+    const cockpitMesh = new THREE.Mesh(cockpitGeo, darkMat);
+    cockpitMesh.position.set(0, 0.7, 0);
+    group.add(cockpitMesh);
+
+    // Dual Racing Bucket Seats
+    [-0.45, 0.45].forEach(sx => {
+      const seatGeo = new THREE.BoxGeometry(0.55, 0.7, 0.55);
+      const seatMesh = new THREE.Mesh(seatGeo, darkMat);
+      seatMesh.position.set(sx, 1.0, -0.2);
+      group.add(seatMesh);
+    });
+
+    // Steering Wheel & Dashboard
+    const dashGeo = new THREE.BoxGeometry(1.6, 0.35, 0.3);
+    const dashMesh = new THREE.Mesh(dashGeo, darkMat);
+    dashMesh.position.set(0, 1.05, 0.9);
+    group.add(dashMesh);
+
+    const wheelGeo = new THREE.TorusGeometry(0.2, 0.04, 8, 16);
+    wheelGeo.rotateX(Math.PI / 4);
+    const wheelMesh = new THREE.Mesh(wheelGeo, chromeMat);
+    wheelMesh.position.set(-0.4, 1.25, 0.85);
+    group.add(wheelMesh);
+
+    // 4. Tinted Wraparound Windshield
+    const shieldGeo = new THREE.CylinderGeometry(1.2, 1.2, 0.65, 12, 1, true, 0, Math.PI);
+    shieldGeo.rotateY(Math.PI / 2);
+    shieldGeo.scale(0.9, 1.0, 1.2);
+    const shieldMesh = new THREE.Mesh(shieldGeo, glassMat);
+    shieldMesh.position.set(0, 1.15, 1.2);
+    group.add(shieldMesh);
+
+    // 5. Twin Outboard Marine Motors (Transom)
+    [-0.6, 0.6].forEach(mx => {
+      const motorGeo = new THREE.BoxGeometry(0.45, 1.1, 0.7);
+      const motorMesh = new THREE.Mesh(motorGeo, darkMat);
+      motorMesh.position.set(mx, 0.6, -4.0);
+      motorMesh.castShadow = true;
+      group.add(motorMesh);
+
+      // Exhaust Port
+      const pipeGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8);
+      pipeGeo.rotateX(Math.PI / 2);
+      const pipeMesh = new THREE.Mesh(pipeGeo, chromeMat);
+      pipeMesh.position.set(mx, 0.4, -4.4);
+      group.add(pipeMesh);
+    });
+
+    // 6. Nitro Thruster Flame (Hidden until boosting)
+    const flameGeo = new THREE.ConeGeometry(0.35, 2.4, 8);
+    flameGeo.rotateX(-Math.PI / 2);
+    const flameMat = new THREE.MeshBasicMaterial({
+      color: 0x00f5d4,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const flame1 = new THREE.Mesh(flameGeo, flameMat);
+    flame1.position.set(-0.6, 0.4, -5.4);
+    flame1.visible = false;
+    group.add(flame1);
+
+    const flame2 = new THREE.Mesh(flameGeo, flameMat);
+    flame2.position.set(0.6, 0.4, -5.4);
+    flame2.visible = false;
+    group.add(flame2);
+
+    group.userData = { flame1, flame2 };
+    this.scene.add(group);
+    return group;
+  }
+
+  createObstacle3D(obs) {
+    const group = new THREE.Group();
+    group.position.set(obs.x, 0, obs.y);
+
+    switch (obs.type) {
+      case 'rock': {
+        const rockGeo = new THREE.DodecahedronGeometry(obs.radius * 0.12, 1);
+        // Randomize vertex roughness for craggy natural look
+        const pos = rockGeo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const vx = pos.getX(i);
+          const vy = pos.getY(i);
+          const vz = pos.getZ(i);
+          const scale = 0.8 + Math.sin(vx * 2 + vy * 3) * 0.3;
+          pos.setXYZ(i, vx * scale, vy * Math.max(0.4, scale), vz * scale);
+        }
+        rockGeo.computeVertexNormals();
+
+        const rockMat = new THREE.MeshStandardMaterial({
+          color: 0x4a4f54,
+          roughness: 0.9,
+          metalness: 0.1,
+          flatShading: true,
+        });
+        const rockMesh = new THREE.Mesh(rockGeo, rockMat);
+        rockMesh.position.y = obs.radius * 0.05;
+        rockMesh.castShadow = true;
+        group.add(rockMesh);
+        break;
+      }
+
+      case 'buoy': {
+        // Red / Green marine channel buoy
+        const isGreen = obs.color === '#00e676';
+        const buoyMat = new THREE.MeshStandardMaterial({
+          color: isGreen ? 0x00e676 : 0xff1744,
+          roughness: 0.3,
+          metalness: 0.3,
+        });
+        const baseGeo = new THREE.CylinderGeometry(1.2, 1.4, 2.6, 16);
+        const baseMesh = new THREE.Mesh(baseGeo, buoyMat);
+        baseMesh.position.y = 1.0;
+        baseMesh.castShadow = true;
+        group.add(baseMesh);
+
+        // Blinking beacon light
+        const lightGeo = new THREE.SphereGeometry(0.35, 8, 8);
+        const lightMat = new THREE.MeshBasicMaterial({ color: isGreen ? 0x69f0ae : 0xff5252 });
+        const lightMesh = new THREE.Mesh(lightGeo, lightMat);
+        lightMesh.position.y = 2.6;
+        group.add(lightMesh);
+        break;
+      }
+
+      case 'mine': {
+        // 3D Spiked Naval Mine
+        const mineMat = new THREE.MeshStandardMaterial({
+          color: 0x1f2421,
+          roughness: 0.4,
+          metalness: 0.85,
+        });
+        const sphereGeo = new THREE.SphereGeometry(1.8, 16, 16);
+        const sphereMesh = new THREE.Mesh(sphereGeo, mineMat);
+        sphereMesh.position.y = 0.8;
+        sphereMesh.castShadow = true;
+        group.add(sphereMesh);
+
+        // Contact Spikes
+        const spikeGeo = new THREE.ConeGeometry(0.25, 1.2, 6);
+        spikeGeo.rotateX(Math.PI / 2);
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2;
+          const spike = new THREE.Mesh(spikeGeo, mineMat);
+          spike.position.set(Math.cos(a) * 1.8, 0.8 + (i % 2 === 0 ? 0.6 : -0.4), Math.sin(a) * 1.8);
+          spike.lookAt(group.position.x + Math.cos(a) * 10, 0.8, group.position.z + Math.sin(a) * 10);
+          group.add(spike);
+        }
+
+        // Pulsing Red Danger LED
+        const ledGeo = new THREE.SphereGeometry(0.4, 8, 8);
+        const ledMat = new THREE.MeshBasicMaterial({ color: 0xff0054 });
+        const ledMesh = new THREE.Mesh(ledGeo, ledMat);
+        ledMesh.position.y = 2.4;
+        group.add(ledMesh);
+        group.userData = { ledMesh };
+        break;
+      }
+
+      case 'crate': {
+        const crateGeo = new THREE.BoxGeometry(2.4, 2.4, 2.4);
+        const crateMat = new THREE.MeshStandardMaterial({
+          color: 0xa67c52,
+          roughness: 0.8,
+          metalness: 0.1,
+        });
+        const crateMesh = new THREE.Mesh(crateGeo, crateMat);
+        crateMesh.position.y = 0.8;
+        crateMesh.castShadow = true;
+        group.add(crateMesh);
+        break;
+      }
+
+      case 'ramp': {
+        // 3D Floating Jump Kicker Ramp
+        const rampGeo = new THREE.BoxGeometry(6.0, 2.2, 8.0);
+        rampGeo.rotateX(-Math.PI / 8);
+        const rampMat = new THREE.MeshStandardMaterial({
+          color: 0xffbe0b,
+          roughness: 0.3,
+          metalness: 0.5,
+        });
+        const rampMesh = new THREE.Mesh(rampGeo, rampMat);
+        rampMesh.position.y = 0.6;
+        rampMesh.rotation.y = obs.angle;
+        rampMesh.castShadow = true;
+        group.add(rampMesh);
+        break;
+      }
+
+      case 'boost_pad': {
+        const padGeo = new THREE.BoxGeometry(5.0, 0.3, 7.0);
+        const padMat = new THREE.MeshStandardMaterial({
+          color: 0x00f5d4,
+          roughness: 0.2,
+          metalness: 0.8,
+          emissive: 0x00b4d8,
+          emissiveIntensity: 0.5,
+        });
+        const padMesh = new THREE.Mesh(padGeo, padMat);
+        padMesh.position.y = 0.2;
+        padMesh.rotation.y = obs.angle;
+        group.add(padMesh);
+        break;
+      }
+
+      case 'whirlpool': {
+        const ringGeo = new THREE.RingGeometry(2, 14, 24);
+        ringGeo.rotateX(-Math.PI / 2);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0x001122,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.8,
+        });
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.position.y = 0.05;
+        group.add(ringMesh);
+        group.userData = { ringMesh };
+        break;
+      }
+    }
+
+    this.scene.add(group);
+    return group;
+  }
+
+  createSplash(x, y, count = 25, speed = 12) {
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const spd = (0.3 + Math.random() * 0.7) * speed;
+      const spd = (0.4 + Math.random() * 0.8) * speed;
+      const geo = new THREE.SphereGeometry(0.15 + Math.random() * 0.2, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, 0.5, y);
+      this.scene.add(mesh);
+
       this.particles.push({
-        x,
-        y,
+        mesh,
         vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
-        size: 3 + Math.random() * 4,
-        maxLife: 0.4 + Math.random() * 0.4,
+        vy: 3 + Math.random() * 7,
+        vz: Math.sin(angle) * spd,
         life: 0,
-        color,
-        type: 'splash',
+        maxLife: 0.5 + Math.random() * 0.4,
       });
     }
   }
 
   createExplosion(x, y) {
-    // Fire & blast particles
-    for (let i = 0; i < 35; i++) {
+    this.screenShake = 16;
+    for (let i = 0; i < 40; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const spd = 60 + Math.random() * 240;
-      this.particles.push({
-        x,
-        y,
-        vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
-        size: 8 + Math.random() * 12,
-        maxLife: 0.6 + Math.random() * 0.5,
-        life: 0,
-        color: Math.random() > 0.4 ? '#ff5400' : (Math.random() > 0.5 ? '#ffbe0b' : '#ff0054'),
-        type: 'fire',
+      const spd = 6 + Math.random() * 18;
+      const geo = new THREE.SphereGeometry(0.4 + Math.random() * 0.6, 6, 6);
+      const isFire = Math.random() > 0.3;
+      const mat = new THREE.MeshBasicMaterial({
+        color: isFire ? (Math.random() > 0.5 ? 0xff5400 : 0xffbe0b) : 0x333333,
+        transparent: true,
+        opacity: 0.9,
       });
-    }
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, 1.0, y);
+      this.scene.add(mesh);
 
-    // Smoke clouds
-    for (let i = 0; i < 20; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const spd = 20 + Math.random() * 90;
       this.particles.push({
-        x,
-        y,
+        mesh,
         vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
-        size: 14 + Math.random() * 16,
-        maxLife: 1.0 + Math.random() * 0.8,
+        vy: 4 + Math.random() * 12,
+        vz: Math.sin(angle) * spd,
         life: 0,
-        color: 'rgba(70, 70, 75, 0.6)',
-        type: 'smoke',
+        maxLife: 0.7 + Math.random() * 0.5,
       });
     }
   }
 
   createCrateSplinters(x, y) {
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 15; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const spd = 40 + Math.random() * 140;
+      const spd = 3 + Math.random() * 8;
+      const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xa67c52 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, 0.8, y);
+      this.scene.add(mesh);
+
       this.particles.push({
-        x,
-        y,
+        mesh,
         vx: Math.cos(angle) * spd,
-        vy: Math.sin(angle) * spd,
-        size: 4 + Math.random() * 5,
-        rotation: Math.random() * Math.PI * 2,
-        rotSpeed: (Math.random() - 0.5) * 10,
-        maxLife: 0.8 + Math.random() * 0.5,
+        vy: 2 + Math.random() * 5,
+        vz: Math.sin(angle) * spd,
         life: 0,
-        color: '#b08968',
-        type: 'wood',
+        maxLife: 0.6 + Math.random() * 0.4,
       });
     }
   }
 
   addWakePoint(x, y, angle, speed, isDrifting) {
-    if (speed < 40) return;
+    if (speed < 60) return;
     const fX = Math.cos(angle);
     const fY = Math.sin(angle);
     const rX = -fY;
     const rY = fX;
 
-    // Twin hull wake emitters
-    const wakeOffset = 9;
-    const rearDist = -20;
+    [-0.8, 0.8].forEach(side => {
+      const wx = x - fX * 3.5 + rX * side;
+      const wy = y - fY * 3.5 + rY * side;
 
-    const p1X = x + fX * rearDist + rX * wakeOffset;
-    const p1Y = y + fY * rearDist + rY * wakeOffset;
-    const p2X = x + fX * rearDist - rX * wakeOffset;
-    const p2Y = y + fY * rearDist - rY * wakeOffset;
+      const geo = new THREE.SphereGeometry(0.35 + (speed / 700) * 0.4, 6, 6);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.6,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(wx, 0.15, wy);
+      this.scene.add(mesh);
 
-    const life = Math.min(2.0, 0.6 + (speed / 600) * 1.4);
-    const size = 5 + (speed / 500) * 8;
-
-    this.wakeTrails.push({
-      x: p1X,
-      y: p1Y,
-      size,
-      life: 0,
-      maxLife: life,
-      isDrift: isDrifting,
-    });
-
-    this.wakeTrails.push({
-      x: p2X,
-      y: p2Y,
-      size,
-      life: 0,
-      maxLife: life,
-      isDrift: isDrifting,
+      this.wakeMeshes.push({
+        mesh,
+        life: 0,
+        maxLife: 1.4,
+      });
     });
   }
 
   update(dt) {
-    this.waterTime += dt;
+    this.time += dt;
 
-    // Update wake trails
-    for (let i = this.wakeTrails.length - 1; i >= 0; i--) {
-      const w = this.wakeTrails[i];
-      w.life += dt;
-      w.size += dt * 14;
-      if (w.life >= w.maxLife) {
-        this.wakeTrails.splice(i, 1);
-      }
+    // Ocean Wave Displacements
+    const pos = this.oceanGeo.attributes.position;
+    const count = pos.count;
+    const t = this.time;
+    for (let i = 0; i < count; i += 4) {
+      const vx = pos.getX(i);
+      const vz = pos.getY(i); // PlaneGeometry rotated on X
+      const h = this.getWaveHeight(vx, vz, t);
+      pos.setZ(i, h);
     }
+    this.oceanGeo.computeVertexNormals();
+    this.oceanGeo.attributes.position.needsUpdate = true;
 
-    // Update particles
+    // Update Particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.life += dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= Math.pow(0.9, dt * 60);
-      p.vy *= Math.pow(0.9, dt * 60);
-      if (p.rotSpeed) p.rotation += p.rotSpeed * dt;
+      p.mesh.position.x += p.vx * dt;
+      p.mesh.position.y += p.vy * dt;
+      p.mesh.position.z += p.vz * dt;
+      p.vy -= 18 * dt; // gravity
 
-      if (p.life >= p.maxLife) {
+      const progress = p.life / p.maxLife;
+      p.mesh.material.opacity = 1 - progress;
+      p.mesh.scale.setScalar(1 + progress * 0.5);
+
+      if (p.life >= p.maxLife || p.mesh.position.y < 0) {
+        this.scene.remove(p.mesh);
         this.particles.splice(i, 1);
       }
+    }
+
+    // Update Wake Meshes
+    for (let i = this.wakeMeshes.length - 1; i >= 0; i--) {
+      const w = this.wakeMeshes[i];
+      w.life += dt;
+      const progress = w.life / w.maxLife;
+      w.mesh.scale.set(1 + progress * 3.5, 0.4, 1 + progress * 3.5);
+      w.mesh.material.opacity = (1 - progress) * 0.5;
+
+      if (w.life >= w.maxLife) {
+        this.scene.remove(w.mesh);
+        this.wakeMeshes.splice(i, 1);
+      }
+    }
+
+    // Screen Shake Decay
+    if (this.screenShake > 0) {
+      this.screenShake = Math.max(0, this.screenShake - 20 * dt);
     }
   }
 
   render(track, localBoat, allBoats, isCountdown, countdownSec) {
-    const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    if (!track || !localBoat) return;
 
-    // Update camera smooth follow
-    if (localBoat) {
-      const forwardX = Math.cos(localBoat.physics.angle);
-      const forwardY = Math.sin(localBoat.physics.angle);
-      const lookahead = Math.min(200, (localBoat.physics.speed / 700) * 180);
-
-      const targetCamX = localBoat.physics.x + forwardX * lookahead;
-      const targetCamY = localBoat.physics.y + forwardY * lookahead;
-
-      this.camera.x += (targetCamX - this.camera.x) * 0.12;
-      this.camera.y += (targetCamY - this.camera.y) * 0.12;
-
-      // Dynamic zoom: zooms out slightly at top speeds for high speed reaction time
-      const speedNorm = localBoat.physics.speed / 900;
-      this.camera.targetZoom = 1.0 - speedNorm * 0.22;
-      this.camera.zoom += (this.camera.targetZoom - this.camera.zoom) * 0.08;
+    // Synchronize 3D Obstacles
+    if (track.obstacles) {
+      for (const obs of track.obstacles) {
+        let mesh = this.obstacleMeshes.get(obs.id);
+        if (!mesh) {
+          mesh = this.createObstacle3D(obs);
+          this.obstacleMeshes.set(obs.id, mesh);
+        }
+        mesh.visible = obs.active;
+        if (obs.type === 'buoy' || obs.type === 'crate') {
+          // Bobbing on wave
+          mesh.position.y = this.getWaveHeight(obs.x, obs.y, this.time);
+        }
+        if (obs.type === 'mine' && mesh.userData.ledMesh) {
+          const blink = (Math.sin(this.time * 6) + 1) / 2;
+          mesh.userData.ledMesh.material.color.setRGB(1.0, blink * 0.2, blink * 0.2);
+        }
+        if (obs.type === 'whirlpool' && mesh.userData.ringMesh) {
+          mesh.userData.ringMesh.rotation.z += 0.05;
+        }
+      }
     }
 
-    ctx.save();
-    ctx.clearRect(0, 0, w, h);
+    // Synchronize 3D Boats
+    allBoats.forEach(b => {
+      let bMesh = this.boatMeshes.get(b.id);
+      if (!bMesh) {
+        bMesh = this.createBoat3D(b);
+        this.boatMeshes.set(b.id, bMesh);
+      }
 
-    // Apply screenshake
-    let shakeX = 0;
-    let shakeY = 0;
-    if (localBoat && localBoat.physics.screenShake > 0) {
-      const s = localBoat.physics.screenShake;
-      shakeX = (Math.random() - 0.5) * s * 2;
-      shakeY = (Math.random() - 0.5) * s * 2;
-    }
+      const p = b.physics;
+      const waveH = this.getWaveHeight(p.x, p.y, this.time);
+      bMesh.position.set(p.x, waveH + p.z * 0.15, p.y);
 
-    // World transform
-    ctx.translate(w / 2 + shakeX, h / 2 + shakeY);
-    ctx.scale(this.camera.zoom, this.camera.zoom);
-    ctx.translate(-this.camera.x, -this.camera.y);
+      // Realistic boat attitude: Heading, Bank (Roll), Planing (Pitch)
+      const heading = -p.angle + Math.PI / 2; // Align 2D heading with 3D Z/X
+      bMesh.rotation.y = heading;
 
-    // 1. Water Background
-    this.renderWater(ctx, track);
+      // Planing pitch: bow rises under acceleration, dips on brake
+      const forwardAccel = (p.throttle > 0 ? 0.08 : (p.throttle < 0 ? -0.06 : 0));
+      const flightPitch = p.isAirborne ? -0.15 : 0;
+      bMesh.rotation.x = -forwardAccel + flightPitch;
 
-    // 2. Track Boundaries & Waypoint Path
-    this.renderTrackPath(ctx, track);
+      // Banking roll: boat leans inward when turning at speed
+      const roll = (p.steer || 0) * Math.min(0.35, (p.speed / 700) * 0.35);
+      bMesh.rotation.z = roll;
 
-    // 3. Wake Trails
-    this.renderWakeTrails(ctx);
-
-    // 4. Obstacles
-    this.renderObstacles(ctx, track.obstacles);
-
-    // 5. Particles (under boats)
-    this.renderParticles(ctx, 'splash');
-    this.renderParticles(ctx, 'wood');
-
-    // 6. Speedboats
-    allBoats.forEach(boat => {
-      this.renderBoat(ctx, boat);
+      // Nitro Flames visibility
+      if (bMesh.userData.flame1 && bMesh.userData.flame2) {
+        bMesh.userData.flame1.visible = p.isBoosting;
+        bMesh.userData.flame2.visible = p.isBoosting;
+        if (p.isBoosting) {
+          const flicker = 0.8 + Math.random() * 0.4;
+          bMesh.userData.flame1.scale.set(1, flicker, 1);
+          bMesh.userData.flame2.scale.set(1, flicker, 1);
+        }
+      }
     });
 
-    // 7. Particles (above boats: fire, smoke)
-    this.renderParticles(ctx, 'fire');
-    this.renderParticles(ctx, 'smoke');
+    // --- REALISTIC 3D CAMERA POSITIONING ---
+    const p = localBoat.physics;
+    const waveH = this.getWaveHeight(p.x, p.y, this.time);
+    const forwardX = Math.cos(p.angle);
+    const forwardZ = Math.sin(p.angle);
 
-    ctx.restore();
-
-    // 8. Screen space speed streak effect during nitro boost
-    if (localBoat && localBoat.physics.isBoosting) {
-      this.renderSpeedLines(ctx, w, h);
-    }
-  }
-
-  renderWater(ctx, track) {
-    const waterColor = track.waterColor || '#0a84b3';
-    const deepColor = track.deepWaterColor || '#004e75';
-
-    // Base water fill across full track area
-    ctx.fillStyle = waterColor;
-    ctx.fillRect(-1000, -1000, track.width + 2000, track.height + 2000);
-
-    // Procedural wave caustics
-    const t = this.waterTime;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.lineWidth = 2.5;
-
-    const startX = Math.floor((this.camera.x - 1200) / 160) * 160;
-    const endX = this.camera.x + 1200;
-    const startY = Math.floor((this.camera.y - 1000) / 160) * 160;
-    const endY = this.camera.y + 1000;
-
-    for (let x = startX; x < endX; x += 160) {
-      for (let y = startY; y < endY; y += 160) {
-        const waveOffset = Math.sin(x * 0.01 + t * 1.5) * 12 + Math.cos(y * 0.01 + t * 1.8) * 12;
-        ctx.beginPath();
-        ctx.arc(x + waveOffset, y + waveOffset, 45, 0, Math.PI * 1.2);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-  }
-
-  renderTrackPath(ctx, track) {
-    const checkpoints = track.checkpoints;
-    if (!checkpoints || checkpoints.length === 0) return;
-
-    // Draw track corridor boundaries
-    ctx.save();
-
-    // Left and right boundary lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.lineWidth = 6;
-    ctx.setLineDash([20, 20]);
-
-    // Outer boundary Left
-    ctx.beginPath();
-    for (let i = 0; i < checkpoints.length; i++) {
-      const cp = checkpoints[i];
-      const lx = cp.x - cp.nx * (cp.width / 2);
-      const ly = cp.y - cp.ny * (cp.width / 2);
-      if (i === 0) ctx.moveTo(lx, ly);
-      else ctx.lineTo(lx, ly);
-    }
-    ctx.closePath();
-    ctx.stroke();
-
-    // Outer boundary Right
-    ctx.beginPath();
-    for (let i = 0; i < checkpoints.length; i++) {
-      const cp = checkpoints[i];
-      const rx = cp.x + cp.nx * (cp.width / 2);
-      const ry = cp.y + cp.ny * (cp.width / 2);
-      if (i === 0) ctx.moveTo(rx, ry);
-      else ctx.lineTo(rx, ry);
-    }
-    ctx.closePath();
-    ctx.stroke();
-
-    // Checkered Start / Finish Line
-    const startCp = checkpoints[0];
-    const halfW = startCp.width / 2;
-    const sx1 = startCp.x - startCp.nx * halfW;
-    const sy1 = startCp.y - startCp.ny * halfW;
-    const sx2 = startCp.x + startCp.nx * halfW;
-    const sy2 = startCp.y + startCp.ny * halfW;
-
-    ctx.setLineDash([]);
-    ctx.lineWidth = 14;
-    ctx.strokeStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(sx1, sy1);
-    ctx.lineTo(sx2, sy2);
-    ctx.stroke();
-
-    // Secondary checkered stripes
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#ff0054';
-    ctx.setLineDash([16, 16]);
-    ctx.beginPath();
-    ctx.moveTo(sx1, sy1);
-    ctx.lineTo(sx2, sy2);
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  renderWakeTrails(ctx) {
-    ctx.save();
-    for (const w of this.wakeTrails) {
-      const alpha = (1 - w.life / w.maxLife) * 0.45;
-      ctx.fillStyle = w.isDrift ? `rgba(220, 245, 255, ${alpha * 1.3})` : `rgba(255, 255, 255, ${alpha})`;
-      ctx.beginPath();
-      ctx.arc(w.x, w.y, w.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  renderObstacles(ctx, obstacles) {
-    if (!obstacles) return;
-
-    for (const obs of obstacles) {
-      if (!obs.active) continue;
-
-      ctx.save();
-      ctx.translate(obs.x, obs.y);
-
-      switch (obs.type) {
-        case 'rock': {
-          // Rocky reef with foam edge
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius + 6, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = obs.color || '#495057';
-          ctx.beginPath();
-          // Organic polygon rock shape
-          const sides = 7;
-          for (let s = 0; s < sides; s++) {
-            const a = (s / sides) * Math.PI * 2;
-            const r = obs.radius * (0.8 + 0.25 * Math.sin(s * 2.3 + obs.id.length));
-            const px = Math.cos(a) * r;
-            const py = Math.sin(a) * r;
-            if (s === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.strokeStyle = '#1b1d20';
-          ctx.lineWidth = 3;
-          ctx.stroke();
-
-          // Highlight
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-          ctx.beginPath();
-          ctx.arc(-obs.radius * 0.2, -obs.radius * 0.2, obs.radius * 0.4, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-
-        case 'buoy': {
-          // Bobbing water ripple
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius + 4, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Buoy body
-          ctx.fillStyle = obs.color;
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2.5;
-          ctx.stroke();
-
-          // Center blinking light
-          const blink = Math.sin(this.waterTime * 5 + obs.x) > 0;
-          ctx.fillStyle = blink ? '#ffffff' : '#333333';
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius * 0.4, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-
-        case 'crate': {
-          ctx.rotate(obs.rotation || 0);
-          const s = obs.radius * 1.5;
-          ctx.fillStyle = '#b08968';
-          ctx.fillRect(-s / 2, -s / 2, s, s);
-          ctx.strokeStyle = '#582f0e';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(-s / 2, -s / 2, s, s);
-
-          // Crate cross braces
-          ctx.beginPath();
-          ctx.moveTo(-s / 2, -s / 2);
-          ctx.lineTo(s / 2, s / 2);
-          ctx.moveTo(s / 2, -s / 2);
-          ctx.lineTo(-s / 2, s / 2);
-          ctx.stroke();
-          break;
-        }
-
-        case 'log': {
-          ctx.rotate(obs.rotation || 0);
-          ctx.fillStyle = '#6f4e37';
-          ctx.beginPath();
-          ctx.roundRect(-obs.length / 2, -obs.width / 2, obs.length, obs.width, 6);
-          ctx.fill();
-          ctx.strokeStyle = '#3d2616';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          // Log rings
-          ctx.fillStyle = '#8a5a36';
-          ctx.beginPath();
-          ctx.arc(obs.length / 2 - 4, 0, obs.width / 2 - 2, 0, Math.PI * 2);
-          ctx.arc(-obs.length / 2 + 4, 0, obs.width / 2 - 2, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-
-        case 'mine': {
-          // Spiked Naval Mine
-          ctx.fillStyle = '#212529';
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Spikes
-          ctx.strokeStyle = '#212529';
-          ctx.lineWidth = 4;
-          for (let i = 0; i < 8; i++) {
-            const a = (i / 8) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(a) * obs.radius, Math.sin(a) * obs.radius);
-            ctx.lineTo(Math.cos(a) * (obs.radius + 8), Math.sin(a) * (obs.radius + 8));
-            ctx.stroke();
-          }
-
-          // Pulsing red danger LED
-          const blink = (Math.sin(obs.blinkTimer) + 1) / 2;
-          ctx.fillStyle = `rgba(255, 0, 50, ${0.4 + blink * 0.6})`;
-          ctx.beginPath();
-          ctx.arc(0, 0, 8, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Danger warning halo
-          ctx.strokeStyle = `rgba(255, 0, 50, ${blink * 0.4})`;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius + 12 + blink * 8, 0, Math.PI * 2);
-          ctx.stroke();
-          break;
-        }
-
-        case 'whirlpool': {
-          // Swirling vortex rings
-          ctx.rotate(obs.currentAngle);
-          for (let r = 1; r <= 3; r++) {
-            ctx.strokeStyle = `rgba(255, 255, 255, ${0.25 - r * 0.05})`;
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(0, 0, obs.radius * (r * 0.6), 0, Math.PI * 1.6);
-            ctx.stroke();
-          }
-
-          // Dark abyss center
-          ctx.fillStyle = '#03071e';
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius * 0.35, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-
-        case 'ramp': {
-          ctx.rotate(obs.angle);
-          // Ramp base
-          ctx.fillStyle = '#ffbe0b';
-          ctx.fillRect(-obs.width / 2, -obs.height / 2, obs.width, obs.height);
-          ctx.strokeStyle = '#d90429';
-          ctx.lineWidth = 3;
-          ctx.strokeRect(-obs.width / 2, -obs.height / 2, obs.width, obs.height);
-
-          // Arrow chevrons
-          ctx.fillStyle = '#d90429';
-          for (let y = -obs.height / 3; y <= obs.height / 3; y += 18) {
-            ctx.beginPath();
-            ctx.moveTo(-14, y - 6);
-            ctx.lineTo(0, y + 6);
-            ctx.lineTo(14, y - 6);
-            ctx.lineTo(0, y - 1);
-            ctx.closePath();
-            ctx.fill();
-          }
-          break;
-        }
-
-        case 'boost_pad': {
-          ctx.rotate(obs.angle);
-          ctx.fillStyle = 'rgba(0, 229, 255, 0.4)';
-          ctx.fillRect(-obs.width / 2, -obs.height / 2, obs.width, obs.height);
-          ctx.strokeStyle = '#00f5d4';
-          ctx.lineWidth = 3;
-          ctx.strokeRect(-obs.width / 2, -obs.height / 2, obs.width, obs.height);
-
-          // Animated glowing neon chevrons
-          const pulseOffset = Math.sin(obs.pulse) * 6;
-          ctx.fillStyle = '#00f5d4';
-          for (let y = -obs.height / 3; y <= obs.height / 3; y += 18) {
-            ctx.beginPath();
-            ctx.moveTo(-12, y - 5 + pulseOffset);
-            ctx.lineTo(0, y + 6 + pulseOffset);
-            ctx.lineTo(12, y - 5 + pulseOffset);
-            ctx.closePath();
-            ctx.fill();
-          }
-          break;
-        }
-
-        case 'oil_slick': {
-          // Iridescent swirling oil spill
-          const grad = ctx.createRadialGradient(0, 0, 5, 0, 0, obs.radius);
-          grad.addColorStop(0, 'rgba(15, 10, 30, 0.85)');
-          grad.addColorStop(0.5, 'rgba(114, 9, 183, 0.6)');
-          grad.addColorStop(0.8, 'rgba(67, 97, 238, 0.4)');
-          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-
-        case 'tentacle': {
-          // Sweeping kraken tentacle
-          ctx.fillStyle = '#7209b7';
-          ctx.beginPath();
-          ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = '#f72585';
-          ctx.lineWidth = 3;
-          ctx.stroke();
-
-          // Suction suckers
-          ctx.fillStyle = '#f72585';
-          ctx.beginPath();
-          ctx.arc(-8, -4, 5, 0, Math.PI * 2);
-          ctx.arc(8, 4, 5, 0, Math.PI * 2);
-          ctx.fill();
-          break;
-        }
-      }
-
-      ctx.restore();
-    }
-  }
-
-  renderBoat(ctx, boat) {
-    const p = boat.physics;
-    ctx.save();
-
-    // 1. Shadow (especially offset when airborne)
-    const shadowDist = 8 + p.z * 1.2;
-    const shadowScale = 1.0 - Math.min(0.4, p.z * 0.015);
-
-    ctx.save();
-    ctx.translate(p.x + shadowDist * 0.6, p.y + shadowDist * 0.9);
-    ctx.rotate(p.angle);
-    ctx.scale(shadowScale, shadowScale);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    this.drawHullPath(ctx, p.specs);
-    ctx.fill();
-    ctx.restore();
-
-    // 2. Boat Body
-    ctx.translate(p.x, p.y - p.z * 1.2);
-    ctx.rotate(p.angle);
-
-    // Airborne scale pop
-    if (p.isAirborne) {
-      const airScale = 1.0 + Math.min(0.25, p.z * 0.01);
-      ctx.scale(airScale, airScale);
+    let shakeOffset = 0;
+    if (this.screenShake > 0) {
+      shakeOffset = (Math.random() - 0.5) * (this.screenShake * 0.04);
     }
 
-    // Engine thrust & turbo boost flames
-    if (p.isBoosting || p.throttle > 0.1) {
-      this.drawEngineThruster(ctx, p.isBoosting);
+    if (this.cameraMode === 'cockpit') {
+      // 🏎️ COCKPIT / BOW POV: Directly in front of the boat looking forward over the water!
+      // Mounted right above the bow/windshield
+      const bowDist = 2.2;
+      const eyeH = 1.6 + p.z * 0.15 + shakeOffset;
+
+      this.camera.position.set(
+        p.x + forwardX * bowDist,
+        waveH + eyeH,
+        p.y + forwardZ * bowDist
+      );
+
+      // Look forward along the boat's heading into the oncoming waves
+      const lookahead = 40.0;
+      this.camera.lookAt(
+        p.x + forwardX * lookahead,
+        waveH + eyeH * 0.9,
+        p.y + forwardZ * lookahead
+      );
+    } else {
+      // 📹 CHASE POV: Classic 3D Video Game Behind-the-Boat Camera!
+      const chaseDist = 18.0;
+      const chaseH = 5.5 + (p.speed / 800) * 1.5 + p.z * 0.15 + shakeOffset;
+
+      this.camera.position.set(
+        p.x - forwardX * chaseDist,
+        waveH + chaseH,
+        p.y - forwardZ * chaseDist
+      );
+
+      const lookahead = 20.0;
+      this.camera.lookAt(
+        p.x + forwardX * lookahead,
+        waveH + 2.0,
+        p.y + forwardZ * lookahead
+      );
     }
 
-    // Main hull
-    this.drawHull(ctx, boat);
+    // Keep Sun Following Player
+    this.sunLight.position.set(p.x + 300, 500, p.y + 300);
+    this.sunLight.target.position.set(p.x, 0, p.y);
+    this.sunLight.target.updateMatrixWorld();
 
-    // Racer label & rank tag
-    ctx.restore();
-
-    // 3. World space racer name tag
-    ctx.save();
-    ctx.translate(p.x, p.y - p.z * 1.2 - 38);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.beginPath();
-    ctx.roundRect(-45, -12, 90, 22, 6);
-    ctx.fill();
-    ctx.strokeStyle = boat.color || '#00e5ff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(boat.name || 'Racer', 0, 0);
-    ctx.restore();
+    // Render WebGL Frame
+    this.renderer.render(this.scene, this.camera);
   }
 
-  drawHullPath(ctx, specs) {
-    const hl = specs.hullLength / 2;
-    const hw = specs.hullWidth / 2;
-
-    ctx.beginPath();
-    // Sleek aerodynamic speedboat prow
-    ctx.moveTo(hl + 4, 0); // Bow tip
-    ctx.lineTo(hl * 0.4, hw); // Forward starboard
-    ctx.lineTo(-hl, hw * 0.9); // Stern starboard
-    ctx.lineTo(-hl * 0.8, 0); // Motor transom indent
-    ctx.lineTo(-hl, -hw * 0.9); // Stern port
-    ctx.lineTo(hl * 0.4, -hw); // Forward port
-    ctx.closePath();
-  }
-
-  drawHull(ctx, boat) {
-    const p = boat.physics;
-    const specs = p.specs;
-    const hl = specs.hullLength / 2;
-    const hw = specs.hullWidth / 2;
-
-    // Outer hull outline
-    this.drawHullPath(ctx, specs);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.strokeStyle = '#1b263b';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-
-    // Custom Livery Color Accent
-    ctx.fillStyle = boat.color || '#00e5ff';
-    ctx.beginPath();
-    ctx.moveTo(hl * 0.6, 0);
-    ctx.lineTo(hl * 0.1, hw * 0.7);
-    ctx.lineTo(-hl * 0.7, hw * 0.6);
-    ctx.lineTo(-hl * 0.6, 0);
-    ctx.lineTo(-hl * 0.7, -hw * 0.6);
-    ctx.lineTo(hl * 0.1, -hw * 0.7);
-    ctx.closePath();
-    ctx.fill();
-
-    // Dark Cockpit & Windshield
-    ctx.fillStyle = '#0d1b2a';
-    ctx.beginPath();
-    ctx.moveTo(hl * 0.3, 0);
-    ctx.lineTo(hl * 0.05, hw * 0.45);
-    ctx.lineTo(-hl * 0.35, hw * 0.4);
-    ctx.lineTo(-hl * 0.35, -hw * 0.4);
-    ctx.lineTo(hl * 0.05, -hw * 0.45);
-    ctx.closePath();
-    ctx.fill();
-
-    // Windshield glass reflection
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.beginPath();
-    ctx.moveTo(hl * 0.25, 0);
-    ctx.lineTo(hl * 0.08, hw * 0.35);
-    ctx.lineTo(-hl * 0.1, hw * 0.3);
-    ctx.lineTo(hl * 0.05, 0);
-    ctx.closePath();
-    ctx.fill();
-
-    // Outboard Marine Engine Block
-    ctx.fillStyle = '#212529';
-    ctx.fillRect(-hl - 5, -hw * 0.35, 7, hw * 0.7);
-    ctx.strokeStyle = '#adb5bd';
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(-hl - 5, -hw * 0.35, 7, hw * 0.7);
-  }
-
-  drawEngineThruster(ctx, isBoosting) {
-    const flameLen = isBoosting ? 32 + Math.random() * 14 : 14 + Math.random() * 6;
-    const flameWidth = isBoosting ? 14 : 8;
-
-    // Turbo fire plume
-    ctx.fillStyle = isBoosting ? '#00f5d4' : '#ff5400';
-    ctx.beginPath();
-    ctx.moveTo(-24, -flameWidth / 2);
-    ctx.lineTo(-24 - flameLen, 0);
-    ctx.lineTo(-24, flameWidth / 2);
-    ctx.closePath();
-    ctx.fill();
-
-    // Inner bright core
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(-24, -flameWidth / 4);
-    ctx.lineTo(-24 - flameLen * 0.5, 0);
-    ctx.lineTo(-24, flameWidth / 4);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  renderParticles(ctx, type) {
-    for (const p of this.particles) {
-      if (p.type !== type) continue;
-      const alpha = 1 - p.life / p.maxLife;
-
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      if (p.rotation) ctx.rotate(p.rotation);
-
-      if (p.type === 'splash') {
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha * 0.7})`;
-        ctx.beginPath();
-        ctx.arc(0, 0, p.size, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (p.type === 'wood') {
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-      } else if (p.type === 'fire') {
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = alpha;
-        ctx.beginPath();
-        ctx.arc(0, 0, p.size * (1 + (p.life / p.maxLife) * 0.5), 0, Math.PI * 2);
-        ctx.fill();
-      } else if (p.type === 'smoke') {
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = alpha * 0.5;
-        ctx.beginPath();
-        ctx.arc(0, 0, p.size * (1 + (p.life / p.maxLife) * 1.2), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-  }
-
-  renderSpeedLines(ctx, w, h) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0, 245, 212, 0.25)';
-    ctx.lineWidth = 2.5;
-
-    const count = 16;
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2 + Math.random() * 0.1;
-      const rInner = Math.min(w, h) * 0.35 + Math.random() * 50;
-      const rOuter = Math.min(w, h) * 0.55;
-
-      const x1 = w / 2 + Math.cos(angle) * rInner;
-      const y1 = h / 2 + Math.sin(angle) * rInner;
-      const x2 = w / 2 + Math.cos(angle) * rOuter;
-      const y2 = h / 2 + Math.sin(angle) * rOuter;
-
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
+  // 2D Radar Minimap in HUD
   renderMinimap(minimapCanvas, track, allBoats, localBoatId) {
     if (!minimapCanvas || !track) return;
     const mctx = minimapCanvas.getContext('2d');
@@ -807,8 +685,8 @@ export class Renderer {
 
     mctx.clearRect(0, 0, mw, mh);
 
-    // Background
-    mctx.fillStyle = 'rgba(5, 25, 35, 0.85)';
+    // High-tech circular radar background
+    mctx.fillStyle = 'rgba(5, 15, 25, 0.85)';
     mctx.fillRect(0, 0, mw, mh);
 
     const scaleX = (mw - 24) / track.width;
@@ -820,8 +698,8 @@ export class Renderer {
     const toMapX = (x) => offsetX + x * scale;
     const toMapY = (y) => offsetY + y * scale;
 
-    // Draw track circuit line
-    mctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    // Track Course Line
+    mctx.strokeStyle = 'rgba(0, 245, 212, 0.4)';
     mctx.lineWidth = 4;
     mctx.beginPath();
     track.checkpoints.forEach((cp, i) => {
@@ -833,14 +711,7 @@ export class Renderer {
     mctx.closePath();
     mctx.stroke();
 
-    // Start line marker
-    const startCp = track.checkpoints[0];
-    mctx.fillStyle = '#ffbe0b';
-    mctx.beginPath();
-    mctx.arc(toMapX(startCp.x), toMapY(startCp.y), 4, 0, Math.PI * 2);
-    mctx.fill();
-
-    // Obstacles markers (Mines in red, Ramps in yellow)
+    // Obstacles Markers (Mines in red, Ramps in yellow)
     if (track.obstacles) {
       for (const obs of track.obstacles) {
         if (!obs.active) continue;
@@ -850,16 +721,11 @@ export class Renderer {
         } else if (obs.type === 'ramp') {
           mctx.fillStyle = '#ffbe0b';
           mctx.fillRect(toMapX(obs.x) - 2, toMapY(obs.y) - 2, 4, 4);
-        } else if (obs.type === 'whirlpool') {
-          mctx.fillStyle = '#7209b7';
-          mctx.beginPath();
-          mctx.arc(toMapX(obs.x), toMapY(obs.y), 4, 0, Math.PI * 2);
-          mctx.stroke();
         }
       }
     }
 
-    // Boats
+    // Boats Radar Blips
     allBoats.forEach(b => {
       const isLocal = b.id === localBoatId;
       const bx = toMapX(b.physics.x);
@@ -872,9 +738,70 @@ export class Renderer {
 
       if (isLocal) {
         mctx.strokeStyle = '#ffffff';
-        mctx.lineWidth = 1.5;
+        mctx.lineWidth = 2;
         mctx.stroke();
       }
     });
+  }
+
+  // 3D Canvas Preview for Title Screen
+  renderTitlePreview(canvas, boatColor, modelId, angle) {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // High quality isometric 3D preview render
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(angle);
+
+    // Hull Shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(8, 12, 35, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Sleek V-Hull
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(0, -45);
+    ctx.lineTo(16, 15);
+    ctx.lineTo(12, 35);
+    ctx.lineTo(-12, 35);
+    ctx.lineTo(-16, 15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#223344';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Livery Deck in Selected Color
+    ctx.fillStyle = boatColor || '#00f5d4';
+    ctx.beginPath();
+    ctx.moveTo(0, -32);
+    ctx.lineTo(12, 10);
+    ctx.lineTo(9, 28);
+    ctx.lineTo(-9, 28);
+    ctx.lineTo(-12, 10);
+    ctx.closePath();
+    ctx.fill();
+
+    // Cockpit & Windshield
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.moveTo(0, -14);
+    ctx.lineTo(7, 4);
+    ctx.lineTo(-7, 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Twin Outboard Motors
+    ctx.fillStyle = '#1f2937';
+    ctx.fillRect(-8, 33, 4, 8);
+    ctx.fillRect(4, 33, 4, 8);
+
+    ctx.restore();
   }
 }

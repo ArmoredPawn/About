@@ -232,6 +232,14 @@ class App {
       }
     });
 
+    // Camera POV View Toggle
+    const cameraBtn = document.getElementById('btn-camera-toggle');
+    if (cameraBtn) {
+      cameraBtn.addEventListener('click', () => {
+        this.renderer.toggleCamera();
+      });
+    }
+
     // Sound Mute Toggle
     const soundBtn = document.getElementById('btn-toggle-sound');
     soundBtn.addEventListener('click', () => {
@@ -281,37 +289,17 @@ class App {
   }
 
   startPreviewRenderLoop() {
-    const ctx = this.previewCanvas.getContext('2d');
     let angle = 0;
 
     const renderPreview = () => {
       if (this.currentScreen === 'screen-title') {
         angle += 0.015;
-        ctx.clearRect(0, 0, 220, 220);
-
-        ctx.save();
-        ctx.translate(110, 110);
-        ctx.rotate(angle);
-
-        // Preview Boat
-        const mockBoat = {
-          color: this.playerProfile.color,
-          name: '',
-          physics: {
-            specs: BOAT_MODELS[this.playerProfile.model] || BOAT_MODELS.viper,
-            x: 0,
-            y: 0,
-            z: 0,
-            angle: 0,
-            speed: 0,
-            throttle: 0,
-            isAirborne: false,
-            isBoosting: false,
-          },
-        };
-
-        this.renderer.drawHull(ctx, mockBoat);
-        ctx.restore();
+        this.renderer.renderTitlePreview(
+          this.previewCanvas,
+          this.playerProfile.color,
+          this.playerProfile.model,
+          angle
+        );
       }
       requestAnimationFrame(renderPreview);
     };

@@ -26,6 +26,22 @@ const server = http.createServer(async (req, res) => {
     let reqPath = decodeURIComponent(url.pathname);
     if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
+    if (reqPath === '/vendor/three.module.js') {
+      try {
+        const threePath = path.join(ROOT, 'node_modules', 'three', 'build', 'three.module.js');
+        const content = await readFile(threePath);
+        res.writeHead(200, {
+          'Content-Type': 'text/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        res.end(content);
+        return;
+      } catch (err) {
+        // Fall through
+      }
+    }
+
     const safePath = path.normalize(path.join(PUBLIC_DIR, reqPath));
     if (!safePath.startsWith(PUBLIC_DIR)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });

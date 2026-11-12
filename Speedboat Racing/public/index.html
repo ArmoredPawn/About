@@ -9,6 +9,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap">
   <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js"
+    }
+  }
+  </script>
 </head>
 <body>
 
@@ -238,12 +245,17 @@
         <div class="hud-bottom-bar">
           <div style="display: flex; flex-direction: column; gap: 8px;">
             <div class="hud-controls-info">
-              <div>WASD / Arrows: Steer &amp; Throttle</div>
-              <div>SPACE / SHIFT: Nitro Boost | Ramps: Jump!</div>
+              <div>WASD / Arrows: Steer &amp; Throttle | SPACE: Nitro</div>
+              <div>C: Switch Camera (Cockpit / Chase POV)</div>
             </div>
-            <button id="btn-toggle-sound" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; align-self: flex-start; pointer-events: auto;">
-              🔊 Sound: ON
-            </button>
+            <div style="display: flex; gap: 8px;">
+              <button id="btn-camera-toggle" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; pointer-events: auto;">
+                📹 View: Cockpit [C]
+              </button>
+              <button id="btn-toggle-sound" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; pointer-events: auto;">
+                🔊 Sound: ON
+              </button>
+            </div>
           </div>
 
           <!-- Speedo & Boost -->
