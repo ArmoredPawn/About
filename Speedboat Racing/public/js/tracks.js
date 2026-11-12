@@ -1,6 +1,8 @@
 import { Obstacle } from './obstacles.js';
 
-// Track definitions and obstacle generator for Hydro Rush
+// Track definitions and obstacle generator for Hydro Rush.
+// Waypoints are joined by a smooth curve; bends are no tighter than a ~360-unit radius so every
+// corner can be taken at speed with a little care.
 export const TRACKS = {
   coral_atoll: {
     id: 'coral_atoll',
@@ -12,22 +14,22 @@ export const TRACKS = {
     waterColor: '#0a84b3',
     deepWaterColor: '#004e75',
     ambientColor: '#48cae4',
-    trackWidth: 320,
+    trackWidth: 440,
     waypoints: [
-      { x: 700, y: 800 },
-      { x: 1500, y: 700 },
-      { x: 2300, y: 850 },
-      { x: 3100, y: 650 },
-      { x: 3600, y: 1200 },
-      { x: 3450, y: 1900 },
-      { x: 2900, y: 2200 },
-      { x: 3300, y: 2800 },
-      { x: 2500, y: 3000 },
-      { x: 1800, y: 2600 },
-      { x: 1200, y: 2950 },
-      { x: 600, y: 2400 },
-      { x: 950, y: 1800 },
-      { x: 600, y: 1300 },
+      { x: 770, y: 670 },
+      { x: 1460, y: 440 },
+      { x: 2390, y: 540 },
+      { x: 3200, y: 600 },
+      { x: 3680, y: 1060 },
+      { x: 3670, y: 1740 },
+      { x: 3340, y: 2240 },
+      { x: 3140, y: 2720 },
+      { x: 2590, y: 2960 },
+      { x: 1820, y: 2800 },
+      { x: 1140, y: 2780 },
+      { x: 700, y: 2350 },
+      { x: 650, y: 1720 },
+      { x: 520, y: 1140 },
     ],
   },
   skull_canyon: {
@@ -40,22 +42,22 @@ export const TRACKS = {
     waterColor: '#005f73',
     deepWaterColor: '#002830',
     ambientColor: '#0a9396',
-    trackWidth: 290,
+    trackWidth: 400,
     waypoints: [
-      { x: 800, y: 750 },
-      { x: 1800, y: 650 },
-      { x: 2600, y: 900 },
-      { x: 3600, y: 750 },
-      { x: 4000, y: 1400 },
-      { x: 3300, y: 1800 },
-      { x: 3800, y: 2400 },
-      { x: 3200, y: 3100 },
-      { x: 2200, y: 2800 },
-      { x: 1600, y: 3200 },
-      { x: 900, y: 2850 },
-      { x: 600, y: 2100 },
-      { x: 1200, y: 1700 },
-      { x: 700, y: 1250 },
+      { x: 960, y: 640 },
+      { x: 1780, y: 430 },
+      { x: 2760, y: 610 },
+      { x: 3630, y: 760 },
+      { x: 3990, y: 1220 },
+      { x: 3870, y: 1790 },
+      { x: 3810, y: 2440 },
+      { x: 3260, y: 2960 },
+      { x: 2320, y: 3040 },
+      { x: 1540, y: 3170 },
+      { x: 870, y: 2840 },
+      { x: 610, y: 2180 },
+      { x: 730, y: 1610 },
+      { x: 660, y: 1080 },
     ],
   },
   neon_bay: {
@@ -68,20 +70,20 @@ export const TRACKS = {
     waterColor: '#03071e',
     deepWaterColor: '#01040f',
     ambientColor: '#7209b7',
-    trackWidth: 310,
+    trackWidth: 420,
     waypoints: [
-      { x: 900, y: 800 },
-      { x: 1900, y: 700 },
-      { x: 3000, y: 850 },
-      { x: 3800, y: 1300 },
-      { x: 3400, y: 2100 },
-      { x: 3800, y: 2800 },
-      { x: 2800, y: 3150 },
-      { x: 2000, y: 2600 },
-      { x: 1300, y: 3100 },
-      { x: 650, y: 2500 },
-      { x: 1100, y: 1900 },
-      { x: 700, y: 1350 },
+      { x: 950, y: 680 },
+      { x: 1910, y: 460 },
+      { x: 3120, y: 670 },
+      { x: 3780, y: 1260 },
+      { x: 3770, y: 2090 },
+      { x: 3680, y: 2770 },
+      { x: 2970, y: 3140 },
+      { x: 2040, y: 2900 },
+      { x: 1240, y: 2990 },
+      { x: 740, y: 2530 },
+      { x: 770, y: 1870 },
+      { x: 620, y: 1220 },
     ],
   },
   maelstrom_abyss: {
@@ -94,23 +96,26 @@ export const TRACKS = {
     waterColor: '#0d1b2a',
     deepWaterColor: '#050a12',
     ambientColor: '#1b263b',
-    trackWidth: 330,
+    trackWidth: 440,
     waypoints: [
-      { x: 900, y: 900 },
-      { x: 2000, y: 750 },
-      { x: 3200, y: 800 },
-      { x: 4200, y: 1400 },
-      { x: 3800, y: 2300 },
-      { x: 4100, y: 3200 },
-      { x: 3100, y: 3500 },
-      { x: 2200, y: 2900 },
-      { x: 1400, y: 3500 },
-      { x: 700, y: 2800 },
-      { x: 1200, y: 2000 },
-      { x: 700, y: 1450 },
+      { x: 880, y: 700 },
+      { x: 1980, y: 450 },
+      { x: 3360, y: 570 },
+      { x: 4240, y: 1290 },
+      { x: 4180, y: 2290 },
+      { x: 4120, y: 3160 },
+      { x: 3280, y: 3550 },
+      { x: 2230, y: 3220 },
+      { x: 1310, y: 3390 },
+      { x: 710, y: 2830 },
+      { x: 830, y: 1980 },
+      { x: 560, y: 1280 },
     ],
   },
 };
+
+// Spacing (world units) between samples of a track's smoothed centreline
+export const PATH_STEP = 20;
 
 // Pseudorandom generator using seed
 function makeRng(seed) {
@@ -121,11 +126,110 @@ function makeRng(seed) {
   };
 }
 
+// Centripetal Catmull-Rom between p1 and p2 (no loops or cusps on uneven waypoint spacing)
+function catmullRom(p0, p1, p2, p3, u) {
+  const knot = (a, b) => Math.pow(Math.hypot(b.x - a.x, b.y - a.y), 0.5) || 1e-4;
+  const t0 = 0;
+  const t1 = t0 + knot(p0, p1);
+  const t2 = t1 + knot(p1, p2);
+  const t3 = t2 + knot(p2, p3);
+  const t = t1 + (t2 - t1) * u;
+  const mix = (a, b, ta, tb) => ({
+    x: ((tb - t) * a.x + (t - ta) * b.x) / (tb - ta),
+    y: ((tb - t) * a.y + (t - ta) * b.y) / (tb - ta),
+  });
+  const a1 = mix(p0, p1, t0, t1);
+  const a2 = mix(p1, p2, t1, t2);
+  const a3 = mix(p2, p3, t2, t3);
+  const b1 = mix(a1, a2, t0, t2);
+  const b2 = mix(a2, a3, t1, t3);
+  return mix(b1, b2, t1, t2);
+}
+
+// Smooth closed centreline through the waypoints, resampled every PATH_STEP units.
+// Each sample has its position, distance along the course (s), heading and left-hand normal.
+export function buildPath(waypoints) {
+  const n = waypoints.length;
+  const SUB = 48;
+  const dense = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = waypoints[(i - 1 + n) % n];
+    const p1 = waypoints[i];
+    const p2 = waypoints[(i + 1) % n];
+    const p3 = waypoints[(i + 2) % n];
+    for (let k = 0; k < SUB; k++) dense.push(catmullRom(p0, p1, p2, p3, k / SUB));
+  }
+
+  const cum = [0];
+  for (let i = 1; i <= dense.length; i++) {
+    const a = dense[i - 1];
+    const b = dense[i % dense.length];
+    cum.push(cum[i - 1] + Math.hypot(b.x - a.x, b.y - a.y));
+  }
+  const length = cum[dense.length];
+  const count = Math.round(length / PATH_STEP);
+  const step = length / count;
+
+  const pts = [];
+  let j = 0;
+  for (let i = 0; i < count; i++) {
+    const s = i * step;
+    while (cum[j + 1] < s) j++;
+    const a = dense[j];
+    const b = dense[(j + 1) % dense.length];
+    const f = (s - cum[j]) / (cum[j + 1] - cum[j] || 1);
+    pts.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, s });
+  }
+  for (let i = 0; i < count; i++) {
+    const prev = pts[(i - 1 + count) % count];
+    const next = pts[(i + 1) % count];
+    const angle = Math.atan2(next.y - prev.y, next.x - prev.x);
+    pts[i].angle = angle;
+    pts[i].nx = Math.cos(angle + Math.PI / 2);
+    pts[i].ny = Math.sin(angle + Math.PI / 2);
+  }
+  return { points: pts, length, step };
+}
+
+// The centreline sample at distance s along the course (wraps around the loop)
+export function pathAt(path, s) {
+  const n = path.points.length;
+  const i = ((Math.round(s / path.step) % n) + n) % n;
+  return path.points[i];
+}
+
+// Index of the centreline sample nearest (x, y). With a hint, only searches nearby samples.
+export function nearestPathIndex(path, x, y, hint = -1, window = 40) {
+  const pts = path.points;
+  const n = pts.length;
+  let best = 0;
+  let bestD = Infinity;
+  const from = hint < 0 ? 0 : hint - window;
+  const to = hint < 0 ? n - 1 : hint + window;
+  for (let k = from; k <= to; k++) {
+    const i = ((k % n) + n) % n;
+    const d = (pts[i].x - x) ** 2 + (pts[i].y - y) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// Shortest distance from (x, y) to the centreline
+export function distanceToPath(path, x, y) {
+  let best = Infinity;
+  for (const p of path.points) {
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+    if (d < best) best = d;
+  }
+  return Math.sqrt(best);
+}
+
 export function buildTrack(trackId, obstacleDensity = 'mayhem', seed = 42) {
   const base = TRACKS[trackId] || TRACKS.coral_atoll;
   const rng = makeRng(seed);
+  const path = buildPath(base.waypoints);
 
-  // Compute smooth track spline segments & checkpoints
+  // Checkpoints sit on the waypoints (the smooth path passes through every one)
   const waypoints = base.waypoints;
   const numWaypoints = waypoints.length;
   const checkpoints = [];
@@ -156,234 +260,170 @@ export function buildTrack(trackId, obstacleDensity = 'mayhem', seed = 42) {
     totalLength += dist;
   }
 
-  // Precompute normalized progress for checkpoints
   checkpoints.forEach(cp => {
     cp.progress = cp.cumDist / totalLength;
   });
 
-  // Calculate start line
-  const startCp = checkpoints[0];
+  const start = path.points[0];
   const startLine = {
-    x: startCp.x,
-    y: startCp.y,
-    angle: startCp.angle,
-    nx: startCp.nx,
-    ny: startCp.ny,
+    x: start.x,
+    y: start.y,
+    angle: start.angle,
+    nx: start.nx,
+    ny: start.ny,
     width: base.trackWidth,
   };
 
-  // Generate starting grid positions for 8 boats
+  // Starting grid for 8 boats: two abreast, in rows behind the start line, following the course
   const starterGrid = [];
-  const gridSpacing = 80;
-  const sideOffset = 50;
-
   for (let i = 0; i < 8; i++) {
     const row = Math.floor(i / 2);
     const side = (i % 2 === 0) ? -1 : 1;
-    // Behind start line along reverse direction
-    const backX = -Math.cos(startCp.angle) * (row * gridSpacing + 50);
-    const backY = -Math.sin(startCp.angle) * (row * gridSpacing + 50);
-    const lateralX = startCp.nx * (side * sideOffset);
-    const lateralY = startCp.ny * (side * sideOffset);
-
+    const p = pathAt(path, -(row * 80 + 60));
     starterGrid.push({
-      x: startCp.x + backX + lateralX,
-      y: startCp.y + backY + lateralY,
-      angle: startCp.angle,
+      x: p.x + p.nx * side * 70,
+      y: p.y + p.ny * side * 70,
+      angle: p.angle,
     });
   }
 
-  // Generate obstacles based on density
-  const obstacles = generateObstacles(base, checkpoints, obstacleDensity, rng);
+  const obstacles = generateObstacles(base, path, obstacleDensity, rng);
 
   return {
     ...base,
     checkpoints,
     totalLength,
+    path,
     startLine,
     starterGrid,
     obstacles,
   };
 }
 
-function generateObstacles(track, checkpoints, density, rng) {
+// How many hazards each density puts in the channel. Hazards are spaced along the course so
+// there is never more than one across the channel at any point: always a way through.
+const DENSITY = {
+  standard: { spacing: 360, mineChance: 0.25 },
+  high: { spacing: 240, mineChance: 0.32 },
+  mayhem: { spacing: 150, mineChance: 0.4 },
+};
+
+function generateObstacles(track, path, density, rng) {
   const obstacles = [];
-  const numCp = checkpoints.length;
-
-  // Multiplier for density:
-  // standard: 1x, high: 2x, mayhem: 3.5x
-  let multiplier = 3.5; // default mayhem
-  if (density === 'standard') multiplier = 1.0;
-  else if (density === 'high') multiplier = 2.0;
-  else if (density === 'mayhem') multiplier = 3.5;
-
+  const halfWidth = track.trackWidth / 2;
+  const length = path.length;
+  const cfg = DENSITY[density] || DENSITY.mayhem;
+  const rockColor = track.theme === 'tropical' ? '#4a5759' : (track.theme === 'canyon' ? '#582f0e' : '#22223b');
   let obsIdCounter = 1;
+  const at = (s, offset) => {
+    const p = pathAt(path, s);
+    return { x: p.x + p.nx * offset, y: p.y + p.ny * offset, angle: p.angle, p };
+  };
 
-  for (let i = 0; i < numCp; i++) {
-    const cp = checkpoints[i];
-    const segLen = cp.dist;
-    const forwardX = Math.cos(cp.angle);
-    const forwardY = Math.sin(cp.angle);
-    const halfWidth = cp.width / 2;
-
-    // 1. Boundary Reefs & Cliffs (Outer Rocks)
-    const rockSteps = Math.max(3, Math.floor((segLen / 120) * (multiplier >= 2 ? 1.5 : 1.0)));
-    for (let s = 0; s < rockSteps; s++) {
-      const t = (s + 0.5) / rockSteps;
-      const midX = cp.x + forwardX * (segLen * t);
-      const midY = cp.y + forwardY * (segLen * t);
-
-      // Left boundary rock cluster
-      const leftDist = halfWidth + 40 + rng() * 60;
-      obstacles.push(new Obstacle({
-        id: `rock_l_${obsIdCounter++}`,
-        type: 'rock',
-        x: midX - cp.nx * leftDist,
-        y: midY - cp.ny * leftDist,
-        radius: 35 + rng() * 25,
-        color: track.theme === 'tropical' ? '#4a5759' : (track.theme === 'canyon' ? '#582f0e' : '#22223b'),
-      }));
-
-      // Right boundary rock cluster
-      const rightDist = halfWidth + 40 + rng() * 60;
-      obstacles.push(new Obstacle({
-        id: `rock_r_${obsIdCounter++}`,
-        type: 'rock',
-        x: midX + cp.nx * rightDist,
-        y: midY + cp.ny * rightDist,
-        radius: 35 + rng() * 25,
-        color: track.theme === 'tropical' ? '#4a5759' : (track.theme === 'canyon' ? '#582f0e' : '#22223b'),
-      }));
-    }
-
-    // 2. Navigation Channel Buoys (slalom and gate markers)
-    if (i % 2 === 0 || multiplier >= 2) {
-      const buoyDist = halfWidth - 25;
-      obstacles.push(new Obstacle({
-        id: `buoy_r_${obsIdCounter++}`,
-        type: 'buoy',
-        subType: 'red',
-        x: cp.x + cp.nx * buoyDist,
-        y: cp.y + cp.ny * buoyDist,
-        radius: 16,
-      }));
-      obstacles.push(new Obstacle({
-        id: `buoy_g_${obsIdCounter++}`,
-        type: 'buoy',
-        subType: 'green',
-        x: cp.x - cp.nx * buoyDist,
-        y: cp.y - cp.ny * buoyDist,
-        radius: 16,
-      }));
-    }
-
-    // 3. Jump Ramps and Speed Boost Pads
-    if (i % 3 === 1) {
-      const rampT = 0.4 + rng() * 0.3;
-      const rampOffset = (rng() - 0.5) * (halfWidth * 0.7);
-      obstacles.push(new Obstacle({
-        id: `ramp_${obsIdCounter++}`,
-        type: 'ramp',
-        x: cp.x + forwardX * (segLen * rampT) + cp.nx * rampOffset,
-        y: cp.y + forwardY * (segLen * rampT) + cp.ny * rampOffset,
-        angle: cp.angle,
-        width: 50,
-        height: 65,
-      }));
-    }
-
-    if (i % 3 === 2) {
-      const padT = 0.5 + rng() * 0.2;
-      const padOffset = (rng() - 0.5) * (halfWidth * 0.6);
-      obstacles.push(new Obstacle({
-        id: `boost_${obsIdCounter++}`,
-        type: 'boost_pad',
-        x: cp.x + forwardX * (segLen * padT) + cp.nx * padOffset,
-        y: cp.y + forwardY * (segLen * padT) + cp.ny * padOffset,
-        angle: cp.angle,
-        width: 44,
-        height: 56,
-      }));
-    }
-
-    // 4. In-Channel Obstacles: Mines, Whirlpools, Crates, Logs, Oil Slicks
-    // Number of in-channel obstacles scaled by density
-    const numHazards = Math.round((multiplier * 1.5) + rng());
-
-    for (let h = 0; h < numHazards; h++) {
-      // Avoid placing hazards right on the start grid segment (i === 0)
-      if (i === 0 && h < 2) continue;
-
-      const t = (h + 1) / (numHazards + 1);
-      const laneOffset = (rng() * 2 - 1) * (halfWidth * 0.75);
-      const posX = cp.x + forwardX * (segLen * t) + cp.nx * laneOffset;
-      const posY = cp.y + forwardY * (segLen * t) + cp.ny * laneOffset;
-
-      const roll = rng();
-
-      if (track.theme === 'maelstrom' && roll < 0.25) {
-        // Whirlpool
-        obstacles.push(new Obstacle({
-          id: `whirlpool_${obsIdCounter++}`,
-          type: 'whirlpool',
-          x: posX,
-          y: posY,
-          radius: 65,
-          pullRadius: 180,
-          pullStrength: 320,
-        }));
-      } else if (roll < (multiplier >= 3 ? 0.45 : 0.25)) {
-        // Floating Naval Mine
-        obstacles.push(new Obstacle({
-          id: `mine_${obsIdCounter++}`,
-          type: 'mine',
-          x: posX,
-          y: posY,
-          radius: 20,
-        }));
-      } else if (roll < 0.65) {
-        // Floating Wooden Crate
-        obstacles.push(new Obstacle({
-          id: `crate_${obsIdCounter++}`,
-          type: 'crate',
-          x: posX,
-          y: posY,
-          radius: 18,
-        }));
-      } else if (roll < 0.82) {
-        // Drifting Timber Log
-        obstacles.push(new Obstacle({
-          id: `log_${obsIdCounter++}`,
-          type: 'log',
-          x: posX,
-          y: posY,
-          length: 50 + rng() * 30,
-          rotation: rng() * Math.PI,
-        }));
-      } else {
-        // Oil Slick / Algae Slick
-        obstacles.push(new Obstacle({
-          id: `oil_${obsIdCounter++}`,
-          type: 'oil_slick',
-          x: posX,
-          y: posY,
-          radius: 50 + rng() * 35,
-        }));
+  // 1. Shoreline rocks along both edges, spaced along the shore itself so neighbours overlap
+  //    into an unbroken wall (no gaps to slip through on the outside of a bend). A rock is
+  //    dropped if any part of it would reach into the channel anywhere on the course.
+  //    A second lap round the course fills any space left (such as where the loop closes).
+  for (const side of [-1, 1]) {
+    const shore = [];
+    let radius = 30 + rng() * 26;
+    let offset = halfWidth + radius + 14 + rng() * 20;
+    for (let pass = 0; pass < 2; pass++) {
+      for (const p of path.points) {
+        if (pass === 1) {
+          // Filler: as big a rock as fits the space left (if that is big enough to matter)
+          offset = halfWidth + 44;
+          const fx = p.x + p.nx * side * offset;
+          const fy = p.y + p.ny * side * offset;
+          radius = Math.min(56, offset - halfWidth - 14, ...shore.map(r => Math.hypot(r.x - fx, r.y - fy) / 0.75 - r.radius));
+          if (radius < 14) continue;
+        }
+        const x = p.x + p.nx * side * offset;
+        const y = p.y + p.ny * side * offset;
+        if (shore.some(r => Math.hypot(r.x - x, r.y - y) < (r.radius + radius) * 0.75)) continue;
+        if (distanceToPath(path, x, y) < halfWidth + radius + 10) continue;
+        const rock = new Obstacle({
+          id: `rock_${side < 0 ? 'r' : 'l'}_${obsIdCounter++}`,
+          type: 'rock',
+          x,
+          y,
+          radius,
+          color: rockColor,
+        });
+        obstacles.push(rock);
+        shore.push(rock);
+        radius = 30 + rng() * 26;
+        offset = halfWidth + radius + 14 + rng() * 20;
       }
     }
+  }
 
-    // 5. Special Hazards: Patrolling Sea Monsters / Tentacles on Maelstrom & Skull Canyon
-    if ((track.theme === 'maelstrom' || track.theme === 'canyon') && i % 4 === 1) {
+  // 2. Channel marker buoys just inside the edges at every waypoint (red on the right, green on the left)
+  for (const wp of track.waypoints) {
+    const i = nearestPathIndex(path, wp.x, wp.y);
+    const p = path.points[i];
+    const d = halfWidth - 18;
+    obstacles.push(new Obstacle({ id: `buoy_r_${obsIdCounter++}`, type: 'buoy', subType: 'red', x: p.x - p.nx * d, y: p.y - p.ny * d, radius: 16 }));
+    obstacles.push(new Obstacle({ id: `buoy_g_${obsIdCounter++}`, type: 'buoy', subType: 'green', x: p.x + p.nx * d, y: p.y + p.ny * d, radius: 16 }));
+  }
+
+  // 3. Jump ramps, boost pads and (canyon / maelstrom) kraken tentacles at fixed intervals
+  const features = [];
+  for (let s = 900; s < length - 600; s += 1500) {
+    const pos = at(s, (rng() - 0.5) * halfWidth * 0.8);
+    obstacles.push(new Obstacle({ id: `ramp_${obsIdCounter++}`, type: 'ramp', x: pos.x, y: pos.y, angle: pos.angle, width: 50, height: 65 }));
+    features.push(s);
+  }
+  for (let s = 1650; s < length - 600; s += 1500) {
+    const pos = at(s, (rng() - 0.5) * halfWidth * 0.8);
+    obstacles.push(new Obstacle({ id: `boost_${obsIdCounter++}`, type: 'boost_pad', x: pos.x, y: pos.y, angle: pos.angle, width: 44, height: 56 }));
+    features.push(s);
+  }
+  if (track.theme === 'maelstrom' || track.theme === 'canyon') {
+    for (let s = 1250; s < length - 600; s += 1800) {
+      const pos = at(s, 0);
       obstacles.push(new Obstacle({
         id: `tentacle_${obsIdCounter++}`,
         type: 'tentacle',
-        x: cp.x + forwardX * (segLen * 0.5),
-        y: cp.y + forwardY * (segLen * 0.5),
-        patrolAngle: cp.angle + Math.PI / 2,
-        patrolDist: halfWidth * 0.7,
-        patrolSpeed: 1.5,
+        x: pos.x,
+        y: pos.y,
+        patrolAngle: pos.angle + Math.PI / 2,
+        patrolDist: halfWidth * 0.6,
+        patrolSpeed: 1.3,
         radius: 28,
       }));
+      features.push(s);
+    }
+  }
+
+  // 4. Hazards in the channel: mines, crates, logs, oil slicks and (maelstrom) whirlpools.
+  //    The start and the starting grid are kept clear.
+  for (let s = 550; s < length - 500; s += cfg.spacing * (0.8 + rng() * 0.4)) {
+    if (features.some(f => Math.abs(f - s) < 150)) continue;
+    const roll = rng();
+
+    if (track.theme === 'maelstrom' && roll < 0.2) {
+      const pos = at(s, (rng() * 2 - 1) * (halfWidth - 150));
+      obstacles.push(new Obstacle({ id: `whirlpool_${obsIdCounter++}`, type: 'whirlpool', x: pos.x, y: pos.y, radius: 65, pullRadius: 170, pullStrength: 300 }));
+      continue;
+    }
+
+    const pos = at(s, (rng() * 2 - 1) * (halfWidth - 55));
+    if (roll < cfg.mineChance) {
+      obstacles.push(new Obstacle({ id: `mine_${obsIdCounter++}`, type: 'mine', x: pos.x, y: pos.y, radius: 20 }));
+    } else if (roll < 0.66) {
+      obstacles.push(new Obstacle({ id: `crate_${obsIdCounter++}`, type: 'crate', x: pos.x, y: pos.y, radius: 18 }));
+    } else if (roll < 0.83) {
+      obstacles.push(new Obstacle({
+        id: `log_${obsIdCounter++}`,
+        type: 'log',
+        x: pos.x,
+        y: pos.y,
+        length: 50 + rng() * 30,
+        rotation: pos.angle + (rng() - 0.5) * 1.2,
+      }));
+    } else {
+      obstacles.push(new Obstacle({ id: `oil_${obsIdCounter++}`, type: 'oil_slick', x: pos.x, y: pos.y, radius: 50 + rng() * 30 }));
     }
   }
 

@@ -226,12 +226,12 @@ export class Game {
       }
 
       // Check Obstacle Collisions
-      this.handleObstacleCollisions(this.localBoat.physics);
+      this.handleObstacleCollisions(this.localBoat.physics, 'local', dt);
 
       // Update AI bots
       this.botRacers.forEach(bot => {
         bot.update(dt, this.track.obstacles);
-        this.handleObstacleCollisions(bot.physics, bot.id);
+        this.handleObstacleCollisions(bot.physics, bot.id, dt);
         this.renderer.addWakePoint(
           bot.physics.x,
           bot.physics.y,
@@ -279,7 +279,7 @@ export class Game {
     this.renderer.renderMinimap(this.ui.minimapCanvas, this.track, allBoats, this.localBoat.id);
   }
 
-  handleObstacleCollisions(p, entityId = 'local') {
+  handleObstacleCollisions(p, entityId = 'local', dt = 1 / 60) {
     if (!this.track || !this.track.obstacles) return;
 
     for (const obs of this.track.obstacles) {
@@ -289,8 +289,9 @@ export class Game {
       const dy = p.y - obs.y;
       const dist = Math.hypot(dx, dy);
 
-      // If boat is flying in the air (z > 12), it flies right over surface obstacles!
-      if (p.isAirborne && p.z > 14 && obs.type !== 'tentacle') {
+      // A boat high enough off a ramp jump flies right over surface obstacles!
+      // (a ramp launch peaks around z = 11). Shoreline rocks and tentacles are too tall to clear.
+      if (p.isAirborne && p.z > 6 && obs.type !== 'tentacle' && obs.type !== 'rock') {
         continue;
       }
 
@@ -322,15 +323,21 @@ export class Game {
         case 'buoy': {
           const minDist = obs.radius + p.specs.hullWidth / 2;
           if (dist < minDist) {
-            const nx = dx / dist;
-            const ny = dy / dist;
-            obs.vx -= nx * 140;
-            obs.vy -= ny * 140;
-            p.vx += nx * 60;
-            p.vy += ny * 60;
-            if (entityId === 'local') {
-              sounds.playBump();
-              this.renderer.createSplash(obs.x, obs.y, 8, 80);
+            // Separate, then bounce once (only while still moving into the buoy)
+            const nx = dx / (dist || 1);
+            const ny = dy / (dist || 1);
+            p.x = obs.x + nx * minDist;
+            p.y = obs.y + ny * minDist;
+            const dot = p.vx * nx + p.vy * ny;
+            if (dot < 0) {
+              obs.vx += dot * nx * 0.5;
+              obs.vy += dot * ny * 0.5;
+              p.vx -= 1.4 * dot * nx;
+              p.vy -= 1.4 * dot * ny;
+              if (entityId === 'local') {
+                sounds.playBump();
+                this.renderer.createSplash(obs.x, obs.y, 8, 80);
+              }
             }
           }
           break;
@@ -372,19 +379,53 @@ export class Game {
             // Gravitational suction toward vortex center
             const pullFactor = (1 - dist / obs.pullRadius);
             const suction = obs.pullStrength * pullFactor;
-            const nx = -dx / dist;
-            const ny = -dy / dist;
+            const nx = -dx / (dist || 1);
+            const ny = -dy / (dist || 1);
 
             // Lateral swirl vector
             const swirlX = -ny;
             const swirlY = nx;
 
-            p.vx += (nx * suction + swirlX * suction * 0.8) * 0.02;
-            p.vy += (ny * suction + swirlY * suction * 0.8) * 0.02;
+            // (tuned at 60 fps; scaled by dt so the pull is the same at any frame rate)
+            p.vx += (nx * suction + swirlX * suction * 0.8) * 1.2 * dt;
+            p.vy += (ny * suction + swirlY * suction * 0.8) * 1.2 * dt;
 
-            if (dist < obs.radius * 0.4) {
+            // Reaching the eye spins you out once, then the vortex flings you clear
+            // (otherwise the pull would hold a spun-out boat in the eye forever)
+            if (dist < obs.radius * 0.4 && p.spinOutTimer <= 0) {
               p.spinOutTimer = 0.8;
-              p.speed *= 0.6;
+              const ox = -nx;
+              const oy = -ny;
+              p.vx = (ox * 0.8 + swirlX * 0.6) * 300;
+              p.vy = (oy * 0.8 + swirlY * 0.6) * 300;
+            }
+          }
+          break;
+        }
+
+        case 'log': {
+          // Capsule along the log: shoves the boat aside and scrubs off some speed
+          const ax = Math.cos(obs.rotation);
+          const ay = Math.sin(obs.rotation);
+          const along = Math.max(-obs.length / 2, Math.min(obs.length / 2, dx * ax + dy * ay));
+          const ox = dx - ax * along;
+          const oy = dy - ay * along;
+          const od = Math.hypot(ox, oy) || 1;
+          const minDist = obs.width / 2 + p.specs.hullWidth / 2;
+          if (od < minDist) {
+            const nx = ox / od;
+            const ny = oy / od;
+            p.x += nx * (minDist - od);
+            p.y += ny * (minDist - od);
+            const dot = p.vx * nx + p.vy * ny;
+            if (dot < 0) {
+              p.vx = (p.vx - 1.3 * dot * nx) * 0.8;
+              p.vy = (p.vy - 1.3 * dot * ny) * 0.8;
+              if (entityId === 'local') {
+                sounds.playBump();
+                this.renderer.createSplash(p.x, p.y, 10, 90);
+                this.stats.obstaclesHit++;
+              }
             }
           }
           break;
@@ -433,9 +474,9 @@ export class Game {
         case 'tentacle': {
           const minDist = obs.radius + p.specs.hullWidth / 2;
           if (dist < minDist) {
-            p.vx += (dx / dist) * 450;
-            p.vy += (dy / dist) * 450;
-            p.spinOutTimer = 0.6;
+            p.vx += (dx / dist) * 280;
+            p.vy += (dy / dist) * 280;
+            p.spinOutTimer = 0.5;
             sounds.playRockHit();
             this.renderer.createSplash(p.x, p.y, 20, 140);
           }

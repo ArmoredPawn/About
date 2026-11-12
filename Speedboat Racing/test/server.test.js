@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack, TRACKS } from '../public/js/tracks.js';
+import { buildTrack, TRACKS, distanceToPath, nearestPathIndex } from '../public/js/tracks.js';
 import { BoatPhysics, BOAT_MODELS } from '../public/js/physics.js';
 import { createBots } from '../public/js/ai.js';
 import { Obstacle } from '../public/js/obstacles.js';
@@ -119,5 +119,97 @@ test('AI Bot Racers & Single Player Flow', async (t) => {
 
     assert.ok(bot.physics.speed > 100, 'Bot should accelerate');
     assert.ok(bot.physics.progress > 0, 'Bot should make race progress');
+  });
+});
+
+test('Course layout: easy to read, hard but never impossible', async (t) => {
+  const trackIds = Object.keys(TRACKS);
+
+  await t.test('No rock reaches into the channel anywhere on any course', () => {
+    for (const id of trackIds) {
+      const track = buildTrack(id, 'mayhem', 7);
+      const half = track.trackWidth / 2;
+      for (const o of track.obstacles.filter(o => o.type === 'rock')) {
+        const d = distanceToPath(track.path, o.x, o.y) - o.radius;
+        assert.ok(d >= half, `${id}: ${o.id} sticks ${Math.round(half - d)} units into the channel`);
+      }
+    }
+  });
+
+  await t.test('The shoreline has no boat-sized gaps', () => {
+    for (const id of trackIds) {
+      const track = buildTrack(id, 'standard', 21);
+      const rocks = track.obstacles.filter(o => o.type === 'rock');
+      const half = track.trackWidth / 2;
+      for (const a of track.path.points) {
+        const near = rocks.filter(r => Math.hypot(r.x - a.x, r.y - a.y) < half + 230);
+        for (const side of [-1, 1]) for (const tilt of [-0.5, 0, 0.5]) {
+          const ang = Math.atan2(a.ny * side, a.nx * side) + tilt;
+          const dx = Math.cos(ang);
+          const dy = Math.sin(ang);
+          const end = { x: a.x + dx * (half + 160), y: a.y + dy * (half + 160) };
+          if (distanceToPath(track.path, end.x, end.y) < half + 130) continue; // ray curls back along the course
+          let blocked = false;
+          for (let d = half + 10; d < half + 160 && !blocked; d += 3) {
+            const x = a.x + dx * d;
+            const y = a.y + dy * d;
+            blocked = near.some(r => Math.hypot(r.x - x, r.y - y) < r.radius + 11);
+          }
+          assert.ok(blocked, `${id}: a boat could slip out of the channel near (${Math.round(a.x)}, ${Math.round(a.y)})`);
+        }
+      }
+    }
+  });
+
+  await t.test('Bends are smooth enough to take at speed', () => {
+    for (const id of trackIds) {
+      const path = buildTrack(id, 'standard', 1).path;
+      const pts = path.points;
+      const n = pts.length;
+      for (let i = 0; i < n; i++) {
+        let d = pts[(i + 3) % n].angle - pts[(i - 3 + n) % n].angle;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        const radius = (6 * path.step) / Math.abs(d || 1e-9);
+        assert.ok(radius > 300, `${id}: bend of radius ${Math.round(radius)} near (${Math.round(pts[i].x)}, ${Math.round(pts[i].y)})`);
+      }
+    }
+  });
+
+  await t.test('Hazards are never side by side: there is always a way through', () => {
+    for (const id of trackIds) {
+      const track = buildTrack(id, 'mayhem', 3);
+      const hazards = track.obstacles
+        .filter(o => ['mine', 'crate', 'log', 'oil_slick', 'whirlpool'].includes(o.type))
+        .map(o => nearestPathIndex(track.path, o.x, o.y) * track.path.step)
+        .sort((a, b) => a - b);
+      for (let i = 1; i < hazards.length; i++) {
+        assert.ok(hazards[i] - hazards[i - 1] > 90, `${id}: two hazards across the channel at s=${Math.round(hazards[i])}`);
+      }
+    }
+  });
+
+  await t.test('Bots finish a lap of every course on MAYHEM with full collisions', () => {
+    globalThis.window ??= { addEventListener() {} };
+    return import('../public/js/game.js').then(({ Game }) => {
+      const noop = () => {};
+      const stub = new Proxy({}, { get: () => noop });
+      const game = new Game(stub, stub, {});
+      for (const id of trackIds) {
+        const track = buildTrack(id, 'mayhem', 2026);
+        game.track = track;
+        const bots = createBots(4, track, 0);
+        const dt = 1 / 60;
+        for (let f = 0; f < 60 * 120 && bots.some(b => b.physics.lap < 2); f++) {
+          track.obstacles.forEach(o => o.update(dt));
+          for (const b of bots) {
+            if (b.physics.lap >= 2) continue;
+            b.update(dt, track.obstacles);
+            game.handleObstacleCollisions(b.physics, b.id, dt);
+          }
+        }
+        bots.forEach(b => assert.ok(b.physics.lap >= 2, `${id}: ${b.name} did not finish a lap in 2 minutes`));
+      }
+    });
   });
 });

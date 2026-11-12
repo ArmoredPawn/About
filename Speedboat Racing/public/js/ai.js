@@ -1,5 +1,6 @@
 // AI Bot Racers for Hydro Rush
 import { BoatPhysics } from './physics.js';
+import { nearestPathIndex } from './tracks.js';
 
 const BOT_NAMES = [
   'Aqua Viper',
@@ -40,21 +41,31 @@ export class BotRacer {
     this.lookaheadDist = 260 + Math.random() * 80;
     this.aggressiveness = 0.7 + Math.random() * 0.5;
     this.targetOffset = (Math.random() - 0.5) * 80; // Prefers slightly left or right of center
+    this.pathIndex = -1;
+    this.stuckTimer = 0;
+    this.reverseTimer = 0;
     this.boostCooldown = 4 + Math.random() * 6;
   }
 
   update(dt, obstacles) {
     if (!this.track) return;
     const checkpoints = this.track.checkpoints;
-    const numCp = checkpoints.length;
 
-    // Target waypoint
-    const targetCp = checkpoints[this.physics.currentCp];
-    const nextCp = checkpoints[(this.physics.currentCp + 1) % numCp];
-
-    // Compute desired steering target point
-    let targetX = targetCp.x + targetCp.nx * this.targetOffset;
-    let targetY = targetCp.y + targetCp.ny * this.targetOffset;
+    // Steer for a point on the course centreline a little ahead (falls back to the next waypoint)
+    let targetX;
+    let targetY;
+    const path = this.track.path;
+    if (path) {
+      this.pathIndex = nearestPathIndex(path, this.physics.x, this.physics.y, this.pathIndex);
+      const ahead = Math.round((140 + this.physics.speed * 0.35) / path.step);
+      const tp = path.points[(this.pathIndex + ahead) % path.points.length];
+      targetX = tp.x + tp.nx * this.targetOffset;
+      targetY = tp.y + tp.ny * this.targetOffset;
+    } else {
+      const targetCp = checkpoints[this.physics.currentCp];
+      targetX = targetCp.x + targetCp.nx * this.targetOffset;
+      targetY = targetCp.y + targetCp.ny * this.targetOffset;
+    }
 
     // --- OBSTACLE AVOIDANCE RAYCAST ---
     let avoidSteer = 0;
@@ -110,6 +121,22 @@ export class BotRacer {
     if (this.boostCooldown <= 0 && Math.abs(angleDiff) < 0.3 && this.physics.speed > 350) {
       boostRequest = true;
       this.boostCooldown = 8 + Math.random() * 8;
+    }
+
+    // Wedged against rocks: back off for a moment, turning away, then carry on
+    if (this.reverseTimer > 0) {
+      this.reverseTimer -= dt;
+      throttle = -1;
+      steer = angleDiff > 0 ? -1 : 1;
+      boostRequest = false;
+    } else if (this.physics.speed < 40 && this.physics.spinOutTimer <= 0) {
+      this.stuckTimer += dt;
+      if (this.stuckTimer > 1.2) {
+        this.stuckTimer = 0;
+        this.reverseTimer = 1.0;
+      }
+    } else {
+      this.stuckTimer = 0;
     }
 
     this.physics.applyInput(throttle, steer, boostRequest, dt);
