@@ -38,8 +38,49 @@ export function parsePrompt(raw, where = 'content') {
   return prompt;
 }
 
+// Words players write more than one way. Each group's words are swapped for one another,
+// so "Mt. Everest", "St Louis", "Rocky 2" and "Ocean's 11" find "Mount Everest", "Saint Louis",
+// "Rocky II" and "Ocean's Eleven".
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+const ROMAN = ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x', 'xi', 'xii', 'xiii', 'xiv', 'xv',
+  'xvi', 'xvii', 'xviii', 'xix', 'xx'];
+const ORDINAL_WORDS = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+const ORDINAL_SHORT = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th'];
+const WORD_GROUPS = [
+  ['saint', 'st'], ['mount', 'mt'], ['fort', 'ft'], ['doctor', 'dr'], ['mister', 'mr'], ['missus', 'mrs'],
+  ['junior', 'jr'], ['senior', 'sr'], ['and', 'n'], ['versus', 'vs', 'v'], ['mountain', 'mtn'],
+  ...NUMBER_WORDS.map((w, n) => (n ? [String(n), w, ROMAN[n]] : [String(n), w])),
+  ...ORDINAL_WORDS.slice(1).map((w, n) => [w, ORDINAL_SHORT[n + 1]]),
+];
+const SWAPS = new Map();
+for (const group of WORD_GROUPS) {
+  for (const word of group) SWAPS.set(word, [...(SWAPS.get(word) ?? []), ...group.filter((w) => w !== word)]);
+}
+const MAX_VARIANTS = 12;
+
+// Other ways of writing a form, made by swapping words in WORD_GROUPS (at most MAX_VARIANTS)
+export function variants(form) {
+  const words = String(form).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+    .replace(/&/g, ' and ').replace(/['’‘`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+  // "I" and "V" stand alone as words too often ("I Love Lucy", "V for Vendetta") to read as numbers
+  const options = words.map((w, i) => {
+    if ((w === 'i' || w === 'v') && words.length > 1 && i < words.length - 1) return [w];
+    return [w, ...(SWAPS.get(w) ?? [])];
+  });
+  if (options.every((o) => o.length === 1)) return [];
+  let out = [[]];
+  for (const opts of options) {
+    out = out.flatMap((prefix) => opts.map((w) => [...prefix, w]));
+    if (out.length > MAX_VARIANTS * 4) out = out.slice(0, MAX_VARIANTS * 4);
+  }
+  return out.slice(1).map((ws) => ws.join(' ')).slice(0, MAX_VARIANTS);
+}
+
 // Comparable key -> { name, tier }. Two different answers may not share a key.
-export function keyMap(prompt, fail = (msg) => { throw new Error(`${prompt.id}: ${msg}`); }) {
+// Forms written in the file come first; their word-swapped variants (see variants()) fill in keys
+// nobody else uses, and a variant two answers would share is left out.
+export function keyMap(prompt, fail = (msg) => { throw new Error(`${prompt.id}: ${msg}`); }, { withVariants = true } = {}) {
   const map = new Map();
   for (const answer of prompt.answers) {
     for (const form of [answer.name, ...answer.aliases]) {
@@ -50,13 +91,32 @@ export function keyMap(prompt, fail = (msg) => { throw new Error(`${prompt.id}: 
       map.set(key, answer);
     }
   }
+  if (!withVariants) return map;
+  const extra = new Map();
+  const clash = new Set();
+  for (const answer of prompt.answers) {
+    for (const form of [answer.name, ...answer.aliases]) {
+      for (const v of variants(form)) {
+        const key = normalize(v);
+        if (!key || map.has(key) || clash.has(key)) continue;
+        const prev = extra.get(key);
+        if (prev && prev !== answer) {
+          extra.delete(key);
+          clash.add(key);
+        } else {
+          extra.set(key, answer);
+        }
+      }
+    }
+  }
+  for (const [key, answer] of extra) map.set(key, answer);
   return map;
 }
 
 // Pairs of answers that differ only by a plural ending, like "Cherry" and "Cherries" (usually the same
 // answer listed twice) or "Xbox One" and "Xbox One S" (fine). The seed script lists them as warnings.
 export function pluralTwins(prompt) {
-  const map = keyMap(prompt);
+  const map = keyMap(prompt, undefined, { withVariants: false });
   const pairs = [];
   for (const [key, answer] of map) {
     for (const k of lookupKeys(key).slice(1)) {

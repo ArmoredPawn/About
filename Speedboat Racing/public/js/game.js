@@ -73,6 +73,10 @@ export class Game {
 
     // Build course with obstacles
     this.track = buildTrack(trackId, obstacleDensity, seed);
+    // Visualize track line in renderer
+    if (this.renderer && typeof this.renderer.setTrack === 'function') {
+      this.renderer.setTrack(this.track);
+    }
 
     // Setup local boat and remote boats
     this.remoteBoats.clear();

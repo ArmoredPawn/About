@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalize, lookupKeys, hashKey, dayStartMs, todayKey, addDays, dayOf } from '../public/js/shared.js';
-import { parsePrompt, parseAll, publicPrompt, keyMap, pluralTwins } from '../lib/prompts.js';
+import { parsePrompt, parseAll, publicPrompt, keyMap, pluralTwins, variants } from '../lib/prompts.js';
 import { planSchedule, pastDailyIds } from '../lib/schedule.js';
 
 test('normalize ignores case, accents, punctuation, spaces and articles', () => {
@@ -91,7 +91,8 @@ test('parsePrompt rejects bad content with a useful message', () => {
 test('publicPrompt scrambles every form and keeps the top picks for the reveal', async () => {
   const p = parsePrompt(raw());
   const pub = await publicPrompt(p);
-  assert.equal(Object.keys(pub.keys).length, 11);
+  // 11 written forms plus "E I", a word-swapped variant of "E One"
+  assert.equal(Object.keys(pub.keys).length, 12);
   assert.equal(pub.keys[await hashKey(p.id, normalize('E One'))], 4);
   assert.deepEqual(pub.examples.map((e) => e.name), ['E1', 'D1', 'C1']);
   assert.ok(!JSON.stringify(pub.keys).includes('A1'));
@@ -128,4 +129,21 @@ test('planSchedule picks up again today after the schedule ran out', () => {
   const first = planSchedule({ dailyIds: ids(5), today: '2026-10-01', perDay: 5 }).schedule;
   const { schedule } = planSchedule({ schedule: first, dailyIds: ids(10), today: '2026-10-30', perDay: 5 });
   assert.deepEqual(Object.keys(schedule), ['2026-10-01', '2026-10-30']);
+});
+
+test('variants swap words players write more than one way', () => {
+  assert.ok(variants('Mount St. Helens').includes('mt st helens'));
+  assert.ok(variants('Rocky II').includes('rocky 2'));
+  assert.ok(variants("Ocean's Eleven").includes('oceans 11'));
+  assert.ok(variants('World War II').includes('world war two'));
+  assert.deepEqual(variants('I Love Lucy'), []);
+  assert.deepEqual(variants('Apple'), []);
+  const p = parsePrompt(raw({ answers: { common: ['Mount Hood', 'St. Louis', 'Rocky II', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'] } }));
+  const map = keyMap(p);
+  assert.equal(map.get(normalize('Mt Hood')).name, 'Mount Hood');
+  assert.equal(map.get(normalize('Saint Louis')).name, 'St. Louis');
+  assert.equal(map.get(normalize('Rocky 2')).name, 'Rocky II');
+  // a variant two answers would share belongs to neither
+  const both = parsePrompt(raw({ answers: { common: ['Mount St X', 'Mt Saint X', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'] } }));
+  assert.equal(keyMap(both).get('mountsaintx'), undefined);
 });

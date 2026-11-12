@@ -29,6 +29,8 @@ export class Renderer {
 
     // Ocean Mesh & Wave Simulation
     this.setupOcean();
+    // Initialize container for track visualization
+    this.trackLine = null;
 
     // Meshes cache
     this.boatMeshes = new Map(); // boatId -> THREE.Group
@@ -39,6 +41,9 @@ export class Renderer {
     // Screen Shake
     this.screenShake = 0;
 
+    // Track line placeholder (will be set when a track is loaded)
+    this.trackLine = null;
+
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyC') {
@@ -47,13 +52,21 @@ export class Renderer {
     });
   }
 
-  toggleCamera() {
-    this.cameraMode = this.cameraMode === 'cockpit' ? 'chase' : 'cockpit';
-    const btn = document.getElementById('btn-camera-toggle');
-    if (btn) {
-      btn.textContent = this.cameraMode === 'cockpit' ? '📹 View: Cockpit [C]' : '📹 View: Chase [C]';
+  setTrack(track) {
+    // Remove existing line if present
+    if (this.trackLine) {
+      this.scene.remove(this.trackLine);
+      this.trackLine.geometry.dispose();
+      this.trackLine.material.dispose();
+      this.trackLine = null;
     }
+    const points = track.waypoints.map(p => new THREE.Vector3(p.x, 0, p.y));
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ color: 0xffaa00, linewidth: 4 });
+    this.trackLine = new THREE.Line(geometry, material);
+    this.scene.add(this.trackLine);
   }
+
 
   resize() {
     const w = window.innerWidth;
