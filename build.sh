@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 
 rm -rf _site
-mkdir -p _site/games/countries-game _site/games/ww2-map _site/games/ear-trainer _site/games/outlier
+mkdir -p _site/games/countries-game _site/games/ww2-map _site/games/ear-trainer _site/games/outlier _site/games/speedboat-racing
 
 cp -R site/. _site/
 
@@ -21,5 +21,8 @@ cp -R "Countries Game/public/." _site/games/countries-game/
 
 # Deep Dive (folder Outlier/): only its front end (public/). The answer lists and the server stay out of the site.
 cp -R "Outlier/public/." _site/games/outlier/
+
+# Hydro Rush (Speedboat Racing): static front end (public/)
+cp -R "Speedboat Racing/public/." _site/games/speedboat-racing/
 
 echo "Built _site/"

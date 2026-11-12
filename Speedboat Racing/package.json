@@ -1,0 +1,19 @@
+{
+  "name": "speedboat-racing",
+  "version": "1.0.0",
+  "description": "Multiplayer speedboat racing game with rooms, intense water physics, and lots of obstacles.",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

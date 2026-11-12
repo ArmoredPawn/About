@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Hydro Rush — Multiplayer Speedboat Mayhem</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Fullscreen Game Canvas -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- App Interface Container -->
+  <div id="app">
+
+    <!-- 1. TITLE / SETUP SCREEN -->
+    <div id="screen-title" class="screen active">
+      <div class="title-container card-glass">
+        <header class="game-header">
+          <span class="game-badge">⚡ MULTIPLAYER SPEEDBOAT RACING</span>
+          <h1 class="game-title">HYDRO RUSH</h1>
+          <p class="game-subtitle">High-octane boat racing with hydrodynamics, jump ramps, and endless obstacles!</p>
+        </header>
+
+        <div class="customizer-layout">
+          <!-- Left: 3D-styled Boat Preview -->
+          <div class="boat-preview-box">
+            <canvas id="boat-canvas-preview" width="220" height="220"></canvas>
+            <div class="stat-bars" style="width: 100%;">
+              <div class="stat-row">
+                <span style="color: var(--text-muted);">Top Speed</span>
+                <div class="stat-bar-bg"><div id="stat-speed" class="stat-bar-fill" style="width: 80%;"></div></div>
+              </div>
+              <div class="stat-row">
+                <span style="color: var(--text-muted);">Acceleration</span>
+                <div class="stat-bar-bg"><div id="stat-accel" class="stat-bar-fill" style="width: 75%;"></div></div>
+              </div>
+              <div class="stat-row">
+                <span style="color: var(--text-muted);">Turning</span>
+                <div class="stat-bar-bg"><div id="stat-turn" class="stat-bar-fill" style="width: 70%;"></div></div>
+              </div>
+              <div class="stat-row">
+                <span style="color: var(--text-muted);">Hull Armor</span>
+                <div class="stat-bar-bg"><div id="stat-armor" class="stat-bar-fill" style="width: 65%;"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Racer Configuration -->
+          <div style="display: flex; flex-direction: column; gap: 18px;">
+            <div class="input-group">
+              <label class="input-label" for="player-name-input">Racer Name</label>
+              <input type="text" id="player-name-input" class="text-input" placeholder="Enter your name" maxlength="16" value="Captain Aqua">
+            </div>
+
+            <div class="input-group">
+              <label class="input-label">Hull Livery Color</label>
+              <div class="color-picker" id="color-swatches">
+                <button type="button" class="color-swatch active" data-color="#00f5d4" style="background: #00f5d4;"></button>
+                <button type="button" class="color-swatch" data-color="#ff0054" style="background: #ff0054;"></button>
+                <button type="button" class="color-swatch" data-color="#ffbe0b" style="background: #ffbe0b;"></button>
+                <button type="button" class="color-swatch" data-color="#00b4d8" style="background: #00b4d8;"></button>
+                <button type="button" class="color-swatch" data-color="#7209b7" style="background: #7209b7;"></button>
+                <button type="button" class="color-swatch" data-color="#38b000" style="background: #38b000;"></button>
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label class="input-label">Speedboat Class</label>
+              <div class="model-grid" id="model-grid">
+                <div class="model-card active" data-model="viper">
+                  <div class="model-name">Viper GT</div>
+                  <div class="model-desc">Balanced speed & handling</div>
+                </div>
+                <div class="model-card" data-model="mako">
+                  <div class="model-name">Mako Shark</div>
+                  <div class="model-desc">Insane top speed needle hull</div>
+                </div>
+                <div class="model-card" data-model="phantom">
+                  <div class="model-name">Hydro Phantom</div>
+                  <div class="model-desc">Twin-jet drift specialist</div>
+                </div>
+                <div class="model-card" data-model="titan">
+                  <div class="model-name">Titan Surge</div>
+                  <div class="model-desc">Heavy armored hull smasher</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Room & Game Action Buttons -->
+        <div class="action-row" style="align-items: center;">
+          <button id="btn-open-sp" class="btn btn-primary" style="font-size: 16px; padding: 14px 28px;">
+            <span>🏎️ Single Player</span>
+          </button>
+
+          <button id="btn-create-room" class="btn btn-secondary">
+            <span>🌐 Create Room</span>
+          </button>
+
+          <div class="join-box">
+            <input type="text" id="join-code-input" class="text-input join-input" placeholder="CODE" maxlength="6">
+            <button id="btn-join-room" class="btn btn-secondary">
+              <span>Join</span>
+            </button>
+          </div>
+
+          <button id="btn-how-to-play" class="btn btn-secondary" style="margin-left: auto;">
+            <span>❓ How to Play</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. ROOM LOBBY SCREEN -->
+    <div id="screen-lobby" class="screen">
+      <div class="lobby-container card-glass">
+        <header class="lobby-header">
+          <div>
+            <h2 style="font-size: 26px; font-weight: 800;">Race Lobby</h2>
+            <p style="color: var(--text-muted); font-size: 14px;">Share the code with friends to race together!</p>
+          </div>
+
+          <div class="room-code-badge">
+            <span class="code-label">Room Code:</span>
+            <span id="lobby-room-code" class="room-code-text">----</span>
+            <button id="btn-copy-code" class="btn-copy" title="Copy Room Code">
+              <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </button>
+            <button id="btn-copy-link" class="btn-copy" title="Copy Invite Link">
+              <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Host Race Settings Bar -->
+        <div id="host-settings-bar" class="host-settings-bar">
+          <div class="input-group">
+            <label class="input-label">Race Track</label>
+            <select id="select-track" class="select-input">
+              <option value="coral_atoll">🏝️ Emerald Atoll (Lagoon)</option>
+              <option value="skull_canyon">🏴‍☠️ Skull Rock Gorge (Canyon)</option>
+              <option value="neon_bay">🌃 Cyber Marina (Neon Bay)</option>
+              <option value="maelstrom_abyss">🌀 The Maelstrom Abyss (Mayhem)</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Obstacle Density</label>
+            <select id="select-density" class="select-input">
+              <option value="standard">Standard (Moderate)</option>
+              <option value="high">High (Challenging)</option>
+              <option value="mayhem" selected>🔥 MAYHEM! (Lots & Lots)</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Laps</label>
+            <select id="select-laps" class="select-input">
+              <option value="1">1 Lap Sprint</option>
+              <option value="2" selected>2 Laps</option>
+              <option value="3">3 Laps</option>
+              <option value="5">5 Laps Endurance</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">AI Racers (Bots)</label>
+            <select id="select-bots" class="select-input">
+              <option value="0">0 Bots (Humans Only)</option>
+              <option value="2">2 AI Bots</option>
+              <option value="4" selected>4 AI Bots</option>
+              <option value="6">6 AI Bots</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Connected Racers Grid -->
+        <div>
+          <div class="input-label" style="margin-bottom: 12px;">Connected Racers (<span id="player-count">1</span>/8)</div>
+          <div id="racers-grid" class="racers-grid">
+            <!-- Dynamic racer cards -->
+          </div>
+        </div>
+
+        <!-- Footer Actions -->
+        <footer class="lobby-footer">
+          <button id="btn-leave-lobby" class="btn btn-secondary">
+            <span>← Leave Room</span>
+          </button>
+
+          <div style="display: flex; gap: 12px;">
+            <button id="btn-ready-toggle" class="btn btn-secondary">
+              <span id="ready-status-text">Ready Up</span>
+            </button>
+            <button id="btn-start-race" class="btn btn-primary" style="font-size: 17px; padding: 14px 32px;">
+              <span>🏁 START RACE</span>
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <!-- 3. IN-GAME RACE HUD -->
+    <div id="screen-game" class="screen">
+      <div class="hud-overlay">
+        <!-- Top Bar -->
+        <div class="hud-top-bar">
+          <div style="display: flex; align-items: center;">
+            <div class="hud-position-box">
+              <span id="hud-rank" class="hud-rank-large">1st</span>
+              <span id="hud-total-racers" class="hud-rank-total">/ 4</span>
+            </div>
+            <div id="hud-lap" class="hud-lap-badge">LAP 1 / 2</div>
+          </div>
+
+          <div id="hud-timer" class="hud-timer-box">00:00.00</div>
+
+          <!-- Mini Leaderboard -->
+          <div class="hud-leaderboard">
+            <div class="hud-lb-title">Race Positions</div>
+            <div id="hud-lb-list">
+              <!-- Racers ranked live -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Center Countdown -->
+        <div id="hud-countdown" class="countdown-overlay">3</div>
+
+        <!-- Bottom Bar -->
+        <div class="hud-bottom-bar">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="hud-controls-info">
+              <div>WASD / Arrows: Steer &amp; Throttle</div>
+              <div>SPACE / SHIFT: Nitro Boost | Ramps: Jump!</div>
+            </div>
+            <button id="btn-toggle-sound" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; align-self: flex-start; pointer-events: auto;">
+              🔊 Sound: ON
+            </button>
+          </div>
+
+          <!-- Speedo & Boost -->
+          <div class="hud-speedo-panel">
+            <div class="hud-boost-container">
+              <div style="font-size: 11px; font-weight: 800; color: var(--primary-cyan); text-transform: uppercase;">Nitro Boost [Space]</div>
+              <div class="hud-boost-bar">
+                <div id="hud-boost-fill" class="hud-boost-fill" style="width: 100%;"></div>
+              </div>
+            </div>
+
+            <div style="display: flex; align-items: baseline; gap: 4px;">
+              <span id="hud-speed" class="hud-speed-text">0</span>
+              <span class="hud-speed-unit">KNOTS</span>
+            </div>
+          </div>
+
+          <!-- Radar Minimap -->
+          <div class="hud-minimap-container">
+            <canvas id="minimap-canvas" width="180" height="180"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. PODIUM / RACE RESULTS SCREEN -->
+    <div id="screen-podium" class="screen">
+      <div class="podium-container card-glass">
+        <h2 class="podium-title">🏆 RACE FINISHED!</h2>
+        <p style="color: var(--text-muted);">Congratulations racers! Here are the official standings:</p>
+
+        <table class="podium-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Racer</th>
+              <th>Speedboat</th>
+              <th>Total Time</th>
+              <th>Max Speed</th>
+              <th>Obstacles Hit</th>
+            </tr>
+          </thead>
+          <tbody id="podium-table-body">
+            <!-- Dynamic podium rows -->
+          </tbody>
+        </table>
+
+        <div style="display: flex; justify-content: center; gap: 16px; margin-top: 16px;">
+          <button id="btn-play-again" class="btn btn-primary" style="font-size: 16px; padding: 14px 28px;">
+            <span>🔄 Race Again</span>
+          </button>
+          <button id="btn-return-lobby" class="btn btn-secondary">
+            <span id="btn-return-text">🏠 Return to Menu</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SINGLE PLAYER SETUP MODAL -->
+    <div id="modal-singleplayer" class="modal">
+      <div class="modal-content card-glass" style="max-width: 520px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
+          <h3 style="font-size: 22px; font-weight: 800;">🏎️ Single Player Race</h3>
+          <button id="btn-close-sp-modal" class="btn-copy" style="font-size: 20px;">✕</button>
+        </div>
+
+        <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 14px;">
+          <div class="input-group">
+            <label class="input-label">Race Track</label>
+            <select id="sp-select-track" class="select-input">
+              <option value="coral_atoll">🏝️ Emerald Atoll (Tropical Lagoon)</option>
+              <option value="skull_canyon">🏴‍☠️ Skull Rock Gorge (Canyon River)</option>
+              <option value="neon_bay">🌃 Cyber Marina (Neon Bay)</option>
+              <option value="maelstrom_abyss">🌀 The Maelstrom Abyss (Mayhem Arena)</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Obstacle Density</label>
+            <select id="sp-select-density" class="select-input">
+              <option value="standard">Standard (Moderate Obstacles)</option>
+              <option value="high">High (Challenging Obstacles)</option>
+              <option value="mayhem" selected>🔥 MAYHEM! (Lots &amp; Lots of Obstacles)</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Race Length</label>
+            <select id="sp-select-laps" class="select-input">
+              <option value="1">1 Lap Sprint</option>
+              <option value="2" selected>2 Laps Standard</option>
+              <option value="3">3 Laps Grand Prix</option>
+              <option value="5">5 Laps Endurance</option>
+            </select>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Opponents</label>
+            <select id="sp-select-bots" class="select-input">
+              <option value="0">⏱️ Solo Time Trial (Practice Alone)</option>
+              <option value="2">🤖 2 AI Bot Racers</option>
+              <option value="4" selected>🤖 4 AI Bot Racers</option>
+              <option value="6">🤖 6 AI Bot Racers (Full Grid)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-top: 22px;">
+          <button id="btn-cancel-sp" class="btn btn-secondary" style="flex: 1;">Cancel</button>
+          <button id="btn-launch-sp" class="btn btn-primary" style="flex: 2; font-size: 16px;">
+            <span>🏁 Launch Race</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOW TO PLAY MODAL -->
+    <div id="modal-how-to-play" class="modal">
+      <div class="modal-content card-glass">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
+          <h3 style="font-size: 20px; font-weight: 800;">How to Play Hydro Rush</h3>
+          <button id="btn-close-modal" class="btn-copy" style="font-size: 20px;">✕</button>
+        </div>
+
+        <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <strong>🕹️ Controls:</strong>
+            <ul style="margin-left: 20px; margin-top: 4px; color: var(--text-muted); font-size: 13px;">
+              <li><strong>W / Up Arrow:</strong> Throttle forward</li>
+              <li><strong>S / Down Arrow:</strong> Reverse / Brake</li>
+              <li><strong>A / D or Left / Right Arrows:</strong> Steer rudder</li>
+              <li><strong>Space / Shift:</strong> Fire Nitro Boost</li>
+            </ul>
+          </div>
+
+          <div>
+            <strong>🌊 Lots &amp; Lots of Obstacles:</strong>
+            <div class="obstacle-gallery">
+              <div class="obs-item">
+                <div class="obs-title">🪨 Sharp Rocks &amp; Reefs</div>
+                <div>Harsh collision that ricochets and cuts speed. Steer clear!</div>
+              </div>
+              <div class="obs-item">
+                <div class="obs-title">💣 Naval Mines</div>
+                <div>Explodes on impact with a massive blast wave, spinning your boat!</div>
+              </div>
+              <div class="obs-item">
+                <div class="obs-title">🌀 Swirling Whirlpools</div>
+                <div>Exerts powerful vortex gravity pulling boats into the center.</div>
+              </div>
+              <div class="obs-item">
+                <div class="obs-title">🪵 Floating Crates &amp; Logs</div>
+                <div>Smashes into floating timber; slows your momentum slightly.</div>
+              </div>
+              <div class="obs-item">
+                <div class="obs-title">🚀 Jump Kicker Ramps</div>
+                <div>Launches your boat airborne! Fly high OVER obstacles and mines!</div>
+              </div>
+              <div class="obs-item">
+                <div class="obs-title">⚡ Hydro Boost Pads</div>
+                <div>Step on glowing neon arrows for an instant turbo speed surge!</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button id="btn-modal-ok" class="btn btn-primary" style="margin-top: 20px; width: 100%;">
+          Got it, let's race!
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Main Game Scripts -->
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

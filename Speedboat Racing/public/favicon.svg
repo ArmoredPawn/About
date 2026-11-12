@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f5d4" />
+      <stop offset="100%" stop-color="#0077b6" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#051923" />
+  <!-- Wake water waves -->
+  <path d="M12 48 C 24 54, 40 54, 52 48" stroke="#00b4d8" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.6"/>
+  <path d="M18 54 C 28 58, 36 58, 46 54" stroke="#90e0ef" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.4"/>
+  <!-- Speedboat hull -->
+  <path d="M32 10 L44 38 L38 46 L26 46 L20 38 Z" fill="url(#grad)" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Windshield -->
+  <polygon points="32,22 38,32 26,32" fill="#03045e" opacity="0.8"/>
+  <!-- Engine / Propeller spray -->
+  <rect x="29" y="46" width="6" height="5" rx="1" fill="#ff5400"/>
+</svg>
