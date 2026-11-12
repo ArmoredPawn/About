@@ -1,25 +1,21 @@
 // The bar across the top: your country, the clock and the numbers that matter most.
 
 import { $, h, flag, money, pct, tone } from './dom.js';
+import { START, WEEK_MS } from '../engine/core.js';
 
 export function renderHud(ctx) {
   const s = ctx.state;
   const lobby = ctx.lobby;
   const me = s.you;
   const c = s.countries[s.me];
-  const isHost = lobby?.hostId === lobby?.you;
   const total = s.years * 52;
-  const speedNames = { slow: 'Slow', normal: 'Normal', fast: 'Fast', blitz: 'Blitz' };
 
+  // The world runs in real time: no pause, no speed control. The date ticks forward day by day.
   const clock = h('div.hud-clock',
-    isHost && !s.over ? h('button.icon-btn', { title: s.paused ? 'Resume' : 'Pause', 'aria-label': s.paused ? 'Resume' : 'Pause', onclick: () => ctx.net.send({ type: 'pause', on: !s.paused }) }, s.paused ? '▶' : '❚❚') : null,
+    h('span.live-dot', { title: 'Live: the world keeps moving' }),
     h('div',
-      h('div.date', s.date),
+      h('div.date', { id: 'hud-date' }, liveDate(s, ctx.tickAge?.() ?? 0)),
       h('div.progress', { title: `Week ${s.week} of ${total}` }, h('i', { style: { width: `${Math.min(100, (s.week / total) * 100)}%` } }))),
-    isHost && !s.over
-      ? h('select', { 'aria-label': 'Game speed', style: { width: 'auto', minHeight: '28px', padding: '2px 6px', fontSize: '12px' }, onchange: (e) => ctx.net.send({ type: 'speed', speed: e.target.value }) },
-        (lobby.speeds ?? Object.keys(speedNames)).map((sp) => h('option', { value: sp, selected: sp === s.speed }, speedNames[sp] ?? sp)))
-      : h('span.chip', s.paused ? 'Paused' : speedNames[s.speed] ?? ''),
   );
 
   const stats = me ? h('div.hud-stats',
@@ -48,4 +44,10 @@ export function renderHud(ctx) {
 
 function stat(value, label, cls = '') {
   return h('div.stat', h('b', { class: cls }, value), h('span', label));
+}
+
+// The date part-way through the current week: frac is 0 when the week begins, 1 when the next one is due
+export function liveDate(s, frac) {
+  const d = new Date(START + (s.week + Math.max(0, Math.min(0.999, frac))) * WEEK_MS);
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }

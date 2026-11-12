@@ -3,13 +3,14 @@
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, rand, chance, pick, news, alert, nameOf, alive, addRel, nextId, enemiesOf } from './core.js';
+import { plant } from './spies.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 
 /* ---------- Intelligence ---------- */
 
 export const INTEL = {
-  spy: { name: 'Gather intelligence', cost: 0.2, note: 'See their forces, treasury, plans and nuclear programme for six months.' },
+  spy: { name: 'Plant a spy network', cost: 0.2, note: 'Three agents who, once established, relay their armies, arms, plans and secrets until caught.' },
   sabotage: { name: 'Sabotage', cost: 1, region: true, note: 'Wreck oil fields, mines, fabs or factories in one of their provinces.' },
   cyber: { name: 'Cyberattack', cost: 0.5, note: 'Knock out power grids and banks: their output falls for two months.' },
   steal: { name: 'Steal technology', cost: 1, note: 'Lift research from a field where they lead you.' },
@@ -20,6 +21,7 @@ export function covertOp(s, c, op, target, regionId) {
   const def = INTEL[op];
   const t = s.countries[target];
   if (!def || !t || target === c.id || !alive(s, target)) return 'Pick an operation and a country.';
+  if (op === 'spy') return plant(s, c, target, 3);
   const key = `intel:${op}:${target}`;
   if ((c.cooldown[key] ?? -1) > s.week) return `Our agents need ${c.cooldown[key] - s.week} more weeks before trying that again.`;
   const cost = def.cost * (0.5 + Math.min(1, c.gdp / 2000) * 0.5);
@@ -31,8 +33,10 @@ export function covertOp(s, c, op, target, regionId) {
   c.treasury -= cost;
   c.cooldown[key] = s.week + 8;
   const edge = c.tech.cyber - t.tech.cyber;
-  const success = chance(s, clamp(0.55 + 0.06 * edge, 0.1, 0.92));
-  const caught = chance(s, clamp(0.3 - 0.04 * edge + (success ? 0 : 0.2), 0.05, 0.75));
+  // Agents already inside make every operation easier and safer
+  const inside = Math.min(10, c.spies?.[target]?.agents ?? 0);
+  const success = chance(s, clamp(0.45 + 0.06 * edge + 0.03 * inside, 0.1, 0.95));
+  const caught = chance(s, clamp(0.35 - 0.04 * edge - 0.015 * inside + (success ? 0 : 0.2) + 0.05 * ((t.counterIntel ?? 1) - 1), 0.05, 0.8));
   let result = '';
   if (success) {
     switch (op) {
@@ -62,8 +66,9 @@ export function covertOp(s, c, op, target, regionId) {
         break;
       }
       case 'destabilize':
-        t.approval = Math.max(0, t.approval - 4);
-        t.stability = Math.max(0, t.stability - 7);
+        t.approval = Math.max(0, t.approval - 2);
+        t.stability = Math.max(0, t.stability - 4);
+        t.opposition = (t.opposition ?? 0) + 50;
         result = `Opposition groups in ${t.name} are on the streets.`;
         news(s, `Large anti-government protests break out in ${t.name}.`, 'unrest', [target]);
         break;

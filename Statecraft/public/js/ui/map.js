@@ -1,4 +1,6 @@
-// The world map: provinces, map modes, armies, operation arrows, battles, pan and zoom, and picking targets.
+// The world map: provinces, map modes, armies, operation arrows, front lines, pan and zoom, and picking targets.
+// Between weekly updates, armies glide toward their new positions and front lines creep forward, so the war
+// plays out continuously rather than in jumps.
 
 import { GEO, ORDER, MAP_SIZE } from '../engine/data/geo.js';
 import { COUNTRIES } from '../engine/data/countries.js';
@@ -15,11 +17,18 @@ const CAPITALS = Object.fromEntries(PROVINCES.filter((p) => p.capital).map((p) =
 const INDEX = Object.fromEntries(ORDER.map((id, i) => [id, i]));
 
 export class WorldMap {
-  constructor(el, { onRegion, onArmy, onHover }) {
+  constructor(el, { onRegion, onArmy, onHover, onContext, onTargetHint }) {
     this.el = el;
     this.onRegion = onRegion;
     this.onArmy = onArmy;
     this.onHover = onHover;
+    this.onContext = onContext;
+    this.onTargetHint = onTargetHint;
+    this.tickMs = 9000;
+    this.armyNodes = new Map();
+    this.fronts = new Map();
+    this.samples = new Map();
+    this.enemyKey = '';
     this.state = null;
     this.mode = 'political';
     this.resource = 'oil';
@@ -28,7 +37,6 @@ export class WorldMap {
     this.selectedArmy = null;
     this.targeting = null;
     this.uses = new Map();
-    this.hatches = new Set();
     this.fills = new Map();
   }
 
@@ -44,7 +52,8 @@ export class WorldMap {
     el.append(svg('rect', { class: 'ocean', x: -W, y: -H, width: W * 3, height: H * 3 }));
     el.append(svg('path', { class: 'graticule', d: data.graticule }));
     this.gRegions = svg('g');
-    this.gOcc = svg('g', { class: 'occupied' });
+    this.gOcc = svg('g', { class: 'fronts', 'pointer-events': 'none' });
+    this.gEnemy = svg('g', { class: 'enemy-outline', 'pointer-events': 'none' });
     this.gSel = svg('g', { 'pointer-events': 'none' });
     this.gRes = svg('g');
     this.gLabels = svg('g');
@@ -52,7 +61,7 @@ export class WorldMap {
     this.gBattles = svg('g');
     this.gArmies = svg('g');
     this.gPreview = svg('g', { 'pointer-events': 'none' });
-    el.append(this.gRegions, this.gOcc, this.gRes, this.gLabels, this.gArrows, this.gBattles, this.gArmies, this.gSel, this.gPreview);
+    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gRes, this.gLabels, this.gArrows, this.gBattles, this.gArmies, this.gSel, this.gPreview);
     for (const id of ORDER) {
       const u = svg('path', { d: this.d[id], class: 'region', 'data-id': id, fill: NEUTRAL });
       this.uses.set(id, u);
@@ -65,13 +74,16 @@ export class WorldMap {
 
   /* ---------- Drawing ---------- */
 
-  update(state) {
+  update(state, { tick = false } = {}) {
     this.state = state;
+    this.moving = tick;
     this.#paint();
+    this.#drawEnemies();
     this.#drawLabels();
     this.#drawArmies();
     this.#drawBattles();
     this.#drawOverlays();
+    this.#animate();
   }
 
   setMode(mode, resource) {
@@ -82,7 +94,7 @@ export class WorldMap {
 
   #region(id) {
     const row = this.state.regions[INDEX[id]];
-    return row && { owner: row[0], ctrl: row[1], dmg: row[2], infra: row[3], fort: row[4], battleBy: row[5], prog: row[6], unrest: row[7], gar: row[8], gdp: row[9], pop: row[10] };
+    return row && { owner: row[0], ctrl: row[1], dmg: row[2], infra: row[3], fort: row[4], battleBy: row[5], prog: row[6], unrest: row[7], gar: row[8], gdp: row[9], pop: row[10], rebels: row[11] ?? 0, from: row[12] || null };
   }
 
   #paint() {
@@ -98,7 +110,7 @@ export class WorldMap {
       const r = this.#region(id);
       let fill;
       switch (this.mode) {
-        case 'alliances': fill = blocColor(s, rel, r.owner); break;
+        case 'alliances': fill = blocColor(s, rel, r.ctrl); break;
         case 'resources': {
           const amount = s.resources[id]?.[this.resource]?.[0] ?? 0;
           const potential = s.resources[id]?.[this.resource]?.[1] ?? 0;
@@ -113,35 +125,175 @@ export class WorldMap {
           break;
         }
         case 'relations': {
-          if (r.owner === me) fill = '#8f95ff';
-          else if (!s.countries[r.owner]) fill = NEUTRAL;
+          if (r.ctrl === me) fill = '#8f95ff';
+          else if (!s.countries[r.ctrl]) fill = NEUTRAL;
           else {
-            const v = s.rel[r.owner] ?? 0;
+            const v = s.rel[r.ctrl] ?? 0;
             fill = v >= 0 ? mix('#3a4154', '#4cc38a', v / 100) : mix('#3a4154', '#e5484d', -v / 100);
           }
           break;
         }
-        default: fill = politicalColor(s, r.owner);
+        default: fill = politicalColor(s, r.ctrl);
       }
       if (this.fills.get(id) !== fill) {
         this.uses.get(id).setAttribute('fill', fill);
         this.fills.set(id, fill);
       }
-      if (r.ctrl !== r.owner && this.mode !== 'resources' && this.mode !== 'economy') occ.push([id, r.ctrl]);
+      if (r.battleBy && r.prog > 0 && this.mode !== 'resources' && this.mode !== 'economy') occ.push(id);
     }
-    this.gOcc.replaceChildren(...occ.map(([id, ctrl]) => svg('path', { d: this.d[id], class: 'occ', fill: `url(#${this.#hatch(ctrl)})` })));
+    this.#syncFronts(occ);
   }
 
-  #hatch(ctrl) {
-    const id = `hatch-${ctrl}`;
-    if (!this.hatches.has(id)) {
-      const color = this.mode === 'alliances' ? '#e5484d' : politicalColor(this.state, ctrl);
-      const p = svg('pattern', { id, width: 4, height: 4, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' },
-        svg('rect', { width: 2.2, height: 4, fill: color, opacity: 0.95 }));
-      this.defs.append(p);
-      this.hatches.add(id);
+  /* ---------- Front lines inside contested provinces ---------- */
+
+  // Points around a province's outline, for measuring how far a front has moved across it
+  #outline(id) {
+    if (this.samples.has(id)) return this.samples.get(id);
+    const el = this.uses.get(id);
+    const pts = [];
+    try {
+      const len = el.getTotalLength();
+      for (let i = 0; i < 72; i++) { const p = el.getPointAtLength((len * i) / 72); pts.push([p.x, p.y]); }
+    } catch { pts.push([GEO[id].x - 5, GEO[id].y - 5], [GEO[id].x + 5, GEO[id].y + 5]); }
+    this.samples.set(id, pts);
+    return pts;
+  }
+
+  // Which way the attack is coming from: the attacker's own province, or the provinces it holds next door
+  #attackFrom(id, by) {
+    const s = this.state;
+    const r = this.#region(id);
+    const sameSide = (h) => h === by || s.alliances.some((al) => al.kind === 'military' && al.members.includes(h) && al.members.includes(by));
+    if (r.from && GEO[r.from] && sameSide(this.#region(r.from)?.ctrl)) return GEO[r.from];
+    const near = GEO[id].adj.filter((x) => sameSide(this.#region(x)?.ctrl));
+    if (near.length) return { x: near.reduce((t, x) => t + GEO[x].x, 0) / near.length, y: near.reduce((t, x) => t + GEO[x].y, 0) / near.length };
+    const army = s.armies.find((a) => a.owner === by && (a.attacking === id || a.sea?.to === id));
+    const src = army ? GEO[army.sea?.from ?? army.region] : null;
+    return src && src !== GEO[id] ? src : { x: GEO[id].x - 10, y: GEO[id].y };
+  }
+
+  #syncFronts(ids) {
+    const now = performance.now();
+    const live = new Set(ids);
+    for (const [id, f] of this.fronts) if (!live.has(id)) { f.g.remove(); this.fronts.delete(id); }
+    for (const id of ids) {
+      const r = this.#region(id);
+      let f = this.fronts.get(id);
+      const color = this.mode === 'alliances' ? blocColor(this.state, relationIndex(this.state), r.battleBy) : politicalColor(this.state, r.battleBy);
+      if (!f || f.by !== r.battleBy) {
+        f?.g.remove();
+        const clipId = `front-${id}`;
+        const clip = svg('clipPath', { id: clipId }, svg('path', { d: this.d[id] }));
+        const area = svg('polygon', { fill: color, opacity: 0.95 });
+        const shade = svg('line', { class: 'front-shadow' });
+        const line = svg('line', { class: 'front-line' });
+        const labelA = svg('text', { class: 'front-label' });
+        const labelB = svg('text', { class: 'front-label' });
+        const g = svg('g', { 'clip-path': `url(#${clipId})` }, area, shade, line);
+        const outer = svg('g', {}, clip, g, labelA, labelB);
+        this.gOcc.append(outer);
+        f = { g: outer, area, shade, line, labelA, labelB, by: r.battleBy, shown: r.prog, from: r.prog, to: r.prog, t0: now };
+        this.fronts.set(id, f);
+      }
+      f.area.setAttribute('fill', color);
+      if (f.to !== r.prog) { f.from = f.shown; f.to = r.prog; f.t0 = now; }
+      f.origin = this.#attackFrom(id, r.battleBy);
+      f.holder = r.ctrl;
+      this.#placeFront(id, f);
     }
-    return id;
+  }
+
+  #placeFront(id, f) {
+    const g = GEO[id];
+    let dx = g.x - f.origin.x;
+    let dy = g.y - f.origin.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const nx = -dy;
+    const ny = dx;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let wlo = Infinity;
+    let whi = -Infinity;
+    for (const [x, y] of this.#outline(id)) {
+      const t = x * dx + y * dy;
+      const u = x * nx + y * ny;
+      lo = Math.min(lo, t); hi = Math.max(hi, t); wlo = Math.min(wlo, u); whi = Math.max(whi, u);
+    }
+    const front = lo + (hi - lo) * Math.max(0.02, Math.min(1, f.shown / 100));
+    const pad = (hi - lo) + (whi - wlo) + 10;
+    // Where the front actually crosses the province: the outline points closest to the line
+    let clo = Infinity;
+    let chi = -Infinity;
+    const band = Math.max(0.6, (hi - lo) * 0.05);
+    for (const [x, y] of this.#outline(id)) {
+      if (Math.abs(x * dx + y * dy - front) > band) continue;
+      const u = x * nx + y * ny;
+      clo = Math.min(clo, u); chi = Math.max(chi, u);
+    }
+    if (!(chi > clo)) { clo = wlo; chi = whi; }
+    const at = (t, u) => `${t * dx + u * nx},${t * dy + u * ny}`;
+    f.area.setAttribute('points', [at(lo - pad, wlo - pad), at(front, wlo - pad), at(front, whi + pad), at(lo - pad, whi + pad)].join(' '));
+    const [x1, y1] = at(front, wlo - 2).split(',').map(Number);
+    const [x2, y2] = at(front, whi + 2).split(',').map(Number);
+    for (const ln of [f.shade, f.line]) { ln.setAttribute('x1', x1); ln.setAttribute('y1', y1); ln.setAttribute('x2', x2); ln.setAttribute('y2', y2); }
+    // Name each side once zoomed in: "Spain holds this side, Portugal that one"
+    const unit = this.#unit();
+    const show = unit >= 2;
+    const mid = (clo + chi) / 2;
+    const off = Math.min(18 / unit, (hi - lo) * 0.25 + 4 / unit);
+    const name = (x) => shortName(this.state.countries[x]?.name ?? this.state.minors[x]?.name ?? '');
+    for (const [el, t, who] of [[f.labelA, front - off, f.by], [f.labelB, front + off, f.holder]]) {
+      el.setAttribute('display', show ? 'inline' : 'none');
+      if (!show) continue;
+      const [x, y] = at(t, mid).split(',').map(Number);
+      el.setAttribute('x', x); el.setAttribute('y', y);
+      el.setAttribute('font-size', 9 / unit);
+      el.setAttribute('stroke-width', 2.2 / unit);
+      el.textContent = name(who);
+    }
+  }
+
+  /* ---------- Enemies: a red line around everything held by a country at war with us ---------- */
+
+  #drawEnemies() {
+    const s = this.state;
+    const enemies = relationIndex(s).enemies;
+    const ids = enemies.size ? ORDER.filter((id) => enemies.has(this.#region(id).ctrl)) : [];
+    const key = ids.join(',');
+    if (key === this.enemyKey) return;
+    this.enemyKey = key;
+    if (!ids.length) { this.gEnemy.replaceChildren(); return; }
+    const mask = svg('mask', { id: 'enemy-mask', maskUnits: 'userSpaceOnUse', x: -W, y: -H, width: W * 3, height: H * 3 },
+      svg('rect', { x: -W, y: -H, width: W * 3, height: H * 3, fill: 'white' }),
+      ...ids.map((id) => svg('path', { d: this.d[id], fill: 'black' })));
+    this.gEnemy.replaceChildren(mask, svg('g', { mask: 'url(#enemy-mask)' }, ...ids.map((id) => svg('path', { d: this.d[id], class: 'enemy-edge' }))));
+  }
+
+  /* ---------- Animation between weekly updates ---------- */
+
+  #animate() {
+    cancelAnimationFrame(this.animRaf);
+    const step = () => {
+      const now = performance.now();
+      let busy = false;
+      for (const [id, f] of this.fronts) {
+        const k = Math.min(1, (now - f.t0) / (this.tickMs * 0.95));
+        const shown = f.from + (f.to - f.from) * k;
+        if (Math.abs(shown - f.shown) > 0.05) { f.shown = shown; this.#placeFront(id, f); }
+        if (k < 1) busy = true;
+      }
+      for (const n of this.armyNodes.values()) {
+        const k = Math.min(1, (now - n.t0) / n.dur);
+        const e = k * (2 - k) * 0.35 + k * 0.65;
+        n.x = n.fx + (n.tx - n.fx) * e;
+        n.y = n.fy + (n.ty - n.fy) * e;
+        n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
+        if (k < 1) busy = true;
+      }
+      if (busy) this.animRaf = requestAnimationFrame(step);
+    };
+    this.animRaf = requestAnimationFrame(step);
   }
 
   #drawLabels() {
@@ -194,7 +346,6 @@ export class WorldMap {
       const at = a.sea ? (a.attacking ?? a.sea.to) : a.region;
       (byRegion.get(at) ?? byRegion.set(at, []).get(at)).push(a);
     }
-    const nodes = [];
     const arrows = [];
     const friendly = (owner) => owner === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(owner) && al.members.includes(s.me));
     for (const a of s.armies) {
@@ -210,24 +361,52 @@ export class WorldMap {
         arrows.push(arrowPath([from, GEO[a.attacking]], colorOf(a.owner), unit, false));
       }
     }
+    const now = performance.now();
+    const seen = new Set();
     for (const [at, list] of byRegion) {
       const g = GEO[at];
       list.forEach((a, i) => {
         const w = 34 / unit;
         const hgt = 14 / unit;
-        const x = g.x - w / 2 + (i % 2) * (w + 2 / unit) - (list.length > 1 ? (w + 2 / unit) / 2 : 0);
-        const y = g.y - hgt / 2 + Math.floor(i / 2) * (hgt + 2 / unit) + 6 / unit;
+        let cx = g.x + (i % 2) * (w + 2 / unit) - (list.length > 1 ? (w + 2 / unit) / 2 : 0);
+        let cy = g.y + Math.floor(i / 2) * (hgt + 2 / unit) + 6 / unit;
+        // Attacking armies stand on the front line, pushing into the province as the battle goes their way
+        if (a.attacking && !a.sea && GEO[a.attacking]) {
+          const t = GEO[a.attacking];
+          const prog = (this.#region(a.attacking)?.prog ?? 0) / 100;
+          const k = 0.2 + 0.55 * prog;
+          cx += (t.x - g.x) * k;
+          cy += (t.y - g.y) * k;
+        }
+        if (a.sea && a.sea.from && a.sea.left != null && !a.attacking) {
+          const f = GEO[a.sea.from];
+          const k = 1 / (1 + Math.max(0, a.sea.left));
+          cx = f.x + (g.x - f.x) * k;
+          cy = f.y + (g.y - f.y) * k;
+        }
+        seen.add(a.id);
         const mine = friendly(a.owner);
-        const node = svg('g', { class: `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}`, 'data-army': a.id },
-          svg('rect', { x, y, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
-          svg('text', { x: x + w / 2, y: y + hgt / 2, 'font-size': 9 / unit }, (a.exact ? '' : '~') + armyLabel(a.troops)));
-        if (a.sea) node.setAttribute('opacity', '0.85');
-        node.append(svg('title', {}, `${a.name} (${s.countries[a.owner]?.name ?? ''})`));
-        nodes.push(node);
+        let n = this.armyNodes.get(a.id);
+        if (!n) {
+          n = { g: svg('g', { 'data-army': a.id }), x: cx, y: cy, fx: cx, fy: cy, tx: cx, ty: cy, t0: now, dur: 1 };
+          this.armyNodes.set(a.id, n);
+          this.gArmies.append(n.g);
+        }
+        if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
+          n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
+          n.dur = this.moving ? this.tickMs * 0.9 : 250;
+        }
+        n.g.setAttribute('class', `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}`);
+        n.g.setAttribute('opacity', a.sea ? '0.85' : '1');
+        n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
+        n.g.replaceChildren(
+          svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
+          svg('text', { x: 0, y: 0, 'font-size': 9 / unit }, (a.exact ? '' : '~') + armyLabel(a.troops)),
+          svg('title', {}, `${a.name} (${s.countries[a.owner]?.name ?? ''})${a.status ? `: ${a.status}` : ''}`));
       });
     }
+    for (const [id, n] of this.armyNodes) if (!seen.has(id)) { n.g.remove(); this.armyNodes.delete(id); }
     this.gArrows.replaceChildren(...arrows);
-    this.gArmies.replaceChildren(...nodes);
   }
 
   #drawBattles() {
@@ -244,6 +423,16 @@ export class WorldMap {
         svg('circle', { cx: g.x, cy: g.y - 16 / unit, r: rad, fill: 'rgb(12 14 22 / 0.85)', stroke: '#e5484d', 'stroke-width': 1 / unit }),
         svg('path', { d: `M${g.x} ${g.y - 16 / unit - rad}A${rad} ${rad} 0 ${prog > 0.5 ? 1 : 0} 1 ${end[0]} ${end[1] - 16 / unit}`, fill: 'none', stroke: colorOf(r.battleBy), 'stroke-width': 2.2 / unit }),
         svg('text', { x: g.x, y: g.y - 16 / unit, 'font-size': 10 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff' }, '⚔')));
+    }
+    for (const id of ORDER) {
+      const r = this.#region(id);
+      if (!r.rebels) continue;
+      const g = GEO[id];
+      const rad = 7 / unit;
+      out.push(svg('g', { class: 'revolt' },
+        svg('circle', { cx: g.x + 14 / unit, cy: g.y - 14 / unit, r: rad, fill: 'rgb(40 16 8 / 0.9)', stroke: '#ff9a3c', 'stroke-width': 1 / unit }),
+        svg('text', { x: g.x + 14 / unit, y: g.y - 14 / unit, 'font-size': 9 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, '🔥'),
+        svg('title', {}, `Uprising in ${regionName(id)}: about ${Math.round(r.rebels)}K rebels`)));
     }
     this.gBattles.replaceChildren(...out);
   }
@@ -301,13 +490,17 @@ export class WorldMap {
 
   #preview(id) {
     const t = this.targeting;
-    if (!t || !id) { this.gPreview.replaceChildren(); return; }
+    if (!t || !id) { this.gPreview.replaceChildren(); this.onTargetHint?.(null); return; }
     const ok = !t.filter || t.filter(id);
+    this.onTargetHint?.(ok ? null : t.reason?.(id) ?? null);
     const unit = this.#unit();
     const nodes = [svg('path', { d: this.d[id], class: 'outline', fill: ok ? 'rgb(255 255 255 / 0.18)' : 'rgb(229 72 77 / 0.25)', stroke: ok ? '#fff' : '#e5484d', 'stroke-width': 1.5 })];
     if (ok && t.from) {
       let pts = null;
-      if (t.kind === 'invade') pts = [GEO[t.from], GEO[id]];
+      const custom = t.path?.(id);
+      if (custom) pts = [GEO[t.from], ...custom.map((x) => GEO[x])];
+      else if (t.path) pts = null;
+      else if (t.kind === 'invade') pts = [GEO[t.from], GEO[id]];
       else {
         const path = route(fauxState(this.state), this.state.me, t.from, id, { offensive: t.kind === 'attack' });
         if (path) pts = [GEO[t.from], ...path.map((x) => GEO[x])];
@@ -339,7 +532,7 @@ export class WorldMap {
     this.el.classList.toggle('zoomed', this.#unit() >= 2.4);
     if (this.state) {
       cancelAnimationFrame(this.raf);
-      this.raf = requestAnimationFrame(() => { this.#drawLabels(); this.#drawArmies(); this.#drawBattles(); this.#drawOverlays(); });
+      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawBattles(); this.#drawOverlays(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
     }
   }
 
@@ -443,12 +636,20 @@ export class WorldMap {
       const id = d.target.dataset?.id;
       if (this.targeting) {
         if (id && (!this.targeting.filter || this.targeting.filter(id))) this.targeting.onPick(id);
+        else if (id) this.targeting.onReject?.(id);
         return;
       }
       if (armyEl) return this.onArmy?.(armyEl.dataset.army);
       this.onRegion?.(id ?? null);
     };
     el.addEventListener('pointerup', end);
+    // Right-click: a quick order for the selected army
+    el.addEventListener('contextmenu', (e) => {
+      const id = e.target?.dataset?.id;
+      if (!id || this.targeting) return;
+      e.preventDefault();
+      this.onContext?.(id);
+    });
     el.addEventListener('pointercancel', end);
     el.addEventListener('pointerleave', () => { if (hover) this.uses.get(hover)?.classList.remove('hover'); hover = null; this.onHover?.(null); });
   }
@@ -538,7 +739,7 @@ export function fauxState(s) {
   const regions = {};
   for (const id of ORDER) {
     const row = s.regions[INDEX[id]];
-    regions[id] = { ctrl: row[1], owner: row[0] };
+    regions[id] = { id, ctrl: row[1], owner: row[0] };
   }
   return {
     regions,

@@ -1,19 +1,124 @@
-// The war room: forces, army groups and their operations, air and sea campaigns, production and wars.
+// The war room: manpower, army groups and their operations, weapons and production, logistics, air and sea
+// campaigns, and wars.
 
 import { h, flag, money, nationName, regionName, troops, bar, num } from '../dom.js';
 import { BUILD } from '../../engine/economy.js';
-import { TRAITS, AGGRESSION } from '../../engine/military.js';
+import { TRAITS, AGGRESSION, MIN_ARMY, draftCost } from '../../engine/military.js';
+import { CAPITALS } from '../map.js';
 import { GEO } from '../../engine/data/geo.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { peaceDialog } from './diplomacy.js';
+import { CONSCRIPTION } from '../../engine/government.js';
+import { RANGE_KINDS, rangeCost, RANGE_WEEKS } from '../../engine/science.js';
 
 export function military(ctx) {
-  const tab = ctx.sub('military', 'armies');
-  const tabs = [['armies', 'Army groups'], ['forces', 'Forces'], ['ops', 'Air & sea'], ['build', 'Production'], ['wars', 'Wars']];
+  const tab = ctx.sub('military', 'overview');
+  const tabs = [['overview', 'Overview'], ['armies', 'Troops'], ['weapons', 'Weapons'], ['logistics', 'Logistics'], ['ops', 'Air & sea'], ['wars', 'Wars']];
   return h('div',
     h('div.panel-title', h('h2', 'Military'), h('span.muted.small', `${money(ctx.state.you.milFunds)} defence funds`)),
+    deployable(ctx),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('military', id) }, label))),
-    { armies, forces, ops, build, wars }[tab](ctx));
+    ({ overview, armies, weapons, logistics, ops, wars, forces: overview, build: weapons }[tab] ?? overview)(ctx));
+}
+
+// Always on top: what the leader can actually send into battle right now
+function deployable(ctx) {
+  const s = ctx.state;
+  const me = s.you;
+  const free = freeForces(s);
+  const inArmies = myArmies(s).reduce((t, a) => t + a.troops, 0);
+  return h('div.kpis', { style: { marginBottom: '12px' } },
+    h('div.kpi', h('span', 'Deployable now'), h('b', troops(free.troops)), h('small', `${num(free.tanks)} tanks at home`)),
+    h('div.kpi', h('span', 'In army groups'), h('b', troops(inArmies)), h('small', `${myArmies(s).length} group${myArmies(s).length === 1 ? '' : 's'}`)),
+    h('div.kpi', h('span', 'Can be drafted'), h('b', troops(Math.max(0, me.reserves))), h('small', `${CONSCRIPTION[me.conscription]?.name ?? 'reservists'}`)));
+}
+
+/* ---------- Overview: manpower and readiness ---------- */
+
+function overview(ctx) {
+  const s = ctx.state;
+  const me = s.you;
+  const free = freeForces(s);
+  const l = me.logistics;
+  const row = (label, v, note) => h('tr', h('td', label), h('td.num', v), h('td.faint.small', note ?? ''));
+  return h('div',
+    h('div.section', h('h3', 'Manpower'),
+      h('table.tbl', h('tbody',
+        row('Active troops', troops(me.troops), `${troops(free.troops)} free to deploy`),
+        row('Trained reserves', troops(Math.max(0, me.reserves)), 'drafted on the spot into new army groups'),
+        row('Called up by mobilisation', troops(me.mobTroops ?? 0), ['peacetime', 'partial', 'full'][me.mob]),
+        row('Extra conscripts', troops(Math.max(0, me.conscripts ?? 0)), CONSCRIPTION[me.conscription]?.name),
+        row('Killed so far', troops(me.dead ?? 0), 'counted off the population'),
+        row('Casualties (all)', troops(me.losses), 'killed, wounded and captured')))),
+    h('div.section', h('h3', 'Mobilisation'),
+      h('div.seg', [['Peacetime', 0], ['Partial', 1], ['Full', 2]].map(([label, lvl]) => h('button', { 'aria-pressed': String(me.mob === lvl), onclick: () => ctx.send({ type: 'mobilize', level: lvl }) }, label))),
+      h('p.muted.small', { style: { marginTop: '6px' } }, `Partial calls up 30% of reserves, full 80%, and puts factories on a war footing. Both slow the economy and cost approval. To grow the pool itself, change conscription in Government.`),
+      h('button.btn.small', { style: { marginTop: '6px' }, onclick: () => ctx.go('government') }, 'Conscription…')),
+    h('div.section', h('h3', 'Readiness'),
+      h('div.budget',
+        h('span', 'Defence budget'), h('span.num', `${money((me.gdp * me.spend.defence) / 100)}/yr`),
+        h('span', 'Upkeep of forces'), h('span.num', `−${money(me.upkeep ?? 0)}/yr`),
+        h('span', 'Armies in the field'), h('span.num', `−${money(l?.cost ?? 0)}/yr`),
+        h('span.total', 'Defence funds now'), h('span.num.total', money(me.milFunds))),
+      l && l.ratio < 0.95 ? h('div.warning', { style: { marginTop: '8px' } }, `Supply lines are strained: armies get ${Math.round(l.ratio * 100)}% of what they need. See Logistics.`) : null,
+      me.readiness < 1 ? h('div.warning.bad', { style: { marginTop: '8px' } }, 'Defence funds ran out: readiness is falling. Raise defence spending in Economy.') : null),
+    h('div.section', h('h3', 'Reach'),
+      h('p.small', `Aircraft ${num(me.range?.air)} km · missiles ${num(me.range?.missile)} km${me.range?.nuke ? ` · nuclear delivery ${num(me.range.nuke)} km` : ''} from our nearest base. Allies' and access partners' bases count too.`),
+      h('button.btn.small', { style: { marginTop: '6px' }, onclick: () => ctx.setSub('military', 'weapons') }, 'Extend range…')),
+  );
+}
+
+/* ---------- Logistics ---------- */
+
+function logistics(ctx) {
+  const s = ctx.state;
+  const me = s.you;
+  const l = me.logistics ?? { cost: 0, factories: 1, guards: 1, ratio: 1, rear: 0, free: 0, capacity: 0, demand: 0 };
+  const pctOf = (v) => `${Math.round(v * 100)}%`;
+  const abroad = myArmies(s).filter((a) => a.sea || s.regions[ctx.regionIndex[a.region]]?.[0] !== s.me);
+  return h('div',
+    h('p.muted.small', 'An army far from home needs three things, as Germany found in Russia in 1941: money for fuel, food and ammunition; factories to make the shells and spare parts; and soldiers to guard the roads and railways behind the front. Run short of any and every army\'s supply falls.'),
+    h('div.kpis', { style: { marginTop: '10px' } },
+      h('div.kpi', h('span', 'Money'), h('b', money(l.cost)), h('small', 'a year on armies in the field')),
+      h('div.kpi', h('span', 'Factories'), h('b', { class: l.factories < 0.8 ? 'bad' : l.factories < 1 ? 'warn' : 'good' }, pctOf(l.factories)), h('small', 'of munitions needed')),
+      h('div.kpi', h('span', 'Rear guards'), h('b', { class: l.guards < 0.8 ? 'bad' : l.guards < 1 ? 'warn' : 'good' }, pctOf(l.guards)), h('small', `${troops(l.rear)} needed, ${troops(l.free)} free`))),
+    h('div.section', h('h3', 'What helps'),
+      h('ul.small', { style: { paddingLeft: '18px', display: 'grid', gap: '4px' } },
+        h('li', 'Money: defence spending (Economy). When defence funds run out, the treasury pays, then borrowing.'),
+        h('li', `Factories: partial or full mobilisation puts industry on a war footing; Industry research and a supply of iron and critical metals raise output. Now making ${pctOf(l.factories)} of what the front uses.`),
+        h('li', 'Rear guards: keep enough troops at home (don\'t send everyone to the front), or draft more through conscription.'),
+        h('li', 'Shorter lines: armies close to home soil, and on allied ground, are cheaper to supply. Oil shortages cut supply everywhere.'))),
+    h('div.section', h('h3', 'Armies abroad'),
+      abroad.length ? h('div.list', abroad.map((a) => h('div.item.clickable', { onclick: () => ctx.selectArmy(a.id, true) },
+        h('div.item-head', h('span.name', a.name), h('span.mono.small', troops(a.troops))),
+        h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span.muted', 'Supply'), h('div.grow', bar(a.supply * 100, 100, a.supply < 0.5 ? 'bad' : a.supply < 0.8 ? 'warn' : 'good')), h('span.mono', `${Math.round(a.supply * 100)}%`)),
+        h('div.meta', a.sea ? 'At sea' : regionName(a.region)))))
+        : h('div.empty', 'No armies beyond our borders.')),
+  );
+}
+
+/* ---------- Weapons: inventory, production and range ---------- */
+
+function weapons(ctx) {
+  return h('div', forces(ctx), build(ctx), ranges(ctx));
+}
+
+function ranges(ctx) {
+  const me = ctx.state.you;
+  const work = me.rangeWork ?? [];
+  return h('div.section', h('h3', 'Range'),
+    h('p.muted.small', 'Aircraft need fuel and missiles have a fixed reach: neither can strike across the world from home. Range is measured from our nearest base, an ally\'s or an access partner\'s; carriers carry aircraft, and warships carry cruise missiles, toward coastal targets.'),
+    h('div.list', { style: { marginTop: '8px' } }, Object.entries(RANGE_KINDS).map(([kind, k]) => {
+      const w = work.find((x) => x.kind === kind);
+      const cost = me.range ? rangeCost(me, kind) : 0;
+      return h('div.item',
+        h('div.item-head', h('span.name', k.name), h('span.mono', `${num(me.range?.[kind])} km`)),
+        h('div.meta', k.note),
+        w ? h('div', { style: { marginTop: '6px' } }, bar(w.total - w.left, w.total), h('div.meta', `Extending to ${num(w.to)} km: ${w.left} weeks left`)) : null,
+        h('div.actions', h('button.btn.small', { disabled: Boolean(w) || (me.range?.[kind] ?? 0) >= k.max, onclick: async () => {
+          if (await confirmBox(`Extend ${k.name.toLowerCase()}?`, `About +35% range. Costs ${money(cost)} from the defence budget and takes ${RANGE_WEEKS} weeks.`)) ctx.send({ type: 'range', kind });
+        } }, w ? 'In progress' : `Extend (${money(cost)})`)));
+    })));
 }
 
 export function myArmies(s) {
@@ -35,9 +140,9 @@ function armies(ctx) {
   const list = myArmies(s);
   const free = freeForces(s);
   return h('div',
-    h('div.item', h('div.item-head', h('span.name', 'Forces at home'), h('button.btn.small.primary', { onclick: () => formArmy(ctx) }, '＋ Form army group')),
-      h('div.meta', `${troops(free.troops)} troops and ${num(free.tanks)} tanks garrison your provinces. Army groups are what you send on operations.`)),
-    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map((a) => armyCard(ctx, a)) : [h('div.empty', 'No army groups yet. Form one, then give it an operation: your general handles the rest.')]));
+    h('div.item', h('div.item-head', h('span.name', 'Forces at home'), h('button.btn.small.primary', { onclick: () => formArmy(ctx) }, '＋ Draft & form army')),
+      h('div.meta', `${troops(free.troops)} troops and ${num(free.tanks)} tanks garrison your provinces, with ${troops(Math.max(0, s.you.reserves))} reservists who can be drafted. Army groups are what you send to attack.`)),
+    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map((a) => armyCard(ctx, a)) : [h('div.empty', 'No army groups yet. 1) Draft & form one where you want it. 2) Press Attack and click the province to hit.')]));
 }
 
 export function armyCard(ctx, a, compact = false) {
@@ -53,32 +158,70 @@ export function armyCard(ctx, a, compact = false) {
     h('div.meta', { style: { color: 'var(--ink)' } }, a.status, a.op ? h('span.faint', ` · ${AGGRESSION[a.op.aggr]?.name ?? ''}`) : null),
     a.sea ? null : h('div.actions', { onclick: (e) => e.stopPropagation() },
       h('button.btn.small.primary', { onclick: () => ctx.orderArmy(a, 'attack') }, 'Attack…'),
-      h('button.btn.small', { onclick: () => ctx.orderArmy(a, 'hold') }, 'Hold / move…'),
-      GEO[a.region]?.coast ? h('button.btn.small', { onclick: () => ctx.orderArmy(a, 'invade') }, 'Land…') : null,
+      h('button.btn.small', { onclick: () => ctx.orderArmy(a, 'hold') }, 'Move / hold…'),
       h('button.btn.small.ghost', { onclick: () => reinforce(ctx, a) }, 'Reinforce'),
       others.length ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'armyMerge', ids: [a.id, ...others.map((o) => o.id)] }) }, 'Merge here') : null,
       h('button.btn.small.ghost', { onclick: () => rename(ctx, a) }, 'Rename'),
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Disband ${a.name}?`, 'Its troops return to the home garrisons.')) ctx.send({ type: 'armyDisband', id: a.id }); } }, 'Disband')));
 }
 
+// Provinces we hold, front lines first (then the capital), for choosing where an army forms
+function formingGrounds(ctx) {
+  const s = ctx.state;
+  const enemies = new Set(s.wars.filter((w) => w.a === s.me || w.b === s.me).map((w) => (w.a === s.me ? w.b : w.a)));
+  const holder = (id) => s.regions[ctx.regionIndex[id]]?.[1];
+  const capital = CAPITALS[s.me];
+  return Object.keys(ctx.regionIndex)
+    .filter((id) => holder(id) === s.me)
+    .map((id) => {
+      const foes = [...new Set(GEO[id].adj.map(holder).filter((h2) => enemies.has(h2)))];
+      const borders = [...new Set(GEO[id].adj.map(holder).filter((h2) => h2 && h2 !== s.me && !enemies.has(h2)))];
+      return { id, front: foes.length > 0, foes, borders, capital: id === capital };
+    })
+    .sort((a, b) => (b.front - a.front) || (b.capital - a.capital) || regionName(a.id).localeCompare(regionName(b.id)));
+}
+
+// One dialog: how many troops (drafting reservists if needed) and which province they form up in
 export function formArmy(ctx, region) {
   const s = ctx.state;
-  const open = (regionId) => {
-    const free = freeForces(s);
-    const name = h('input', { maxlength: 28, placeholder: 'e.g. Army Group South' });
-    const t = numberField('Troops', { value: Math.min(Math.floor(free.troops * 0.3), 300), min: 5, max: Math.floor(free.troops), step: 1, suffix: 'thousands' });
-    const k = numberField('Tanks', { value: Math.floor(free.tanks * 0.3), min: 0, max: Math.floor(free.tanks), step: 10 });
-    modal({
-      title: `Form an army group in ${regionName(regionId)}`,
-      body: h('div.stack', h('p.muted.small', `Available: ${troops(free.troops)} troops and ${num(free.tanks)} tanks. A general is appointed automatically.`), h('label.field', h('span', 'Name (optional)'), name), t.el, k.el),
-      actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Form', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'armyCreate', region: regionId, troops: Number(t.input.value), tanks: Number(k.input.value), name: name.value })) || false }],
-    });
+  const me = s.you;
+  const free = freeForces(s);
+  const freeT = Math.floor(free.troops);
+  const reserves = Math.floor(Math.max(0, me.reserves));
+  const grounds = formingGrounds(ctx);
+  if (!grounds.length) return ctx.toast('You hold no provinces to form an army in.', 'warn');
+  const label = (g) => `${regionName(g.id)}${g.front ? ` · front with ${g.foes.map((f) => nationName(s, f)).join(', ')}` : g.capital ? ' · capital' : g.borders.length ? ` · borders ${g.borders.slice(0, 2).map((f) => nationName(s, f)).join(', ')}` : ''}`;
+  const where = selectField('Form up in', grounds.map((g) => [g.id, label(g)]), region ?? grounds[0].id);
+  const t = numberField('Troops', { value: Math.max(MIN_ARMY, Math.floor(freeT * 0.5)), min: MIN_ARMY, max: freeT + reserves, step: 1, suffix: 'thousands' });
+  const k = numberField('Tanks', { value: Math.floor(free.tanks * 0.5), min: 0, max: Math.floor(free.tanks), step: 10 });
+  const name = h('input', { maxlength: 28, placeholder: 'Optional, e.g. Army Group South' });
+  const quick = h('div.row.wrap.gap', [['Quarter', 0.25], ['Half', 0.5], ['All free', 1]].map(([lbl, f]) => h('button.btn.small.ghost', { type: 'button', onclick: () => { t.input.value = Math.max(MIN_ARMY, Math.floor(freeT * f)); k.input.value = Math.floor(free.tanks * f); hint(); } }, lbl)),
+    reserves > 0 ? h('button.btn.small.ghost', { type: 'button', onclick: () => { t.input.value = freeT + reserves; k.input.value = Math.floor(free.tanks); hint(); } }, 'Everything + draft all reserves') : null);
+  const note = h('p.small');
+  const hint = () => {
+    const want = Math.floor(Number(t.input.value) || 0);
+    const draft = Math.max(0, want - freeT);
+    if (want < MIN_ARMY) { note.className = 'small bad'; note.textContent = `An army group needs at least ${MIN_ARMY},000 troops.`; return; }
+    if (draft > reserves) { note.className = 'small bad'; note.textContent = `Too many: ${troops(freeT)} are free and ${troops(reserves)} reservists can be drafted.`; return; }
+    note.className = 'small muted';
+    note.textContent = draft
+      ? `${troops(want - draft)} from your garrisons + ${troops(draft)} newly drafted reservists. The draft costs about ${money(draftCost(me, draft))}, dents approval a little, and draftees start less organised.`
+      : `${troops(want)} from your garrisons. ${troops(freeT - want)} stay home${reserves ? `; go higher to draft from ${troops(reserves)} reservists` : ''}.`;
   };
-  if (region) return open(region);
-  ctx.target({
-    text: 'Pick one of your provinces to form the army group in',
-    filter: (id) => s.regions[ctx.regionIndex[id]][1] === s.me,
-    onPick: (id) => { ctx.endTarget(); open(id); },
+  t.input.addEventListener('input', hint);
+  hint();
+  modal({
+    title: 'Draft & form an army group',
+    body: h('div.stack', t.el, quick, note, k.el, where.el, h('label.field', h('span', 'Name'), name),
+      h('p.muted.small', 'A general is appointed. Next: press Attack on the army and click the province to hit.')),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, {
+      label: 'Form army', kind: 'primary', onClick: async () => {
+        const err = await ctx.send({ type: 'armyCreate', region: where.input.value, troops: Number(t.input.value), tanks: Number(k.input.value), name: name.value });
+        if (err) return false;
+        ctx.toast(`Army formed in ${regionName(where.input.value)}. Press Attack on it to send it in.`, 'good');
+        return true;
+      },
+    }],
   });
 }
 
@@ -106,10 +249,7 @@ function forces(ctx) {
   const free = freeForces(s);
   const row = (label, v, note) => h('tr', h('td', label), h('td.num', v), h('td.faint.small', note ?? ''));
   return h('div',
-    h('div.section', h('h3', 'Mobilisation'),
-      h('div.seg', [['Peacetime', 0], ['Partial', 1], ['Full', 2]].map(([label, lvl]) => h('button', { 'aria-pressed': String(me.mob === lvl), onclick: () => ctx.send({ type: 'mobilize', level: lvl }) }, label))),
-      h('p.muted.small', { style: { marginTop: '6px' } }, `Partial calls up 30% of reserves, full 80%. Both slow the economy and cost approval. Reserves left: ${troops(me.reserves)}.`)),
-    h('div.section', h('h3', 'Order of battle'),
+    h('div.section', h('h3', 'Inventory'),
       h('table.tbl', h('tbody',
         row('Active troops', troops(me.troops), `${troops(free.troops)} at home`),
         row('Tanks', num(me.tanks), `${num(free.tanks)} at home`),
@@ -119,12 +259,6 @@ function forces(ctx) {
         row('Missiles', num(me.missiles)),
         row('Nuclear warheads', num(me.nukes), me.nukeProgram.on ? `weapons programme ${Math.round(me.nukeProgram.progress * 100)}%` : ''),
         row('Losses so far', troops(me.losses))))),
-    h('div.section', h('h3', 'Budget'),
-      h('div.budget',
-        h('span', 'Defence budget'), h('span.num', `${money((me.gdp * me.spend.defence) / 100)}/yr`),
-        h('span', 'Upkeep of forces'), h('span.num', `−${money(me.upkeep ?? 0)}/yr`),
-        h('span.total', 'Defence funds now'), h('span.num.total', money(me.milFunds))),
-      h('p.muted.small', { style: { marginTop: '6px' } }, 'Raise defence spending in Economy to afford more.')),
     h('div.section', h('h3', 'Nuclear'),
       me.nukes > 0
         ? h('p.muted.small', `${me.nukes} warheads. To use one, select an enemy-held province on the map. Every country will turn against you, and nuclear-armed enemies may answer in kind.`)
@@ -183,8 +317,8 @@ function build(ctx) {
   const me = s.you;
   const cf = costFactorOf(me);
   const limit = 3 + Math.floor(me.gdp / 800);
-  return h('div',
-    h('p.muted.small', `Paid from defence funds (${money(me.milFunds)}), then reserves (${money(me.treasury)}). Your industry can run ${limit} orders at once. Shortages of the listed resources slow production.`),
+  return h('div.section', h('h3', 'Production'),
+    h('p.muted.small', `Paid from defence funds (${money(me.milFunds)}), then reserves (${money(me.treasury)}). Your industry can run ${limit} orders at once. Shortages of the listed resources slow production. New weapons are built in secret: only spies inside your government see them.`),
     h('div.list', { style: { marginTop: '10px' } }, Object.entries(BUILD).map(([kind, b]) => {
       const locked = (kind === 'nukes' && me.nukes <= 0) || (b.tech && me.tech[b.tech[0]] < b.tech[1]);
       return h('div.item',

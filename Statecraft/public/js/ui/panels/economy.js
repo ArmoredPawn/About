@@ -79,10 +79,8 @@ function budget(ctx) {
         action('Stimulus package', me.stimulus && me.stimulus.until > ctx.state.week ? `Running until week ${me.stimulus.until}` : 'Borrow to boost growth for six months. Adds to inflation.', 'Launch…', () => stimulus(ctx)),
         action('Pay down debt', `Use reserves (${money(me.treasury)}) to repay some of the ${money(me.debt)} debt.`, 'Repay…', () => repay(ctx)),
         toggle(ctx, 'Rationing', 'Cuts oil, gas and food use by 15%, at a cost in approval.', me.ration, (on) => ({ type: 'ration', on })),
-        action('Public campaign', 'A national address and media blitz: a short boost to approval.', 'Launch', () => ctx.send({ type: 'propaganda' }), (me.cooldown.propaganda ?? -1) > ctx.state.week ? `ready in ${me.cooldown.propaganda - ctx.state.week} wk` : null),
-        me.gov !== 'autocracy' ? action('Snap election', 'Go to the polls in four weeks while you are popular.', 'Call it', async () => { if (await confirmBox('Call a snap election?', `An election will be held in four weeks. Approval is ${Math.round(me.approval)}%.`)) ctx.send({ type: 'snapElection' }); }) : null,
-        toggle(ctx, 'Martial law', 'Troops on the streets: stability up, approval and world standing down.', me.martial, (on) => ({ type: 'martial', on }), true),
-      )),
+      ),
+      h('p.muted.small', { style: { marginTop: '8px' } }, 'Cutting schools, hospitals or pensions below their 2025 level brings the people affected onto the streets. Martial law, campaigns and elections are under Government.')),
   );
 }
 
@@ -136,9 +134,9 @@ function resources(ctx) {
     h('p.muted.small', 'Yearly rates. Reserves are counted in weeks of demand. Prices are an index (2025 = 100). Click a row to see where the resource is on the map.'),
     h('table.tbl', { style: { marginTop: '10px' } }, h('thead', h('tr', h('th', 'Resource'), h('th.num', 'Output'), h('th.num', 'Need'), h('th.num', 'Reserves'), h('th.num', 'Price'))), h('tbody', rows)),
     h('div.section',
-      h('h3', 'Buy strategic reserves'),
-      h('p.muted.small', 'Stockpile on the world market before a crisis. Costs 10% over the market price.'),
-      h('div.row.wrap.gap', { style: { marginTop: '8px' } }, RESOURCES.filter((r) => (me.demand[r] ?? 0) > 0).map((r) => h('button.btn.small', { onclick: () => buyReserves(ctx, r) }, RESOURCE_INFO[r].name)))),
+      h('h3', 'Buy or sell'),
+      h('p.muted.small', 'Buy from the country of your choice, or sell your surplus, in the Market. Cargoes travel by sea or land and can be stopped on the way.'),
+      h('div.row.wrap.gap', { style: { marginTop: '8px' } }, RESOURCES.filter((r) => (me.demand[r] ?? 0) > 0).map((r) => h('button.btn.small', { class: (me.short[r] ?? 0) > 0.02 ? 'danger' : '', onclick: () => { ctx.ui.marketRes = r; ctx.go('market', 'buy'); } }, RESOURCE_INFO[r].name)))),
     h('div.section',
       h('h3', 'World prices (two years)'),
       h('div.list', ['oil', 'gas', 'food', 'chip', 'rare'].map((r) => h('div', h('div.row.between.small', h('span', RESOURCE_INFO[r].name), h('span.mono', `${Math.round(s.market.price[r] * 100)}`)), spark(s.market.history[r], RES_COLORS[r]))))),
@@ -151,21 +149,6 @@ function fmt(v) {
   if (v >= 10) return v.toFixed(0);
   if (v >= 1) return v.toFixed(1);
   return v.toFixed(2);
-}
-
-function buyReserves(ctx, r) {
-  const me = ctx.state.you;
-  const info = RESOURCE_INFO[r];
-  const f = numberField('Weeks of demand to buy', { value: 4, min: 1, max: 12, step: 1 });
-  const cost = h('p.muted');
-  const update = () => { cost.textContent = `About ${money(((me.demand[r] ?? 0) * Number(f.input.value) * info.value / 52) * ctx.state.market.price[r] * 1.1)} from reserves of ${money(me.treasury)}.`; };
-  f.input.addEventListener('input', update);
-  update();
-  modal({
-    title: `Buy ${info.name.toLowerCase()} reserves`,
-    body: h('div.stack', f.el, cost),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Buy', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'reserve', res: r, weeks: Number(f.input.value) })) || false }],
-  });
 }
 
 /* ---------- Projects ---------- */

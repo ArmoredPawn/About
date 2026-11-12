@@ -98,6 +98,7 @@ export function num(v, digits = 0) {
 
 export function troops(k) {
   if (k == null) return '—';
+  if (Math.abs(k) < 0.05) return '0';
   if (k >= 1000) return `${(k / 1000).toFixed(2)}M`;
   if (k >= 10) return `${Math.round(k)}K`;
   return `${k.toFixed(1)}K`;

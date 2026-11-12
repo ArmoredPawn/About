@@ -1,17 +1,38 @@
 # Statecraft
 
 A real-time geopolitics game for up to 20 leaders. Each player is handed one of the world's 50 largest economies at
-random; the computer runs the other countries and about 150 smaller nations. A week passes every few seconds.
+random; the computer runs the other countries and about 150 smaller nations. The world never pauses: a week passes
+every few seconds, armies glide across the map and front lines creep through contested provinces as you watch.
 
-- **Economy:** taxes, six spending lines, the interest rate, debt, inflation, stimulus, rationing, elections.
+- **Economy:** taxes, six spending lines, the interest rate, debt, inflation, stimulus, rationing.
+- **Government:** conscription (volunteers to a total-war draft), the security forces, the press, elections, martial
+  law. People protest for real reasons (school, hospital or pension cuts, prices, shortages, a war or a draft they
+  don't believe in), and fear, propaganda and a recovering economy keep them home. Unanswered, protests become
+  uprisings and civil war; a country in civil war makes a separate peace abroad, as Russia did at Brest-Litovsk.
 - **Resources where they really are:** oil (Texas, Alberta, West Siberia, the Gulf, the North Caucasus…), gas, coal,
-  iron, grain, rare earths, uranium, critical metals and Taiwan's chip fabs. A world market sets prices; shortages slow
-  economies and stall armies. Capture a province and its output is yours.
-- **War:** leaders form army groups and give big orders (attack a province, hold a line, land by sea). Each army's
-  general picks the route, fights the battles on the way, regroups when worn out and retreats when beaten. Air
-  campaigns, missile strikes, blockades, nuclear weapons, and peace treaties or armistices.
-- **Diplomacy:** alliances and trade blocs (none exist at the start; leaders found their own), free trade, non-aggression pacts, military
-  access, resource deals, loans, aid, sanctions, tariffs, covert operations, closing straits, UN resolutions with P5 vetoes.
+  iron, grain, rare earths, uranium, critical metals and Taiwan's chip fabs. Capture a province and its output, and
+  its people, are yours. Empty deserts (Iran's Kavir and Lut, Arabia's Empty Quarter, the Outback, the Thar) are
+  provinces of their own with little worth taking.
+- **Market:** buy from the country you choose, or around sanctions through intermediaries; sell surplus or list it
+  for other leaders. Every cargo sails through the real straits or goes overland, and can be seized or sunk on the
+  way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes;
+  patrol one with your navy to escort friends or stop everyone else.
+- **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then press Attack
+  (or select an army and right-click a province) and choose a ground offensive or a landing. If it can't go ahead, a
+  bar at the bottom of the map says why. Armies cross other countries only with military access. Generals pick the
+  route and fight; wars far from home need money, factories and troops to guard the supply lines; the dead come off
+  the population. Each province shows its ground (forests, passes, marshes); ground thought impassable, like the
+  Ardennes, is lightly held and an attack through it surprises the defenders. Aircraft and missiles only reach so far
+  from a base. Air campaigns, missile strikes, blockades, nuclear weapons, peace treaties and armistices.
+- **Computer-run countries** trade, sign deals and pacts (some secret), spy on rivals and pick their own fights with
+  weak neighbours. Invaded, they mobilise, conscript, draft every reservist and call on their friends.
+- **Diplomacy:** open or secret alliances, trade blocs, free trade, non-aggression pacts, military access, resource
+  deals, loans, aid, sanctions, tariffs, UN resolutions with P5 vetoes.
+- **Spies:** plant agents abroad; once settled in they relay armies on the move, weapons being built, secret pacts and
+  war plans, and show the target's armies on your map, until counter-intelligence catches (or turns) them.
+- **Research:** pay for a project and wait for it; the hardest work needs imported chips or uranium, or buy a licence
+  from a country further ahead.
+- **News:** everything the world has seen, searchable by country. Secret moves never appear there.
 - **Chat:** a world channel, one-to-one messages, group chats, and a chat for every alliance.
 - **Solo play** runs entirely in the browser and saves as you go.
 

@@ -25,14 +25,17 @@ export const PROPOSALS = {
 
 /* ---------- War ---------- */
 
-export function declareWar(s, c, target, goal = 'conquest') {
+// With leaveShared, any alliance or trade bloc both sides belong to is left first, in the same step
+export function declareWar(s, c, target, goal = 'conquest', { leaveShared = false } = {}) {
   const t = nation(s, target);
   if (!t || !alive(s, target) || target === c.id) return 'Pick a country to declare war on.';
   if (atWar(s, c.id, target)) return `You are already at war with ${t.name}.`;
-  const shared = alliancesOf(s, c.id, 'military').find((al) => al.members.includes(target));
-  if (shared) return `You are both in ${shared.name}. Leave it before going to war.`;
   if (s.minors[target]?.puppetOf === c.id) return `${t.name} is already under your control.`;
   if (s.minors[target]?.capitulated) return `${t.name} has already surrendered.`;
+  const shared = Object.values(s.alliances).filter((al) => al.members.includes(c.id) && al.members.includes(target));
+  const blocking = shared.find((al) => al.kind === 'military');
+  if (blocking && !leaveShared) return `You are both in ${blocking.name}. Leave it before going to war.`;
+  if (leaveShared) for (const al of shared) leaveAlliance(s, c, al.id);
 
   const nap = treaty(s, 'nap', c.id, target);
   const claim = c.claims.some((rid) => s.regions[rid]?.ctrl === target);
@@ -83,6 +86,7 @@ function callAllies(s, aggressor, victim) {
     const guarantor = s.minors[victim]?.guarantor === m;
     const willing = rel(s, m, aggressor) < 40 && (guarantor || al(s, m, victim) || rel(s, m, victim) > 40);
     if (willing) {
+      for (const pact of alliancesOf(s, victim, 'military')) if (pact.secret && pact.members.includes(m)) revealAlliance(s, pact, `as ${c.name} goes to war for ${nameOf(s, victim)}`);
       startWar(s, m, aggressor, 'defence');
       news(s, `${c.name} honours its commitments and declares war on ${nameOf(s, aggressor)} in defence of ${nameOf(s, victim)}.`, 'war', [m, aggressor, victim]);
       alert(s, aggressor, `${c.name} has entered the war against us.`, 'war');
@@ -302,7 +306,8 @@ export function respond(s, cid, id, accept) {
       if (!al) break;
       al.members.push(p.to);
       for (const m of al.members) if (m !== p.to) addRel(s, m, p.to, 20);
-      news(s, `${to} joins ${al.name}.`, 'diplomacy', [p.to]);
+      if (al.secret) for (const m of al.members) alert(s, m, `${to} has secretly joined ${al.name}.`, 'good');
+      else news(s, `${to} joins ${al.name}.`, 'diplomacy', [p.to]);
       break;
     }
     case 'fta': case 'nap': case 'access':
@@ -335,6 +340,7 @@ export function respond(s, cid, id, accept) {
     case 'joinWar':
     case 'callToArms': {
       if (atWar(s, p.to, t.enemy)) break;
+      for (const pact of alliancesOf(s, p.to, 'military')) if (pact.secret && pact.members.includes(t.ally ?? p.from)) revealAlliance(s, pact, `as ${to} enters the war`);
       startWar(s, p.to, t.enemy, p.kind === 'callToArms' ? 'defence' : 'alliance');
       addRel(s, p.to, p.from, 15);
       news(s, `${to} enters the war against ${nameOf(s, t.enemy)} alongside ${from}.`, 'war', [p.to, t.enemy, p.from]);
@@ -347,15 +353,30 @@ export function respond(s, cid, id, accept) {
 
 /* ---------- Alliances ---------- */
 
-export function createAlliance(s, c, { name, kind }) {
+export function createAlliance(s, c, { name, kind, secret = false }) {
   name = String(name ?? '').replace(/[\p{C}]/gu, '').trim().slice(0, 40);
   if (!name) return 'Give the alliance a name.';
   if (!['military', 'economic'].includes(kind)) return 'Pick a military alliance or a trade bloc.';
   if (Object.values(s.alliances).some((a) => a.name.toLowerCase() === name.toLowerCase())) return 'An alliance with that name exists.';
   const id = nextId(s, 'al');
-  s.alliances[id] = { id, name, kind, members: [c.id], founder: c.id, since: s.week };
-  news(s, `${c.name} founds ${kind === 'military' ? 'a new military alliance' : 'a new trade bloc'}: ${name}.`, 'diplomacy', [c.id]);
+  s.alliances[id] = { id, name, kind, members: [c.id], founder: c.id, since: s.week, secret: Boolean(secret) };
+  if (secret) alert(s, c.id, `${name} is founded in secret. Only its members, and spies inside them, will know.`, 'info');
+  else news(s, `${c.name} founds ${kind === 'military' ? 'a new military alliance' : 'a new trade bloc'}: ${name}.`, 'diplomacy', [c.id]);
   return { id };
+}
+
+export function revealAlliance(s, al, why) {
+  if (!al?.secret) return;
+  al.secret = false;
+  news(s, `A secret pact is revealed: ${al.name}, binding ${al.members.map((m) => nameOf(s, m)).join(', ')}${why ? `, ${why}` : ''}.`, 'diplomacy', al.members);
+}
+
+export function setAllianceSecrecy(s, c, id, secret) {
+  const al = s.alliances[id];
+  if (!al || !al.members.includes(c.id)) return 'You are not a member.';
+  if (secret) return al.secret ? null : 'Once a pact is public it can\'t be made secret again.';
+  revealAlliance(s, al, `announced by ${c.name}`);
+  return null;
 }
 
 export function leaveAlliance(s, c, id) {
@@ -363,7 +384,8 @@ export function leaveAlliance(s, c, id) {
   if (!al || !al.members.includes(c.id)) return 'You are not a member.';
   al.members = al.members.filter((m) => m !== c.id);
   for (const m of al.members) addRel(s, m, c.id, al.kind === 'military' ? -15 : -8);
-  news(s, `${c.name} leaves ${al.name}.`, 'diplomacy', [c.id]);
+  if (al.secret) for (const m of al.members) alert(s, m, `${c.name} has quietly left ${al.name}.`, 'warn');
+  else news(s, `${c.name} leaves ${al.name}.`, 'diplomacy', [c.id]);
   if (!al.members.length) delete s.alliances[id];
   else if (al.founder === c.id) al.founder = al.members[0];
   return null;

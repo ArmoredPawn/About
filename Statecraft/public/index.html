@@ -101,7 +101,7 @@
       </div>
       <div id="target-bar" class="target-bar" hidden></div>
       <div id="inspector" class="inspector" hidden></div>
-      <div id="ticker" class="ticker"></div>
+      <div id="map-hint" class="map-hint" role="status" aria-live="polite" hidden></div>
     </main>
     <aside id="chat" class="chat" hidden>
       <div class="chat-head">
@@ -140,28 +140,37 @@
 <dialog id="help" class="modal help">
   <div class="modal-head"><h2>How to play</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
   <div class="help-body">
-    <p>You lead one of the 50 largest economies. Time runs a week at a time: every few seconds a new week begins and the world moves on, whether you act or not. The game ends after the number of years the host chose, and countries are ranked by power, growth and territory.</p>
+    <p>You lead one of the 50 largest economies. The world runs in real time and never pauses: armies move, fronts shift and the date ticks forward day by day, whether you act or not. The game ends after the number of years the host chose, and countries are ranked by power, growth and territory.</p>
     <h3>Run the country</h3>
     <ul>
-      <li><b>Economy</b>: set taxes, spending and the interest rate. Infrastructure, education and research grow the economy; taxes and high interest rates slow it. Deficits pile up debt, and too much debt raises borrowing costs.</li>
-      <li><b>Resources</b> sit where they really are: oil in Texas, Alberta, West Siberia and the Gulf; gas in Qatar, Yamal and South Pars; rare earths in Inner Mongolia; chips in Taiwan and Korea. Shortages slow the economy and stall armies; click a province to develop new fields and mines.</li>
-      <li><b>Approval and stability</b> follow growth, prices, taxes, public services and war. Democracies face elections; unstable countries face protests and crises.</li>
+      <li><b>Economy</b>: set taxes, spending and the interest rate. Infrastructure, education and research grow the economy; taxes and high interest rates slow it. Deficits pile up debt.</li>
+      <li><b>Government</b>: conscription, the security forces, the press and the home front. People protest for real reasons (school or hospital cuts, prices, a war or a draft they don't believe in), and how many take to the streets depends on fear and belief as much as anger. Give in, negotiate or send the police. Ignored, a fragile country can slide into uprisings and civil war.</li>
+      <li><b>Conscription</b> needs a reason: with an enemy at the gates people accept it; with none, expect an outcry.</li>
+      <li><b>Market</b>: buy from the country of your choice (or around sanctions, through intermediaries), sell your surplus, and watch your cargoes travel by sea or land. Anyone can try to stop them, and both sides are told who did.</li>
+      <li><b>Research</b>: fund a project, wait for the scientists, and import the chips or uranium the hardest work needs, or buy a licence from a country further ahead.</li>
     </ul>
     <h3>War: you plan, your generals fight</h3>
     <ul>
-      <li>Form <b>army groups</b> from your forces, then give each an operation: <b>attack</b> a province (the general finds the route and fights the battles on the way), <b>hold</b> a line, or make an <b>amphibious landing</b>.</li>
-      <li>Set how aggressive each general should be. Generals regroup when worn out and wait for better odds when cautious.</li>
-      <li>Use air campaigns, missile strikes and naval blockades. Cut an enemy off from oil and its tanks stop.</li>
-      <li>Wars end with a peace treaty: cede provinces, pay reparations, or freeze the front with an armistice.</li>
+      <li><b>Declare war</b> from a country's dossier or any of its provinces. If you share an alliance with it, you leave in the same click.</li>
+      <li><b>Draft &amp; form</b> an army group (Military → Troops): choose how many troops (more than you have free drafts reservists) and the province they form up in. The top of the Military tab always shows how many you can deploy.</li>
+      <li>Press <b>Attack</b>, click the province to hit, and pick a <b>ground offensive</b> or, where there's water to cross, an <b>amphibious landing</b>. Or select an army and <b>right-click</b> a province. If an attack can't go ahead, the bar at the bottom of the map says why.</li>
+      <li>Watch it happen: armies glide across the map and a yellow <b>front line</b> creeps through contested provinces. Countries at war with you are outlined in red. Other leaders only see your armies near their borders, or if their spies are deep inside your government.</li>
+      <li>Your troops can cross another country only if it grants <b>military access</b>; otherwise you must fight through it.</li>
+      <li>Check the ground: <i>Ground &amp; passes</i> on a province shows forests, mountains, marshes and passes. Ground thought impassable, like the Ardennes, is lightly held: attack through it before it's fortified and the defenders are caught off guard.</li>
+      <li>Wars far from home need money, factories and men to guard the supply lines (Military → Logistics). Soldiers who die are gone from the population; conquered land's people become yours.</li>
+      <li>Aircraft and missiles only reach so far from your bases (or an ally's); extend their range from Military → Weapons.</li>
+      <li>Patrol a strait like Hormuz or Malacca to escort friendly ships or stop others; hold its shores to close it, charge a toll or attack enemy cargoes.</li>
+      <li>Computer-run countries fight back with everything when invaded, and some plan wars of their own.</li>
     </ul>
-    <h3>Diplomacy</h3>
+    <h3>Diplomacy and spies</h3>
     <ul>
-      <li>Message other leaders, or start group chats. Every alliance gets its own chat.</li>
-      <li>Propose alliances, free trade, non-aggression pacts, military access, resource deals and loans. Impose sanctions and tariffs, close straits, table UN resolutions, or run covert operations.</li>
-      <li>Attacking without a claim costs world standing and invites sanctions; attacking an alliance member brings its allies in.</li>
+      <li>Message other leaders, or start group chats. Every alliance gets its own chat. Alliances can be <b>secret</b>: only members, and spies inside them, know.</li>
+      <li>Propose alliances, free trade, non-aggression pacts, military access, resource deals and loans. Impose sanctions and tariffs, or table UN resolutions.</li>
+      <li><b>Spies</b>: plant agents abroad and they relay armies on the move, weapons being built, secret pacts and war plans until counter-intelligence catches them. Run your own counter-intelligence to catch theirs.</li>
+      <li><b>News</b> keeps everything the world has seen; pick a country to read all about it. Secret moves never appear there.</li>
     </ul>
     <h3>Map controls</h3>
-    <p>Drag to pan, scroll or pinch to zoom. Click a province for details and actions; click an army to command it. Map modes show alliances, resources and the economy.</p>
+    <p>Drag to pan, scroll or pinch to zoom. Click a province for details and actions; click an army to command it, then right-click where it should go.</p>
   </div>
 </dialog>
 

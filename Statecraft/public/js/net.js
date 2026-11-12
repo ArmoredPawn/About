@@ -13,6 +13,8 @@ const BROWSER_TIMERS = {
   stop: (id) => clearInterval(id),
 };
 const SAVE_KEY = 'statecraft.solo';
+// Bumped when the map changes: a save from an older map is missing provinces
+const SAVE_VERSION = 3;
 const ROOM_KEY = 'statecraft.room';
 
 export function serverBase() {
@@ -137,14 +139,14 @@ export class LocalLink {
     if (!this.room) return;
     if (msg.type === 'leave') return this.leave();
     this.room.handle(this.player, msg);
-    if (msg.type === 'cmd' || msg.type === 'pause') this.save();
+    if (msg.type === 'cmd') this.save();
   }
 
   save() {
     if (!this.room?.game) return;
     try {
       const s = this.room.game.s;
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 1, saved: Date.now(), state: { ...s, fresh: [] } }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, saved: Date.now(), state: { ...s, fresh: [] } }));
     } catch { /* storage full or unavailable: the game still runs */ }
   }
 
@@ -158,7 +160,7 @@ export class LocalLink {
 export function loadSolo() {
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null');
-    return saved?.v === 1 ? saved : null;
+    return saved?.v === SAVE_VERSION ? saved : null;
   } catch { return null; }
 }
 
