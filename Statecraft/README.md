@@ -10,7 +10,7 @@ random; the computer runs the other countries and about 150 smaller nations. A w
 - **War:** leaders form army groups and give big orders (attack a province, hold a line, land by sea). Each army's
   general picks the route, fights the battles on the way, regroups when worn out and retreats when beaten. Air
   campaigns, missile strikes, blockades, nuclear weapons, and peace treaties or armistices.
-- **Diplomacy:** alliances (NATO, the EU and others exist at the start), free trade, non-aggression pacts, military
+- **Diplomacy:** alliances and trade blocs (none exist at the start; leaders found their own), free trade, non-aggression pacts, military
   access, resource deals, loans, aid, sanctions, tariffs, covert operations, closing straits, UN resolutions with P5 vetoes.
 - **Chat:** a world channel, one-to-one messages, group chats, and a chat for every alliance.
 - **Solo play** runs entirely in the browser and saves as you go.
@@ -39,7 +39,7 @@ npm run dev   # http://localhost:3001 (multiplayer and solo)
 ## Changing the world
 
 - Countries: `public/js/engine/data/countries.js`. Provinces and their resources: `data/regions.js`.
-  Minor nations: `data/minors.js`. Starting alliances, rivalries, sanctions and straits: `data/world.js`.
+  Minor nations: `data/minors.js`. Starting friendships, rivalries, sanctions and straits: `data/world.js`.
 - After changing provinces or their seed points, run `npm run build:map`. It rebuilds `public/data/map.json` and
   `public/js/engine/data/geo.js` (both committed) and warns about any province that ends up with no land.
 

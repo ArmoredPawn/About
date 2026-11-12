@@ -1,10 +1,12 @@
-// How the world stands at the start: real alliances and trade blocs, rivalries, sanctions, elections,
+// How the world stands at the start: friendships, rivalries, sanctions, elections,
 // shipping chokepoints and the technology fields.
 
 const NATO = ['usa', 'can', 'gbr', 'fra', 'deu', 'ita', 'esp', 'nld', 'bel', 'pol', 'nor', 'dnk', 'tur', 'prt', 'cze', 'rou', 'swe', 'fin'];
 const EU = ['deu', 'fra', 'ita', 'esp', 'nld', 'bel', 'pol', 'swe', 'irl', 'aut', 'dnk', 'rou', 'cze', 'prt', 'fin'];
 
-export const START_ALLIANCES = [
+// Every game starts with no alliances or trade blocs: leaders build their own. These real-world
+// blocs only set how warmly their members regard each other on day one.
+export const START_FRIENDS = [
   { name: 'NATO', kind: 'military', members: NATO },
   { name: 'CSTO', kind: 'military', members: ['rus', 'kaz'] },
   { name: 'US–Japan Security Treaty', kind: 'military', members: ['usa', 'jpn'] },
@@ -18,7 +20,7 @@ export const START_ALLIANCES = [
   { name: 'Gulf Cooperation Council', kind: 'economic', members: ['sau', 'are'] },
 ];
 
-// Starting relations beyond what alliances give (pairs not listed start near 0)
+// Starting relations beyond what those friendships give (pairs not listed start near 0)
 export const START_RELATIONS = {
   'usa chn': -35, 'usa rus': -60, 'usa irn': -85, 'usa isr': 70, 'usa ind': 30, 'usa sau': 35, 'usa twn': 55,
   'usa vnm': 20, 'usa pak': 0, 'usa egy': 25, 'usa are': 40, 'usa irq': 10, 'usa sgp': 45,

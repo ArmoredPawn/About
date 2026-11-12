@@ -73,8 +73,14 @@ test('invading Kuwait: the general advances, captures it and the world reacts', 
 
 test('peace treaties hand over provinces and end the war', () => {
   const g = game(6, 'ind');
-  // Allies in the same alliance can't fight each other
-  assert.match(g.command('rus', { type: 'war', target: 'kaz' }) ?? '', /CSTO/);
+  // No alliances exist at the start, but allies in the same alliance can't fight each other
+  assert.equal(Object.keys(g.s.alliances).length, 0, 'no starting alliances');
+  g.setLeader('kaz', 'Ally');
+  const res = g.command('rus', { type: 'allianceCreate', name: 'Steppe Pact', kind: 'military', invite: ['kaz'] });
+  const inv = Object.values(g.s.proposals).find((x) => x.kind === 'alliance' && x.to === 'kaz');
+  assert.ok(inv, `invite sent (${res})`);
+  assert.equal(g.command('kaz', { type: 'respond', id: inv.id, accept: true }), null);
+  assert.match(g.command('rus', { type: 'war', target: 'kaz' }) ?? '', /Steppe Pact/);
   assert.equal(g.command('ind', { type: 'war', target: 'pak' }), null);
   g.s.regions['pak-gb'].ctrl = 'ind';
   const err = g.command('ind', { type: 'propose', to: 'pak', kind: 'peace', terms: { cede: [{ region: 'pak-gb', to: 'ind' }] } });

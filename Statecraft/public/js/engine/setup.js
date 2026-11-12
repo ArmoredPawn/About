@@ -4,8 +4,8 @@ import { COUNTRIES, COUNTRY_IDS, TECH_OVERRIDES, CLAIMS, NUCLEAR_PROGRAMMES } fr
 import { PROVINCES, RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { MINORS } from './data/minors.js';
 import { GEO, ORDER, EXTRA_MINORS } from './data/geo.js';
-import { START_ALLIANCES, START_RELATIONS, START_SANCTIONS, ELECTIONS, TECH_FIELDS, DEMAND_TILT, CHOKEPOINTS } from './data/world.js';
-import { setRel, rel, nextId } from './core.js';
+import { START_FRIENDS, START_RELATIONS, START_SANCTIONS, ELECTIONS, TECH_FIELDS, DEMAND_TILT, CHOKEPOINTS } from './data/world.js';
+import { setRel, rel } from './core.js';
 import { START_FORTS } from './names.js';
 
 export const STOCK_WEEKS = 8; // strategic reserves held at the start, in weeks of demand
@@ -72,15 +72,12 @@ export function createState({ seed = Date.now() % 2147483647, years = 5 } = {}) 
   for (const id of COUNTRY_IDS) s.countries[id] = country(s, COUNTRIES[id]);
 
   /* ---------- Diplomacy ---------- */
-  for (const al of START_ALLIANCES) {
-    const id = nextId(s, 'al');
-    s.alliances[id] = { id, name: al.name, kind: al.kind, members: [...al.members], founder: al.members[0], since: 0 };
-  }
+  // No alliances exist at the start; leaders found their own during the game.
   for (const [pair, value] of Object.entries(START_RELATIONS)) {
     const [a, b] = pair.split(' ');
     if (s.countries[a] && s.countries[b]) setRel(s, a, b, value);
   }
-  for (const al of Object.values(s.alliances)) {
+  for (const al of START_FRIENDS) {
     for (const a of al.members) for (const b of al.members) {
       if (a < b) setRel(s, a, b, Math.max(rel(s, a, b), al.kind === 'military' ? 55 : 35));
     }
