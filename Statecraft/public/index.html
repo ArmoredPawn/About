@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Statecraft — Lead a Nation</title>
+  <meta name="description" content="A real-time geopolitics game for up to 20 world leaders: run an economy, fight for resources, build alliances.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app" data-screen="menu">
+
+  <!-- ============ Menu ============ -->
+  <section id="menu" class="screen menu">
+    <div class="menu-inner">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 16h26M16 3c-4.5 4-6.5 8.5-6.5 13s2 9 6.5 13M16 3c4.5 4 6.5 8.5 6.5 13s-2 9-6.5 13" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        <div>
+          <h1>Statecraft</h1>
+          <p class="tagline">Lead one of the world's 50 largest economies. Grow it, defend it, and decide how far you'll go for oil, chips and power.</p>
+        </div>
+      </div>
+
+      <div class="menu-grid">
+        <div class="card menu-card">
+          <h2>Play with friends</h2>
+          <p class="muted">Up to 20 leaders. Each is handed a random country; the computer runs the rest.</p>
+          <label class="field"><span>Your name</span><input id="name" maxlength="20" autocomplete="nickname" placeholder="e.g. Ayush"></label>
+          <div class="row gap">
+            <button id="create" class="btn primary grow">Create a game</button>
+          </div>
+          <div class="divider"><span>or join one</span></div>
+          <div class="row gap">
+            <input id="code" class="code-input" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Game code">
+            <button id="join" class="btn grow">Join</button>
+          </div>
+          <p id="menu-status" class="status" role="status"></p>
+        </div>
+        <div class="card menu-card">
+          <h2>Play solo</h2>
+          <p class="muted">You against 49 computer-run countries. Runs in your browser and saves as you go.</p>
+          <button id="solo" class="btn primary">Start a solo game</button>
+          <button id="solo-continue" class="btn" hidden>Continue saved game</button>
+          <p id="solo-meta" class="muted small"></p>
+          <div class="divider"><span>new here?</span></div>
+          <button id="help-btn" class="btn ghost">How to play</button>
+        </div>
+      </div>
+      <p class="fine">Figures are real-world estimates from around 2025 (IMF, IISS, SIPRI, USGS, EIA). The map is Natural Earth.</p>
+    </div>
+  </section>
+
+  <!-- ============ Lobby ============ -->
+  <section id="lobby" class="screen lobby">
+    <div class="lobby-inner">
+      <header class="lobby-head">
+        <button class="btn ghost small" id="lobby-leave">← Leave</button>
+        <div class="room-code">
+          <span class="muted small">Game code</span>
+          <strong id="lobby-code">····</strong>
+        </div>
+        <button class="btn small" id="copy-link">Copy invite link</button>
+      </header>
+      <div class="lobby-grid">
+        <div class="card">
+          <div class="row between"><h2>Leaders <span id="lobby-count" class="muted"></span></h2></div>
+          <ul id="lobby-players" class="lobby-players"></ul>
+        </div>
+        <div class="card">
+          <h2>Settings</h2>
+          <div id="lobby-settings" class="settings"></div>
+          <button id="start" class="btn primary block">Start the game</button>
+          <p id="lobby-status" class="muted small"></p>
+        </div>
+        <div class="card lobby-chat">
+          <h2>Chat</h2>
+          <div id="lobby-messages" class="messages"></div>
+          <form id="lobby-form" class="composer"><input id="lobby-input" maxlength="500" placeholder="Say hello…" autocomplete="off"><button class="btn small">Send</button></form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ The game ============ -->
+  <section id="game" class="screen game">
+    <header id="hud" class="hud"></header>
+    <nav id="rail" class="rail" aria-label="Government"></nav>
+    <aside id="panel" class="panel"><div id="panel-body" class="panel-body"></div></aside>
+    <main id="mapwrap" class="mapwrap">
+      <svg id="map" class="map" aria-label="World map"></svg>
+      <div id="map-tools" class="map-tools"></div>
+      <div id="legend" class="legend"></div>
+      <div id="zoom" class="zoom">
+        <button data-zoom="in" aria-label="Zoom in">+</button>
+        <button data-zoom="out" aria-label="Zoom out">−</button>
+        <button data-zoom="home" aria-label="Show my country">⌂</button>
+      </div>
+      <div id="target-bar" class="target-bar" hidden></div>
+      <div id="inspector" class="inspector" hidden></div>
+      <div id="ticker" class="ticker"></div>
+    </main>
+    <aside id="chat" class="chat" hidden>
+      <div class="chat-head">
+        <strong>Diplomatic channels</strong>
+        <button class="icon-btn" id="chat-close" aria-label="Close chat">✕</button>
+      </div>
+      <div class="chat-body">
+        <div id="chat-channels" class="chat-channels"></div>
+        <div class="chat-thread">
+          <div id="chat-title" class="chat-title"></div>
+          <div id="chat-messages" class="messages"></div>
+          <form id="chat-form" class="composer"><input id="chat-input" maxlength="500" placeholder="Message…" autocomplete="off"><button class="btn small">Send</button></form>
+        </div>
+      </div>
+    </aside>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+  </section>
+
+  <!-- ============ Final ============ -->
+  <section id="final" class="screen final">
+    <div class="final-inner">
+      <h1>The verdict of history</h1>
+      <p id="final-date" class="muted"></p>
+      <div id="final-body"></div>
+      <div class="row gap center">
+        <button id="final-map" class="btn">Back to the map</button>
+        <button id="final-again" class="btn primary">Play again</button>
+        <button id="final-menu" class="btn ghost">Main menu</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<dialog id="modal" class="modal"><div id="modal-body"></div></dialog>
+
+<dialog id="help" class="modal help">
+  <div class="modal-head"><h2>How to play</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+  <div class="help-body">
+    <p>You lead one of the 50 largest economies. Time runs a week at a time: every few seconds a new week begins and the world moves on, whether you act or not. The game ends after the number of years the host chose, and countries are ranked by power, growth and territory.</p>
+    <h3>Run the country</h3>
+    <ul>
+      <li><b>Economy</b>: set taxes, spending and the interest rate. Infrastructure, education and research grow the economy; taxes and high interest rates slow it. Deficits pile up debt, and too much debt raises borrowing costs.</li>
+      <li><b>Resources</b> sit where they really are: oil in Texas, Alberta, West Siberia and the Gulf; gas in Qatar, Yamal and South Pars; rare earths in Inner Mongolia; chips in Taiwan and Korea. Shortages slow the economy and stall armies; click a province to develop new fields and mines.</li>
+      <li><b>Approval and stability</b> follow growth, prices, taxes, public services and war. Democracies face elections; unstable countries face protests and crises.</li>
+    </ul>
+    <h3>War: you plan, your generals fight</h3>
+    <ul>
+      <li>Form <b>army groups</b> from your forces, then give each an operation: <b>attack</b> a province (the general finds the route and fights the battles on the way), <b>hold</b> a line, or make an <b>amphibious landing</b>.</li>
+      <li>Set how aggressive each general should be. Generals regroup when worn out and wait for better odds when cautious.</li>
+      <li>Use air campaigns, missile strikes and naval blockades. Cut an enemy off from oil and its tanks stop.</li>
+      <li>Wars end with a peace treaty: cede provinces, pay reparations, or freeze the front with an armistice.</li>
+    </ul>
+    <h3>Diplomacy</h3>
+    <ul>
+      <li>Message other leaders, or start group chats. Every alliance gets its own chat.</li>
+      <li>Propose alliances, free trade, non-aggression pacts, military access, resource deals and loans. Impose sanctions and tariffs, close straits, table UN resolutions, or run covert operations.</li>
+      <li>Attacking without a claim costs world standing and invites sanctions; attacking an alliance member brings its allies in.</li>
+    </ul>
+    <h3>Map controls</h3>
+    <p>Drag to pan, scroll or pinch to zoom. Click a province for details and actions; click an army to command it. Map modes show alliances, resources and the economy.</p>
+  </div>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
