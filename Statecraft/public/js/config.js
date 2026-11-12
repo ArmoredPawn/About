@@ -1,5 +1,6 @@
-// Address of the multiplayer server on Render, e.g. 'https://statecraft.onrender.com' (see README).
-// Empty: the local server, when the page is opened from localhost. Solo play never needs a server.
+// Address of the multiplayer server on Render (see README). A public value, not a secret.
+// When the page is opened from localhost, the local server (`npm run dev`) is used instead.
+// Solo play never needs a server.
 export const CONFIG = {
-  serverUrl: '',
+  serverUrl: 'https://statecraft-avg0.onrender.com',
 };

@@ -16,9 +16,8 @@ const SAVE_KEY = 'statecraft.solo';
 const ROOM_KEY = 'statecraft.room';
 
 export function serverBase() {
-  if (CONFIG.serverUrl) return CONFIG.serverUrl.replace(/\/+$/, '');
   if (['localhost', '127.0.0.1'].includes(location.hostname)) return location.origin;
-  return '';
+  return CONFIG.serverUrl ? CONFIG.serverUrl.replace(/\/+$/, '') : '';
 }
 
 export class RemoteLink {
