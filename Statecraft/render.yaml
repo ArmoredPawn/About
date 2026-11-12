@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: statecraft
+    runtime: node
+    plan: free
+    rootDir: Statecraft
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://armoredpawn.github.io
+      - key: SERVE_GAME
+        value: "0"
