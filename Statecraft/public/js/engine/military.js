@@ -8,7 +8,7 @@ import { GEO } from './data/geo.js';
 import { TERRAIN } from './data/regions.js';
 import { REGION_NAMES, MINOR_TERRAIN, MINOR_QUALITY } from './names.js';
 import {
-  clamp, rand, chance, pick, news, alert, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
+  clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
   onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted,
 } from './core.js';
 import { navalPower } from './economy.js';
@@ -16,6 +16,11 @@ import { PROVINCES } from './data/regions.js';
 import { COUNTRIES } from './data/countries.js';
 import { surpriseFeature } from './terrain.js';
 import { rangeProblem } from './science.js';
+
+// Every report from the front is marked as war news, so it also runs in the News section
+const alert = (s, cid, text, kind, extra = {}) => briefing(s, cid, text, kind, { front: true, ...extra });
+// Troop numbers as the other side would put them: to the nearest 5,000
+const approx = (k) => Math.max(1, Math.round(k / 5) * 5);
 
 export const MAX_ARMIES = 14;
 export const TRAITS = {
@@ -675,6 +680,11 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   const fresh = !(reg.battle && reg.battle.by === lead);
   reg.battle = fresh ? { by: lead, prog: 0, weeks: 0, from: attackers[0].landing ? null : attackers[0].region } : reg.battle;
   reg.battle.weeks = (reg.battle.weeks ?? 0) + dt;
+  const sides = [...new Set(attackers.map((a) => a.owner))];
+  if (fresh) {
+    news(s, `${nameOf(s, lead)}'s forces attack ${regionName(regionId)}, held by ${nameOf(s, holder)}.`, 'war', [...sides, holder]);
+    alert(s, holder, `${nameOf(s, lead)} is attacking ${regionName(regionId)} with about ${troopsLabel(approx(attackTroops))} troops.`, 'war', { region: regionId });
+  }
   // Ground the defenders thought impassable: lightly held, and the attack comes as a shock
   const sneak = surpriseFeature(regionId);
   if (sneak && reg.fort <= 1 && !defenders.some((a) => a.op.kind === 'hold') && reg.battle.weeks <= 3) {
@@ -685,6 +695,7 @@ function battle(s, regionId, attackers, gar, dt = 1) {
     }
   }
   const ratio = attack / defence;
+  reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders });
   // The front moves fast: an even fight takes a province in under two weeks, a strong attack in days
   const step = (ratio >= 1 ? Math.min(200, 60 + 100 * (ratio - 1)) : ratio >= 0.8 ? 20 * (ratio - 0.8) / 0.2 : -60 * (0.8 - ratio) / 0.8) / depth(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step * dt, 0, 100);
@@ -738,6 +749,34 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
 }
 
+// How an attack is going, on each attacking army's card, and in the news whenever it turns: advancing,
+// stalled, or thrown back (when the defenders start pushing into the ground the attack came from)
+function reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders }) {
+  const trend = ratio >= 1 ? 'advancing' : ratio < 0.8 ? 'repulsed' : 'stalled';
+  const odds = `${ratio.toFixed(2)}:1`;
+  const where = regionName(regionId);
+  const theirs = `about ${troopsLabel(approx(defendTroops))} defenders${defenders.length ? `, including ${defenders.map((a) => `${nameOf(s, a.owner)}'s ${a.name} (~${troopsLabel(approx(a.troops))})`).join(', ')}` : ''}`;
+  for (const a of attackers) {
+    a.status = trend === 'advancing' ? `Attacking ${where}: winning (${odds})`
+      : trend === 'stalled' ? `Attacking ${where}: held up (${odds} against ${theirs})`
+        : `Thrown back at ${where} (${odds} against ${theirs})`;
+  }
+  const was = reg.battle.trend;
+  reg.battle.trend = trend;
+  if (trend === 'advancing' || trend === was) return;
+  // At most one report a fortnight for each battle, so a fight on the edge doesn't flood the news
+  if ((reg.battle.told ?? -99) > s.week - 2 && !(trend === 'repulsed' && was === 'stalled')) return;
+  reg.battle.told = s.week;
+  if (trend === 'stalled') {
+    news(s, `${nameOf(s, lead)}'s attack on ${where} has stalled against ${nameOf(s, holder)}'s defences.`, 'war', [...sides, holder]);
+    for (const side of sides) alert(s, side, `Our attack on ${where} has stalled: ${troopsLabel(approx(attackTroops))} troops against ${theirs}. The odds are ${odds}; at 1:1 or better we advance. Send more armies to attack it together, or call in the air force.`, 'warn', { region: regionId });
+  } else {
+    news(s, `${nameOf(s, holder)} throws back ${nameOf(s, lead)}'s attack on ${where}.`, 'war', [...sides, holder]);
+    for (const side of sides) alert(s, side, `Our attack on ${where} is being thrown back: ${troopsLabel(approx(attackTroops))} troops against ${theirs}. The odds are only ${odds}, and the defenders will push into the ground we attacked from. Reinforce, send more armies to attack together, or pull back.`, 'bad', { region: regionId });
+    alert(s, holder, `Our defenders in ${where} are throwing back ${nameOf(s, lead)}'s attack.`, 'good', { region: regionId });
+  }
+}
+
 // The defenders of `from` push into `back`, the province an attack on them came from. Held long enough, it
 // falls: the front line moves the other way.
 // `strength` is what held the attack off; it has to beat whatever guards the ground behind the attackers.
@@ -747,7 +786,11 @@ function counterAttack(s, backId, by, from, strength, gar, dt = 1) {
   const odds = (strength * 0.6) / Math.max(1, defenceEstimate(s, backId, gar));
   if (odds < 1) return;
   const push = (Math.min(120, 30 + 60 * (odds - 1)) / depth(backId)) * dt;
-  if (!(back.battle && back.battle.by === by)) back.battle = { by, prog: 0, weeks: 0, from };
+  if (!(back.battle && back.battle.by === by)) {
+    back.battle = { by, prog: 0, weeks: 0, from };
+    news(s, `${nameOf(s, by)} counter-attacks into ${regionName(backId)}.`, 'war', [by, back.ctrl]);
+    alert(s, back.ctrl, `${nameOf(s, by)} is counter-attacking into ${regionName(backId)}, the ground our failed attack on ${regionName(from)} came from.`, 'bad', { region: backId });
+  }
   back.battle.prog = clamp(back.battle.prog + push, 0, 100);
   back.battle.weeks += dt;
   back.battle.pushed = s.stepNo;

@@ -307,6 +307,7 @@ function onState(s) {
   map.stepMs = s.stepMs ?? app.tickMs;
   app.ticked = Boolean(ticked);
   for (const n of s.news ?? []) app.newsLog.set(n.id, n);
+  for (const m of s.you?.inbox ?? []) frontNews(m, s.me);
   if (app.newsLog.size > 1500) for (const k of [...app.newsLog.keys()].slice(0, app.newsLog.size - 1500)) app.newsLog.delete(k);
   app.state = s;
   if (s.phase === 'over' || s.over) {
@@ -340,7 +341,14 @@ function onLive(m) {
   });
 }
 
+// Reports from the front (and anything else about war) also run in the News section, beside the world news
+function frontNews(m, me) {
+  if (!(m.front || m.kind === 'war' || m.kind === 'nuclear') || app.newsLog.has(m.id)) return;
+  app.newsLog.set(m.id, { id: m.id, w: m.w, text: m.text, kind: m.kind === 'nuclear' ? 'nuclear' : 'war', about: [me], ours: m.kind, region: m.region });
+}
+
 function onAlert(item) {
+  if (app.state) frontNews(item, app.state.me);
   const kind = item.kind === 'war' ? 'war' : item.kind;
   const go = item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : null;
   toast(item.text, kind, go);

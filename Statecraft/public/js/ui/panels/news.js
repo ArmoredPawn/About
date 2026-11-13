@@ -1,5 +1,6 @@
 // The news: everything the world has seen happen, newest first, and everything about one country. Secret
-// moves (hidden pacts, weapons quietly built) never appear here; your own briefings do, under Briefings.
+// moves (hidden pacts, weapons quietly built) never appear here. Our own reports from the front run here too,
+// and all briefings are under Briefings.
 
 import { h, flag, nationName } from '../dom.js';
 
@@ -39,12 +40,16 @@ function world(ctx) {
     h('div.list', { style: { marginTop: '10px' } }, items.length ? items.slice(0, 200).map((n) => item(ctx, n)) : [h('div.empty', 'Nothing yet.')]));
 }
 
+// Our own reports from the front: how each attack and defence is going
+const OURS = { good: ['Our front', 'good'], bad: ['Our front', 'bad'], warn: ['Our front', 'warn'], war: ['Our front', 'bad'], nuclear: ['Nuclear', 'bad'] };
+
 function item(ctx, n) {
   const s = ctx.state;
-  return h('div.item',
-    h('div.item-head', h('span.chip', { class: KINDS[n.kind] ?? '' }, LABELS[n.kind] ?? n.kind), h('span.muted.small', { style: { marginLeft: 'auto' } }, `week ${n.w}`)),
+  const [label, tone] = n.ours ? (OURS[n.ours] ?? ['Our front', '']) : [LABELS[n.kind] ?? n.kind, KINDS[n.kind] ?? ''];
+  return h('div.item', { class: n.region ? 'clickable' : '', onclick: n.region ? () => ctx.openRegion(n.region, true) : null },
+    h('div.item-head', h('span.chip', { class: tone }, label), h('span.muted.small', { style: { marginLeft: 'auto' } }, `week ${n.w}`)),
     h('div.meta', { style: { color: 'var(--ink)' } }, n.text),
-    n.about?.length ? h('div.row.wrap.gap', { style: { marginTop: '6px' } }, [...new Set(n.about)].filter((id) => s.countries[id] || s.minors[id]).map((id) => h('button.chip', { style: { cursor: 'pointer' }, onclick: () => { ctx.ui.newsCountry = id; ctx.rerender(); } }, flag(id), nationName(s, id)))) : null);
+    n.about?.length && !n.ours ? h('div.row.wrap.gap', { style: { marginTop: '6px' } }, [...new Set(n.about)].filter((id) => s.countries[id] || s.minors[id]).map((id) => h('button.chip', { style: { cursor: 'pointer' }, onclick: (e) => { e.stopPropagation(); ctx.ui.newsCountry = id; ctx.rerender(); } }, flag(id), nationName(s, id)))) : null);
 }
 
 function briefings(ctx) {

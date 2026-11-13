@@ -1,6 +1,6 @@
 // One game: the state plus the weekly tick, commands and what each leader is allowed to see.
 
-import { ORDER, GEO } from './data/geo.js';
+import { ORDER } from './data/geo.js';
 import { RESOURCES } from './data/regions.js';
 import { createState } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news } from './core.js';
@@ -110,24 +110,13 @@ export class Game {
   }
 }
 
-// The armies a leader can see: their own and their allies' in full, foreign ones near their land (or known
-// through spies) in rough figures
+// Every army is on everyone's map: their own and their allies' in full, everyone else's (unless spies
+// have the details) in rough figures
 function armiesFor(s, cid) {
   const me = s.countries[cid] ?? null;
   const knows = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
   const friend = (id) => id === cid || (me && allied(s, cid, id));
-  const watched = new Set();
-  if (me) {
-    for (const reg of Object.values(s.regions)) {
-      if (reg.ctrl !== cid && !allied(s, reg.ctrl, cid)) continue;
-      watched.add(reg.id);
-      for (const id of GEO[reg.id].adj) watched.add(id);
-    }
-  }
-  const sees = (a) => !me || friend(a.owner) || knows(a.owner)
-    || (a.attacking && s.regions[a.attacking]?.ctrl === cid)
-    || (a.sea ? s.regions[a.sea.to]?.ctrl === cid && a.sea.left <= 1 : watched.has(a.region));
-  return Object.values(s.armies).filter(sees).map((a) => {
+  return Object.values(s.armies).map((a) => {
     const own = friend(a.owner) || knows(a.owner);
     return own
       ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true }

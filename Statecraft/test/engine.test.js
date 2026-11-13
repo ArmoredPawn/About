@@ -110,16 +110,12 @@ test('a view never leaks another leader\'s secrets', () => {
   const v = g.view('usa');
   assert.equal(v.countries.chn.treasury, null);
   assert.equal(v.countries.chn.stability, null);
-  // Fog of war: an army far from American soil is invisible without spies
-  assert.equal(v.armies.find((a) => a.owner === 'chn'), undefined);
+  // Every army is on the map, but without spies only roughly and without its plans
+  const seen = v.armies.find((a) => a.owner === 'chn');
+  assert.equal(seen.exact, false);
+  assert.equal(seen.path, undefined);
+  assert.equal(seen.status, undefined);
   assert.equal(v.you.id, 'usa');
-  // A neighbour sees it roughly, but not its plans
-  const near = GEO['chn-fj'].adj.map((id) => g.s.regions[id].ctrl).find((h) => h !== 'chn' && g.s.countries[h]);
-  if (near) {
-    const seen = g.view(near).armies.find((a) => a.owner === 'chn');
-    assert.equal(seen.exact, false);
-    assert.equal(seen.path, undefined);
-  }
   // A spy network deep enough inside shows it exactly
   g.s.countries.usa.intel.chn = g.s.week + 5;
   assert.equal(g.view('usa').armies.find((a) => a.owner === 'chn').exact, true);
@@ -365,4 +361,24 @@ test('declaring war costs no money, even after making the case for it', () => {
   assert.equal(g.command('usa', { type: 'warCase', target: 'mex' }), null);
   assert.equal(g.command('usa', { type: 'war', target: 'mex', goal: 'conquest' }), null);
   assert.equal(c.treasury, 0);
+});
+
+test('every army is on every map, and a failing attack is explained in the news', () => {
+  const g = game(41, 'ind');
+  g.setLeader('fra', 'Watcher');
+  const s = g.s;
+  g.command('pak', { type: 'armyCreate', region: 'pak-kr', troops: 150, tanks: 100 });
+  const seen = g.view('fra').armies.find((a) => a.owner === 'pak');
+  assert.ok(seen, 'a far-away country sees the army');
+  assert.equal(seen.exact, false, 'in rough figures');
+  g.command('ind', { type: 'armyCreate', region: 'ind-gj', troops: 60, tanks: 50 });
+  const a = Object.values(s.armies).find((x) => x.owner === 'ind');
+  assert.equal(g.command('ind', { type: 'armyOrder', id: a.id, kind: 'go', target: 'pak-kr', declare: true }), null);
+  s.fresh = [];
+  for (let i = 0; i < 9; i++) g.step(1 / 9);
+  assert.match(a.status, /Thrown back at Karachi/);
+  assert.ok(s.fresh.some((f) => f.type === 'news' && /throws back India's attack on Karachi/.test(f.text)), 'world news');
+  const report = s.countries.ind.inbox.find((m) => /being thrown back/.test(m.text));
+  assert.ok(report?.front, 'a front report for the attacker');
+  assert.match(report.text, /Pakistan's .* \(~\d+K\)/, 'naming the army in the way');
 });
