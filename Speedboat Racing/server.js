@@ -26,6 +26,13 @@ const server = http.createServer(async (req, res) => {
     let reqPath = decodeURIComponent(url.pathname);
     if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
+    // For Render's health check, and for pages elsewhere waking a sleeping server
+    if (reqPath === '/healthz') {
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+      res.end('ok');
+      return;
+    }
+
     if (reqPath === '/vendor/three.module.js') {
       try {
         const threePath = path.join(ROOT, 'node_modules', 'three', 'build', 'three.module.js');

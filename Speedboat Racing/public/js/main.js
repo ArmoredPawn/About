@@ -110,7 +110,7 @@ class App {
     document.getElementById('btn-create-room').addEventListener('click', async () => {
       sounds.ensureContext();
       this.isSinglePlayer = false;
-      await this.network.connect();
+      if (!(await this.network.connect()) && !this.network.useBroadcastFallback) return;
       this.network.createRoom(
         this.playerProfile.name,
         this.playerProfile.color,
@@ -134,7 +134,7 @@ class App {
       }
       sounds.ensureContext();
       this.isSinglePlayer = false;
-      await this.network.connect();
+      if (!(await this.network.connect()) && !this.network.useBroadcastFallback) return;
       this.network.joinRoom(
         code,
         this.playerProfile.name,
@@ -315,7 +315,7 @@ class App {
     }
   }
 
-  showToast(message) {
+  showToast(message, ms = 2500) {
     const toast = document.createElement('div');
     toast.style.position = 'fixed';
     toast.style.bottom = '24px';
@@ -330,7 +330,7 @@ class App {
     toast.style.boxShadow = '0 6px 20px rgba(0, 245, 212, 0.4)';
     toast.textContent = message;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2500);
+    setTimeout(() => toast.remove(), ms);
   }
 
   initNetworkCallbacks() {
@@ -384,6 +384,10 @@ class App {
 
     this.network.onError = (message) => {
       alert(message);
+    };
+
+    this.network.onWaking = () => {
+      this.showToast('Waking up the multiplayer server… this can take up to a minute.', 12000);
     };
   }
 

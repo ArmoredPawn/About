@@ -1,4 +1,25 @@
 // Multiplayer Network Client for Hydro Rush
+import { SERVER_URL } from './config.js';
+
+const isLocalPage = () => !location.host || location.protocol === 'file:'
+  || /^(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(location.hostname);
+
+// A separate multiplayer server, for pages on a static host
+function usesRemoteServer() {
+  return Boolean(SERVER_URL) && !isLocalPage() && new URL(SERVER_URL).origin !== location.origin;
+}
+
+function serverAddress() {
+  if (usesRemoteServer()) return new URL(SERVER_URL).origin;
+  if (!location.host || location.protocol === 'file:') return 'http://localhost:3000';
+  return location.origin;
+}
+
+// Pokes a sleeping server over plain HTTP so it starts waking up
+function wake() {
+  fetch(`${serverAddress()}/healthz`, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+}
+
 export class NetworkClient {
   constructor() {
     this.ws = null;
@@ -22,10 +43,14 @@ export class NetworkClient {
     this.onRoomReset = () => {};
     this.onChat = () => {};
     this.onError = () => {};
+    this.onWaking = () => {};
 
     // Throttle boat state updates (30Hz)
     this.lastSyncTime = 0;
     this.syncInterval = 1000 / 30;
+
+    // Start waking the multiplayer server as soon as the page opens, so it is ready by the time anyone clicks
+    if (usesRemoteServer()) wake();
 
     // Check BroadcastChannel support
     if (typeof BroadcastChannel !== 'undefined') {
@@ -34,63 +59,72 @@ export class NetworkClient {
     }
   }
 
+  // Opens the connection. With a separate multiplayer server (SERVER_URL), which sleeps when idle on Render's
+  // free plan, keeps trying for up to 90 seconds while it wakes instead of falling back to tabs-only play.
   connect(customUrl = null) {
+    if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve(true);
+    if (!this.connecting) this.connecting = this.#connect(customUrl).finally(() => { this.connecting = null; });
+    return this.connecting;
+  }
+
+  async #connect(customUrl) {
+    const base = customUrl || serverAddress();
+    const wsUrl = base.replace(/^http/, 'ws');
+    if (customUrl || !usesRemoteServer()) {
+      if (await this.#open(wsUrl, 2500)) return true;
+      // No server: rooms work between tabs of this browser only
+      this.useBroadcastFallback = true;
+      this.onConnected(false);
+      return false;
+    }
+    const deadline = Date.now() + 90000;
+    let told = false;
+    wake();
+    while (Date.now() < deadline) {
+      if (await this.#open(wsUrl, 5000)) return true;
+      if (!told) { told = true; this.onWaking(); }
+      wake();
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    this.onConnected(false);
+    this.onError('Could not reach the multiplayer server. It may still be starting up: try again in a minute, or race solo.');
+    return false;
+  }
+
+  #open(url, timeoutMs) {
     return new Promise((resolve) => {
-      let protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      let host = window.location.host;
-
-      // If launched from file:// or empty host, use default localhost:3000
-      if (!host || window.location.protocol === 'file:') {
-        host = 'localhost:3000';
-      }
-
-      const wsUrl = customUrl || `${protocol}//${host}`;
-
+      let ws;
       try {
-        this.ws = new WebSocket(wsUrl);
-
-        this.ws.onopen = () => {
-          this.connected = true;
-          this.useBroadcastFallback = false;
-          this.onConnected(true);
-          resolve(true);
-        };
-
-        this.ws.onmessage = (event) => {
+        ws = new WebSocket(url);
+      } catch {
+        resolve(false);
+        return;
+      }
+      const timer = setTimeout(() => {
+        ws.onopen = ws.onerror = ws.onclose = null;
+        try { ws.close(); } catch { /* already closed */ }
+        resolve(false);
+      }, timeoutMs);
+      ws.onerror = () => { clearTimeout(timer); resolve(false); };
+      ws.onopen = () => {
+        clearTimeout(timer);
+        this.ws = ws;
+        this.connected = true;
+        this.useBroadcastFallback = false;
+        ws.onerror = null;
+        ws.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data);
-            this.handleMessage(data);
+            this.handleMessage(JSON.parse(event.data));
           } catch (e) {
             console.error('Network parse error:', e);
           }
         };
-
-        this.ws.onerror = () => {
-          // Fall back to BroadcastChannel for local/multi-tab play
-          if (!this.connected) {
-            this.useBroadcastFallback = true;
-            this.onConnected(false);
-            resolve(false);
-          }
+        ws.onclose = () => {
+          if (this.ws === ws) this.connected = false;
         };
-
-        this.ws.onclose = () => {
-          this.connected = false;
-        };
-
-        // Timeout fallback after 2.5s
-        setTimeout(() => {
-          if (!this.connected) {
-            this.useBroadcastFallback = true;
-            this.onConnected(false);
-            resolve(false);
-          }
-        }, 2500);
-      } catch {
-        this.useBroadcastFallback = true;
-        this.onConnected(false);
-        resolve(false);
-      }
+        this.onConnected(true);
+        resolve(true);
+      };
     });
   }
 
