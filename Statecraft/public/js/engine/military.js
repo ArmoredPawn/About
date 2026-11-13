@@ -1,14 +1,15 @@
 // War: army groups, operations, battles, supply, air and naval campaigns, missiles and nuclear weapons.
 //
-// Leaders give big orders ("take the North Caucasus oil fields", "hold the Suwałki Gap", "land on Taiwan").
-// Each army's general handles the rest every week: the route, when to attack and when to regroup.
+// Leaders point at the map ("go to the North Caucasus oil fields") and the army goes at once: marching through
+// friendly ground, fighting through enemy ground, landing from the sea. Fronts move both ways: an attack that is
+// thrown back invites a counter-attack. Computer-run generals still pick their moment and regroup.
 
 import { GEO } from './data/geo.js';
 import { TERRAIN } from './data/regions.js';
 import { REGION_NAMES, MINOR_TERRAIN, MINOR_QUALITY } from './names.js';
 import {
   clamp, rand, chance, pick, news, alert, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
-  onSameSide, addRel, nextId, troopsLabel, alive, money,
+  onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted,
 } from './core.js';
 import { navalPower } from './economy.js';
 import { PROVINCES } from './data/regions.js';
@@ -38,7 +39,7 @@ export const regionName = (id) => REGION_NAMES[id] ?? id;
 
 const quality = (s, id) => (s.countries[id] ? 0.6 + 0.08 * s.countries[id].tech.army : MINOR_QUALITY[id] ?? 0.5);
 // Big provinces take longer to overrun: there is more ground to cross and hold
-const depth = (id) => clamp(Math.sqrt((GEO[id]?.area ?? 1500) / 1500), 0.7, 3.5);
+const depth = (id) => clamp(Math.sqrt((GEO[id]?.area ?? 1500) / 1500), 0.7, 2.2);
 const airQuality = (c) => 0.6 + 0.08 * c.tech.air;
 
 export function distanceKm(a, b) {
@@ -278,7 +279,8 @@ export function landingProblem(s, c, from, target) {
 }
 
 // Works out an order without carrying it out: { error } or the new operation
-function planOrder(s, c, army, { kind, target, aggr = 'balanced' }) {
+// (`through` is set internally when the way to a friendly province leads through enemy ground)
+function planOrder(s, c, army, { kind, target, aggr = 'balanced', through = false }) {
   if (!army || army.owner !== c.id) return { error: 'That army is not yours.' };
   if (!s.regions[target]) return { error: 'Pick a province on the map.' };
   if (!AGGRESSION[aggr]) aggr = 'balanced';
@@ -289,9 +291,25 @@ function planOrder(s, c, army, { kind, target, aggr = 'balanced' }) {
     if (!path) return { error: noRouteReason(s, c.id, army.region, target) };
     return { op: { kind, target, aggr }, path, status: path.length ? `Moving to hold ${regionName(target)}` : `Holding ${regionName(target)}` };
   }
+  if (kind === 'go') {
+    // Wherever the leader points: march through friendly ground if we can, fight through if we must,
+    // and go by sea when there is no way over land
+    const holder = s.regions[target].ctrl;
+    if (friendlyGround(s, c.id, holder)) {
+      const walk = planOrder(s, c, army, { kind: 'hold', target, aggr });
+      if (!walk.error) return walk;
+      const fight = planOrder(s, c, army, { kind: 'attack', target, aggr, through: true });
+      return fight.error ? walk : { ...fight, status: `Fighting through to ${regionName(target)}` };
+    }
+    if (!atWar(s, c.id, holder)) return { error: `You are not at war with ${nameOf(s, holder)}. Declare war first.` };
+    const land = planOrder(s, c, army, { kind: 'attack', target, aggr });
+    if (!land.error) return land;
+    const sea = planOrder(s, c, army, { kind: 'invade', target, aggr });
+    return sea.error ? land : sea;
+  }
   if (kind === 'attack' || kind === 'invade') {
     const holder = s.regions[target].ctrl;
-    if (!atWar(s, c.id, holder)) return { error: `You are not at war with ${nameOf(s, holder)}. Declare war first.` };
+    if (!atWar(s, c.id, holder) && !(through && friendlyGround(s, c.id, holder))) return { error: `You are not at war with ${nameOf(s, holder)}. Declare war first.` };
   }
   if (kind === 'attack') {
     const path = route(s, c.id, army.region, target, { offensive: true, maneuver });
@@ -310,7 +328,8 @@ function planOrder(s, c, army, { kind, target, aggr = 'balanced' }) {
 // Checks an attack as if war were already declared, so a leader can declare war and attack in one step
 export function checkOrder(s, c, army, order) {
   const holder = s.regions[order.target]?.ctrl;
-  const world = holder && order.kind !== 'hold' ? hypotheticalWar(s, c.id, holder) : s;
+  const peaceful = order.kind === 'hold' || holder === c.id || (order.kind === 'go' && friendlyGround(s, c.id, holder));
+  const world = holder && !peaceful ? hypotheticalWar(s, c.id, holder) : s;
   return planOrder(world, c, army, order).error ?? null;
 }
 
@@ -516,7 +535,11 @@ export function militaryTick(s) {
       continue;
     }
     const recover = a.gen.trait === 'logistician' ? 12 : 8;
-    let budget = 1;
+    // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
+    if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
+      a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver: a.gen.trait === 'maneuver' }) ?? [];
+    }
+    let budget = 2;
     while (a.path.length && budget > 0) {
       const next = a.path[0];
       const holder = s.regions[next].ctrl;
@@ -529,11 +552,15 @@ export function militaryTick(s) {
         continue;
       }
       if (atWar(s, a.owner, holder) && a.op.kind === 'attack') {
-        const odds = armyAttackEstimate(s, a, next) / Math.max(1, defenceEstimate(s, next, gar));
-        if (a.org < 25) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; a.regrouping = true; break; }
-        if (a.regrouping && a.org < 60) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; break; }
+        // A leader's order is carried out at once. Only computer-run generals pause to regroup or wait for odds.
+        if (!c.human) {
+          const odds = armyAttackEstimate(s, a, next) / Math.max(1, defenceEstimate(s, next, gar));
+          if (a.org < 20) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; a.regrouping = true; break; }
+          if (a.regrouping && a.org < 45) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; break; }
+          a.regrouping = false;
+          if (odds < AGGRESSION[a.op.aggr].attackAt) { a.status = `Waiting for better odds at ${regionName(next)} (${odds.toFixed(1)}:1)`; break; }
+        }
         a.regrouping = false;
-        if (odds < AGGRESSION[a.op.aggr].attackAt) { a.status = `Waiting for better odds at ${regionName(next)} (${odds.toFixed(1)}:1)`; break; }
         a.attacking = next;
         addFight(fights, next, a);
         a.status = `Attacking ${regionName(next)}`;
@@ -554,7 +581,7 @@ export function militaryTick(s) {
       }
       if (a.op.kind === 'hold' || a.region === a.op.target) a.status = `Holding ${regionName(a.region)}`;
     }
-    if (!a.attacking) a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply);
+    a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply * (a.attacking ? 0.4 : 1));
     if (a.supply < 0.5) {
       a.troops *= 0.99;
       a.org = Math.max(0, a.org - 5);
@@ -568,7 +595,7 @@ export function militaryTick(s) {
     battled.add(regionId);
   }
   for (const reg of Object.values(s.regions)) {
-    if (reg.battle && !battled.has(reg.id)) {
+    if (reg.battle && !battled.has(reg.id) && reg.battle.pushed !== s.week) {
       reg.battle.prog -= 20;
       if (reg.battle.prog <= 0) reg.battle = null;
     }
@@ -635,8 +662,11 @@ function battle(s, regionId, attackers, gar) {
     }
   }
   const ratio = attack / defence;
-  const step = (ratio >= 1 ? Math.min(45, 10 + 20 * (ratio - 1)) : -12 * (1 - ratio)) / depth(regionId);
+  // The front moves fast: an even fight still gains ground slowly, a strong attack breaks through in a week or two
+  const step = (ratio >= 1 ? Math.min(100, 25 + 45 * (ratio - 1)) : ratio >= 0.8 ? 8 * (ratio - 0.8) / 0.2 : -30 * (0.8 - ratio) / 0.8) / depth(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step, 0, 100);
+  // Beaten back with nothing gained, the defenders counter-attack into the ground the attack came from
+  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / (terrain.defend * (1 + 0.15 * reg.fort)), gar);
 
   // Losses
   let attackLoss = 0;
@@ -646,7 +676,7 @@ function battle(s, regionId, attackers, gar) {
     const lost = a.troops * rate;
     a.troops -= lost;
     a.tanks *= 1 - rate * 1.4;
-    a.org = Math.max(0, a.org - (a.op.aggr === 'allout' ? 14 : 10));
+    a.org = Math.max(0, a.org - (a.op.aggr === 'allout' ? 8 : 6));
     attackLoss += lost;
   }
   const defRate = 0.016 * clamp(ratio, 0.35, 2.5);
@@ -685,6 +715,22 @@ function battle(s, regionId, attackers, gar) {
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
 }
 
+// The defenders of `from` push into `back`, the province an attack on them came from. Held long enough, it
+// falls: the front line moves the other way.
+// `strength` is what held the attack off; it has to beat whatever guards the ground behind the attackers.
+function counterAttack(s, backId, by, from, strength, gar) {
+  const back = s.regions[backId];
+  if (!back || !atWar(s, by, back.ctrl)) return;
+  const odds = (strength * 0.6) / Math.max(1, defenceEstimate(s, backId, gar));
+  if (odds < 1) return;
+  const push = Math.min(60, 15 + 30 * (odds - 1)) / depth(backId);
+  if (!(back.battle && back.battle.by === by)) back.battle = { by, prog: 0, weeks: 0, from };
+  back.battle.prog = clamp(back.battle.prog + push, 0, 100);
+  back.battle.weeks += 1;
+  back.battle.pushed = s.week;
+  if (back.battle.prog >= 100) capture(s, backId, by, []);
+}
+
 // Soldiers killed (in thousands) come off their home population: about a third of losses are dead, the rest
 // wounded or captured
 export function bury(s, id, lossK) {
@@ -703,7 +749,8 @@ function record(s, id, lossK) {
   const c = s.countries[id];
   if (!c) return;
   c.losses += lossK;
-  c.warWeariness += (lossK / Math.sqrt(Math.max(1, c.pop))) * 3;
+  // People who believe in the war bear its losses longer
+  c.warWeariness += (lossK / Math.sqrt(Math.max(1, c.pop))) * 3 * (warsAccepted(s, id) ? 0.6 : 1);
 }
 
 function destroyArmy(s, a, how) {

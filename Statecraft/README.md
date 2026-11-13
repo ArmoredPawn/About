@@ -17,8 +17,9 @@ every few seconds, armies glide across the map and front lines creep through con
   for other leaders. Every cargo sails through the real straits or goes overland, and can be seized or sunk on the
   way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes;
   patrol one with your navy to escort friends or stop everyone else.
-- **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then press Attack
-  (or select an army and right-click a province) and choose a ground offensive or a landing. If it can't go ahead, a
+- **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then click it and
+  click anywhere on the map: it goes at once, fighting through enemy ground or landing from the sea. Fronts move both
+  ways. Make the case for war to the nation first and the public takes it far better. If an order can't go ahead, a
   bar at the bottom of the map says why. Armies cross other countries only with military access. Generals pick the
   route and fight; wars far from home need money, factories and troops to guard the supply lines; the dead come off
   the population. Each province shows its ground (forests, passes, marshes); ground thought impassable, like the

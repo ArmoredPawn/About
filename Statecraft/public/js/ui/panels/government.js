@@ -1,7 +1,7 @@
 // Government: the system you run, conscription, the security forces and the press, protests and uprisings,
 // and the measures of the home front.
 
-import { h, money, pct, regionName, troops, bar, tone } from '../dom.js';
+import { h, money, pct, regionName, troops, bar, tone, nationName } from '../dom.js';
 import { CONSCRIPTION, SECURITY, PRESS, CAUSES } from '../../engine/government.js';
 import { confirmBox, modal, selectField } from '../dialogs.js';
 import { myArmies } from './military.js';
@@ -145,9 +145,24 @@ function homeFront(ctx) {
   const me = ctx.state.you;
   const row = (title, text, button) => h('div.item', h('div.item-head', h('span.name', title), button), h('div.meta', text));
   const toggle = (on, cmd, danger) => h('button.btn.small', { class: on ? (danger ? 'danger' : 'primary') : '', onclick: () => ctx.send(cmd(!on)) }, on ? 'On' : 'Off');
-  const wait = (me.cooldown.propaganda ?? -1) - ctx.state.week;
+  const s = ctx.state;
+  const wait = (me.cooldown.propaganda ?? -1) - s.week;
+  const caseWait = (me.cooldown.warCase ?? -1) - s.week;
+  const cases = Object.entries(me.warCases ?? {}).filter(([, until]) => until >= s.week);
+  // Rivals worth making a case against: anyone we're not allied to or already fighting
+  const atWarWith = (x) => s.wars.some((w) => (w.a === s.me && w.b === x) || (w.b === s.me && w.a === x));
+  const allies = (x) => s.alliances.some((al) => al.kind === 'military' && al.members.includes(x) && al.members.includes(s.me));
+  const rivals = [...Object.keys(s.countries).filter((x) => !s.countries[x].exile), ...Object.keys(s.minors).filter((x) => !s.minors[x].annexed && !s.minors[x].capitulated && s.minors[x].puppetOf !== s.me)]
+    .filter((x) => x !== s.me && !atWarWith(x) && !allies(x))
+    .sort((a, b) => (s.rel[a] ?? 0) - (s.rel[b] ?? 0));
+  const pickRival = h('select', { style: { maxWidth: '170px' } }, rivals.map((x) => h('option', { value: x }, nationName(s, x))));
   return h('div.list',
     row('Address the nation', 'A national address and media blitz: a short boost to approval.', h('button.btn.small', { disabled: wait > 0, onclick: () => ctx.send({ type: 'propaganda' }) }, wait > 0 ? `ready in ${wait} wk` : 'Launch')),
+    h('div.item',
+      h('div.item-head', h('span.name', 'Make the case for war'),
+        h('div.row.gap', pickRival, h('button.btn.small', { disabled: caseWait > 0 || !rivals.length, onclick: () => ctx.send({ type: 'warCase', target: pickRival.value }) }, caseWait > 0 ? `ready in ${caseWait} wk` : 'Address'))),
+      h('div.meta', 'A televised address explaining why a war with them is necessary. For six months, a war you start on them meets far less public outcry and fewer anti-war protests, and costs less standing abroad. They will hear about it.'),
+      cases.length ? h('div.meta.good', `Case made against: ${cases.map(([x, until]) => `${nationName(s, x)} (${until - s.week} wk left)`).join(', ')}`) : null),
     row('Martial law', 'Troops on the streets: stability up, approval and world standing down.', toggle(me.martial, (on) => ({ type: 'martial', on }), true)),
     me.gov !== 'autocracy' ? row('Snap election', `Go to the polls in four weeks while you are popular. Approval is ${Math.round(me.approval)}%.`,
       h('button.btn.small', { onclick: async () => { if (await confirmBox('Call a snap election?', `An election will be held in four weeks. Approval is ${Math.round(me.approval)}%.`)) ctx.send({ type: 'snapElection' }); } }, 'Call it')) : null,

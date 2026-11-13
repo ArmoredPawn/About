@@ -635,6 +635,7 @@ export class WorldMap {
       const armyEl = d.target.closest?.('[data-army]');
       const id = d.target.dataset?.id;
       if (this.targeting) {
+        if (armyEl && this.targeting.onArmy?.(armyEl.dataset.army)) return;
         if (id && (!this.targeting.filter || this.targeting.filter(id))) this.targeting.onPick(id);
         else if (id) this.targeting.onReject?.(id);
         return;

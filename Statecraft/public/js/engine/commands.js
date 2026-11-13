@@ -4,7 +4,7 @@
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
-import { clamp, news, alert, alive, nameOf, money, nextId, atWar } from './core.js';
+import { clamp, news, alert, alive, nameOf, money, nextId, atWar, friendlyGround } from './core.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor } from './economy.js';
 import {
   createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setBlockade,
@@ -15,7 +15,7 @@ import {
   annex, setChokepoint, proposeResolution, vote,
 } from './diplomacy.js';
 import { covertOp } from './events.js';
-import { setConscription, setSecurity, setPress, handleProtest, handleUprising } from './government.js';
+import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
 import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, setPatrol } from './trade.js';
 import { plant, recall, setCounterIntel, sweep } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
@@ -226,11 +226,15 @@ const HANDLERS = {
   armyCreate(s, c, cmd) { return createArmy(s, c, cmd); },
   // With declare, an attack on a country we're not at war with declares war first (leaving shared alliances),
   // but only once the attack itself is known to be possible
+  // kind 'go' sends the army to the province whatever it takes: marching through friendly ground, fighting
+  // through enemy ground, or landing from the sea
   armyOrder(s, c, { id, ids, kind, target, aggr, declare }) {
     const list = (ids ?? [id]).map((x) => s.armies[x]);
     if (!list.length || list.some((a) => !a)) return 'Pick an army.';
     const holder = s.regions[target]?.ctrl;
-    if (declare && (kind === 'attack' || kind === 'invade') && holder && holder !== c.id && !atWar(s, c.id, holder)) {
+    if (declare && ['attack', 'invade', 'go'].includes(kind) && holder && holder !== c.id && !atWar(s, c.id, holder)
+      // "go" to an ally's or partner's province just marches there; an explicit attack on them is war
+      && !(kind === 'go' && friendlyGround(s, c.id, holder))) {
       for (const a of list) {
         const err = checkOrder(s, c, a, { kind, target, aggr });
         if (err) return list.length > 1 ? `${a.name}: ${err}` : err;
@@ -294,6 +298,7 @@ const HANDLERS = {
   conscription(s, c, { level }) { return setConscription(s, c, level); },
   security(s, c, { level }) { return setSecurity(s, c, level); },
   press(s, c, { level }) { return setPress(s, c, level); },
+  warCase(s, c, { target }) { return makeWarCase(s, c, target); },
   protest(s, c, { id, action }) { return handleProtest(s, c, id, action); },
   uprising(s, c, { region, action }) { return handleUprising(s, c, region, action); },
 

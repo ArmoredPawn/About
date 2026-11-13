@@ -23,7 +23,7 @@ import { RESOURCES, RESOURCE_INFO } from './engine/data/regions.js';
 import { GEO } from './engine/data/geo.js';
 import { route } from './engine/military.js';
 import { fauxState } from './ui/map.js';
-import { attackDialog, attackOptions, canAttackWith, attackBlocker } from './ui/attack.js';
+import { sendArmy, canGo, goBlocker, goPath } from './ui/attack.js';
 
 const NAME_KEY = 'statecraft.name';
 const TABS = [
@@ -97,55 +97,40 @@ const ctx = {
     const near = anchor ? ids.filter((rid) => Math.hypot(GEO[rid].x - anchor.x, GEO[rid].y - anchor.y) < 180) : ids;
     map.focus(near.length ? near : [id]);
   },
+  // Selecting one of our armies puts the map straight into "send it" mode: click anywhere and it goes there
   selectArmy(id, focus) {
     const a = app.state.armies.find((x) => x.id === id);
     if (!a) return;
+    ctx.endTarget();
     app.selection = { army: id };
     map.selectArmy(id);
     map.select(null);
     showArmy(ctx, id);
     if (focus) map.focus([a.sea?.to ?? a.region]);
+    if (a.owner === app.state.me && !a.sea) ctx.orderArmy(a, { keep: true });
   },
   closeSelection,
-  orderArmy(army, kind) {
-    const s = app.state;
-    if (kind === 'attack' || kind === 'invade') {
-      ctx.target({
-        text: `Attack: click the province ${army.name} should attack`,
-        from: army.region, kind: 'attack',
-        filter: (id) => canAttackWith(ctx, army, id),
-        reason: (id) => attackBlocker(ctx, army, id),
-        onReject: (id) => hint(attackBlocker(ctx, army, id) ?? `${army.name} can't attack ${regionName(id)}.`, 'bad', 7000),
-        path: (id) => { const o = attackOptions(ctx, army, id); return o.path ?? (o.sea ? [id] : null); },
-        onPick: (id) => { ctx.endTarget(); attackDialog(ctx, { army, target: id }); },
-      });
-      return;
-    }
-    const verbs = { attack: 'Attack', hold: 'Hold or move', invade: 'Amphibious landing' };
-    const filter = (id) => {
-      const ctrl = s.regions[INDEX[id]][1];
-      const enemy = s.wars.some((w) => (w.a === s.me && w.b === ctrl) || (w.b === s.me && w.a === ctrl));
-      if (kind === 'hold') return Boolean(route(fauxState(s), s.me, army.region, id, { offensive: false }));
-      if (kind === 'invade') return enemy && GEO[id].coast;
-      return enemy && Boolean(route(fauxState(s), s.me, army.region, id, { offensive: true }));
-    };
-    let aggr = 'balanced';
-    const seg = kind === 'hold' ? null : h('div.seg', { style: { minWidth: '210px' } }, [['cautious', 'Cautious'], ['balanced', 'Balanced'], ['allout', 'All-out']].map(([k, l]) => {
-      const b = h('button', { 'aria-pressed': String(k === aggr), onclick: () => { aggr = k; for (const x of seg.children) x.setAttribute('aria-pressed', String(x === b)); } }, l);
-      return b;
-    }));
-    const why = (id) => (kind === 'hold' ? `${army.name} can't reach ${regionName(id)} through friendly ground. Ask for military access, or attack instead.` : `${regionName(id)} isn't a valid target.`);
+  orderArmy(army, { keep = false } = {}) {
+    // The army keeps moving while the leader chooses: always work from where it is now
+    const live = () => app.state.armies.find((x) => x.id === army.id) ?? army;
     ctx.target({
-      text: `${verbs[kind]}: pick a target for ${army.name}`,
-      extra: seg,
-      from: army.region, kind, filter,
-      reason: why,
-      onReject: (id) => hint(why(id), 'bad'),
-      onPick: async (id) => {
-        ctx.endTarget();
-        const err = await ctx.send({ type: 'armyOrder', id: army.id, kind, target: id, aggr });
-        if (!err) toast(`${army.name}: ${verbs[kind].toLowerCase()} ${regionName(id)}.`, 'good');
+      keep,
+      text: `Click anywhere on the map to send ${army.name} there`,
+      get from() { return live().region; },
+      kind: 'attack',
+      filter: (id) => canGo(ctx, live(), id),
+      reason: (id) => goBlocker(ctx, live(), id),
+      onReject: (id) => sendArmy(ctx, live(), id),
+      path: (id) => goPath(ctx, live(), id),
+      // Clicking an army: one of ours selects it instead; a foreign one is a target like its province
+      onArmy: (aid) => {
+        const x = app.state.armies.find((y) => y.id === aid);
+        if (!x) return false;
+        if (x.owner === app.state.me) { if (aid !== army.id) ctx.selectArmy(aid); return true; }
+        if (!x.sea) { ctx.endTarget(); sendArmy(ctx, live(), x.region); }
+        return true;
       },
+      onPick: (id) => { ctx.endTarget(); sendArmy(ctx, live(), id); },
     });
   },
   strikeTarget(kind) {
@@ -164,7 +149,7 @@ const ctx = {
     });
   },
   target(opts) {
-    closeInspector();
+    if (!opts.keep) closeInspector();
     map.startTargeting(opts);
     $('target-bar').replaceChildren(h('span', opts.text), opts.extra ?? '', h('button.btn.small', { onclick: () => ctx.endTarget() }, 'Cancel'));
     $('target-bar').hidden = false;
@@ -182,7 +167,7 @@ const ctx = {
     renderMapTools();
   },
   toast: (text, kind, onClick) => toast(text, kind, onClick),
-  hint: (text, kind) => hint(text, kind),
+  hint: (text, kind, ms) => hint(text, kind, ms),
   newsLog: () => [...app.newsLog.values()].sort((a, b) => b.id - a.id),
   tickAge: () => (app.lastTick ? (performance.now() - app.lastTick) / app.tickMs : 0),
   chatUnread: () => ctx.chat?.unread() ?? 0,
@@ -210,23 +195,14 @@ function hint(text, kind = 'bad', ms = 6000) {
   if (ms) hintTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
-// Right-click with an army selected: attack an enemy (or foreign) province, or move to one of ours
+// Right-click with an army selected: send it there too
 function quickOrder(id) {
   const s = app.state;
   const armyId = app.selection?.army;
   const a = s?.armies.find((x) => x.id === armyId && x.owner === s.me);
-  if (!a) return hint('Select one of your armies first, then right-click where it should go.', 'info');
-  if (a.sea) return hint(`${a.name} is at sea and can't take new orders until it lands.`, 'bad');
-  const holder = s.regions[INDEX[id]][1];
-  const ours = holder === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(holder) && al.members.includes(s.me))
-    || s.minors[holder]?.puppetOf === s.me || s.treaties.some((t) => t.kind === 'access' && [t.a, t.b].includes(s.me) && [t.a, t.b].includes(holder));
-  if (ours) {
-    ctx.send({ type: 'armyOrder', id: a.id, kind: 'hold', target: id }).then((err) => { if (!err) hint(`${a.name}: moving to hold ${regionName(id)}.`, 'info', 3000); });
-    return;
-  }
-  const why = attackBlocker(ctx, a, id);
-  if (why) return hint(why, 'bad', 8000);
-  attackDialog(ctx, { army: a, target: id });
+  if (!a) return hint('Click one of your armies first, then click where it should go.', 'info');
+  ctx.endTarget();
+  sendArmy(ctx, a, id);
 }
 ctx.chat = new Chat(ctx);
 const mapReady = map.load();
@@ -475,6 +451,7 @@ function selectRegion(id) {
 }
 
 function closeSelection() {
+  if (app.selection?.army) ctx.endTarget();
   app.selection = null;
   map.select(null);
   map.selectArmy(null);

@@ -5,7 +5,7 @@ import { CHOKEPOINTS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
 import {
   P5, clamp, news, alert, nameOf, nation, isMinor, alive, atWar, allied, enemiesOf, alliancesOf, treaty, rel, addRel,
-  setRel, nextId, money, warBetween,
+  setRel, nextId, money, warBetween, warCaseMade,
 } from './core.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
@@ -39,17 +39,21 @@ export function declareWar(s, c, target, goal = 'conquest', { leaveShared = fals
 
   const nap = treaty(s, 'nap', c.id, target);
   const claim = c.claims.some((rid) => s.regions[rid]?.ctrl === target);
-  let cost = claim ? 5 : 18;
+  // A leader who has made the case to the nation goes to war with the public behind them
+  const justified = warCaseMade(s, c, target);
+  let cost = claim ? 5 : justified ? 10 : 18;
   if (nap) {
     s.treaties = s.treaties.filter((x) => x !== nap);
     cost += 25;
     news(s, `${c.name} tears up its non-aggression pact with ${t.name}.`, 'diplomacy', [c.id, target]);
   }
   c.rep = Math.max(0, c.rep - cost);
-  if (c.gov !== 'autocracy' && rel(s, c.id, target) > -50 && !claim) c.boost -= 6;
+  if (justified) c.rally += 8;
+  else if (c.gov !== 'autocracy' && rel(s, c.id, target) > -50 && !claim) c.boost -= 6;
   s.treaties = s.treaties.filter((x) => !(['fta', 'access', 'deal'].includes(x.kind) && ((x.a === c.id && x.b === target) || (x.b === c.id && x.a === target))));
   startWar(s, c.id, target, goal);
-  news(s, `${c.name} declares war on ${t.name}${claim ? ', pressing its territorial claims' : ''}.`, 'war', [c.id, target]);
+  if (justified || claim) warBetween(s, c.id, target).justified = c.id;
+  news(s, `${c.name} declares war on ${t.name}${claim ? ', pressing its territorial claims' : justified ? ' after its leader made the case to the nation' : ''}.`, 'war', [c.id, target]);
   if (s.countries[target]) {
     s.countries[target].rally += 14;
     alert(s, target, `${c.name} has declared war on us. Our people rally to the flag.`, 'war');

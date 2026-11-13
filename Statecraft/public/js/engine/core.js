@@ -76,6 +76,14 @@ export function warBetween(s, a, b) {
   return s.wars.find((w) => (w.a === a && w.b === b) || (w.a === b && w.b === a));
 }
 export const atWar = (s, a, b) => a !== b && Boolean(warBetween(s, a, b));
+// Has this leader made the case for war against `target` to the nation (an address that is still fresh)?
+export const warCaseMade = (s, c, target) => (c?.warCases?.[target] ?? -1) >= s.week;
+// Do the people accept every war this country is in? Defensive wars and wars the leader explained to them are
+// accepted; an unexplained war of choice is not.
+export function warsAccepted(s, id) {
+  const mine = s.wars.filter((w) => w.a === id || w.b === id);
+  return mine.length > 0 && mine.every((w) => w.b === id || w.goal === 'defence' || w.justified === id);
+}
 export function enemiesOf(s, id) {
   const out = new Set();
   for (const w of s.wars) {

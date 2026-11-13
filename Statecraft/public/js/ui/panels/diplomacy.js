@@ -6,6 +6,7 @@ import { TECH_FIELDS, CHOKEPOINTS } from '../../engine/data/world.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { proposalCard } from './overview.js';
 import { describeProposal } from '../describe.js';
+import { warNotice } from '../attack.js';
 
 const TARIFFS = [0, 10, 25, 50, 100];
 
@@ -154,18 +155,14 @@ function minorDossier(ctx, id, back) {
 export async function declareWar(ctx, id) {
   const s = ctx.state;
   const shared = s.alliances.filter((al) => al.members.includes(s.me) && al.members.includes(id));
-  const defenders = new Set();
-  for (const al of s.alliances) if (al.kind === 'military' && al.members.includes(id)) for (const m of al.members) if (m !== id && m !== s.me) defenders.add(m);
-  const g = s.minors[id]?.guarantor;
-  if (g && g !== s.me) defenders.add(g);
   const claim = s.you.claims.some((rid) => s.regions[ctx.regionIndex[rid]]?.[1] === id);
+  const notice = warNotice(ctx, id, shared);
   const body = h('div.stack',
     h('p', `War with ${nationName(s, id)} will cost world standing${claim ? ' (less, since you have a claim on its land)' : ''} and may bring sanctions from its friends.`),
-    shared.length ? h('div.warning.warn', `You'll leave ${shared.map((al) => al.name).join(' and ')} as you declare war. Its other members will think less of you.`) : null,
-    defenders.size ? h('div.warning.bad', `Its allies may join the war: ${[...defenders].map((d) => nationName(s, d)).join(', ')}.`) : h('div.warning.info', 'It has no allies bound to defend it.'),
-    s.treaties.some((t) => t.kind === 'nap' && ((t.a === s.me && t.b === id) || (t.b === s.me && t.a === id))) ? h('div.warning.bad', 'You have a non-aggression pact with them. Breaking it will badly damage your standing.') : null);
+    notice.el);
   if (!(await confirmBox(`Declare war on ${nationName(s, id)}?`, body, { ok: shared.length ? 'Leave & declare war' : 'Declare war', danger: true }))) return;
-  if (!(await ctx.send({ type: 'war', target: id }))) ctx.toast(`We are at war with ${nationName(s, id)}. Pick an army group and press Attack, or click one of its provinces.`, 'war');
+  if (!(await notice.justify())) return;
+  if (!(await ctx.send({ type: 'war', target: id }))) ctx.toast(`We are at war with ${nationName(s, id)}. Click one of your armies, then click where it should go.`, 'war');
 }
 
 function inviteDialog(ctx, id, alliances) {

@@ -107,7 +107,7 @@ export function showArmy(ctx, id) {
     h('h2', a.name),
     h('div.row.gap.sub', flag(a.owner), h('span', nationName(s, a.owner)), h('span.faint', a.sea ? 'at sea' : regionName(a.region))),
     h('div', { style: { marginTop: '10px' } }, a.owner === s.me ? armyCard(ctx, a, true) : foreignArmy(ctx, a)),
-    a.owner === s.me && !a.sea ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Tip: with this army selected, right-click any province to send it there: an enemy one to attack it, one of ours to move and hold.') : null,
+    a.owner === s.me && !a.sea ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Click any province to send this army there. It marches through friendly ground, fights its way through enemy ground, and goes at once: orders don\'t wait for it to regroup.') : null,
   );
   $('inspector').hidden = false;
 }

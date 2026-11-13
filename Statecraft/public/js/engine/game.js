@@ -209,7 +209,7 @@ function own(s, c) {
     'queue', 'projects', 'nukeProgram', 'intel', 'cooldown', 'claims', 'electionWeek', 'exile', 'blockades', 'airOps', 'history',
     'deficit', 'revenue', 'spending', 'interest', 'upkeep', 'ration', 'martial', 'stimulus', 'readiness', 'rally', 'windfall',
     'conscription', 'conscripts', 'security', 'press', 'protests', 'threat', 'draftDrag', 'protestDrag', 'strike', 'civilWar', 'rebels',
-    'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost',
+    'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost', 'warCases',
   ]);
   out.spies = Object.fromEntries(Object.entries(c.spies ?? {}).map(([k, n]) => [k, { agents: n.agents, since: n.since }]));
   out.reports = (c.reports ?? []).slice(-120).map(({ turned, ...r }) => r);

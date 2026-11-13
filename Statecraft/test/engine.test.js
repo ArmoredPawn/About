@@ -286,3 +286,41 @@ test('soldiers killed in battle come off the population; conquered people join t
   g.tick();
   assert.ok(g.s.countries.rus.pop > homes + ukr.pop * 0.9, 'Ukraine\'s people are counted under Russian rule');
 });
+
+test('a leader\'s order goes at once: one click sends the army, and it attacks without waiting to regroup', () => {
+  const g = game(21, 'tur');
+  g.command('tur', { type: 'armyCreate', region: 'tur-se', troops: 120, tanks: 200 });
+  const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
+  // A friendly province: it just marches
+  assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'tur-ea' }), null);
+  assert.equal(army.op.kind, 'hold');
+  // An enemy province: war is declared and it attacks, even badly disorganised
+  assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'irq-ms', declare: true }), null);
+  assert.ok(g.s.wars.some((w) => w.a === 'tur' && w.b === 'irq'), 'war declared');
+  assert.equal(army.op.kind, 'attack');
+  army.org = 5;
+  let attacked = false;
+  for (let i = 0; i < 4 && !attacked; i++) { g.tick(); attacked = Boolean(army.attacking) || g.s.regions['irq-ms'].ctrl === 'tur'; }
+  assert.ok(attacked, `attacked at once (status: ${army.status})`);
+});
+
+test('making the case to the nation first takes the edge off the outcry over a war', () => {
+  const run = (justify) => {
+    const g = game(22, 'deu');
+    const c = g.s.countries.deu;
+    if (justify) assert.equal(g.command('deu', { type: 'warCase', target: 'pol' }), null);
+    const boost = c.boost;
+    const rep = c.rep;
+    assert.equal(g.command('deu', { type: 'war', target: 'pol' }), null);
+    const war = g.s.wars.find((w) => w.a === 'deu' && w.b === 'pol');
+    for (let i = 0; i < 20; i++) g.tick();
+    const anti = (c.protests.find((p) => p.cause === 'war')?.size ?? 0);
+    return { justified: war.justified === 'deu', boostHit: boost - c.boost, repHit: rep - c.rep, anti };
+  };
+  const plain = run(false);
+  const made = run(true);
+  assert.equal(made.justified, true);
+  assert.equal(plain.justified, false);
+  assert.ok(made.anti <= plain.anti, `anti-war protests ${made.anti} vs ${plain.anti}`);
+  assert.ok(made.repHit < plain.repHit + 0.01 || made.repHit <= plain.repHit, `standing lost ${made.repHit} vs ${plain.repHit}`);
+});

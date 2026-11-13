@@ -8,7 +8,7 @@
 import { GEO } from './data/geo.js';
 import { PROVINCES } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
-import { clamp, news, alert, chance, rand, enemiesOf, nextId, rel, money, troopsLabel, alive } from './core.js';
+import { clamp, news, alert, chance, rand, enemiesOf, nextId, rel, money, troopsLabel, alive, nameOf, warsAccepted } from './core.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 const CAPITALS = Object.fromEntries(PROVINCES.filter((p) => p.capital).map((p) => [p.country, p.id]));
@@ -85,7 +85,7 @@ export function threatTo(s, c) {
   const enemies = enemiesOf(s, c.id);
   for (const w of s.wars) {
     if (w.b === c.id && w.goal !== 'defence') add(0.9, `${s.countries[w.a]?.name ?? s.minors[w.a]?.name} attacked us`);
-    else if (w.a === c.id || w.b === c.id) add(w.goal === 'defence' ? 0.7 : 0.45, `at war with ${s.countries[w.a === c.id ? w.b : w.a]?.name ?? s.minors[w.a === c.id ? w.b : w.a]?.name}`);
+    else if (w.a === c.id || w.b === c.id) add(w.goal === 'defence' ? 0.7 : w.justified === c.id ? 0.65 : 0.45, `at war with ${s.countries[w.a === c.id ? w.b : w.a]?.name ?? s.minors[w.a === c.id ? w.b : w.a]?.name}`);
   }
   let lost = 0;
   let total = 0;
@@ -164,8 +164,9 @@ function pressures(s, c) {
   p.prices = Math.max(0, c.infl - Math.max(4, b.infl + 2)) * 5;
   p.shortages = ((c.short.food ?? 0) * 120) + ((c.short.oil ?? 0) + (c.short.gas ?? 0)) * 45;
   p.jobs = Math.max(0, -(c.growth ?? 0) - 0.5) * 9;
-  const defensive = c.threat.value >= 0.7;
-  p.war = enemiesOf(s, c.id).size ? Math.min(100, c.warWeariness * 2.2 + 6) * (defensive ? 0.35 : 1) : 0;
+  // A nation under attack, or one its leader has convinced the war is necessary, protests far less
+  const accepted = c.threat.value >= 0.7 || warsAccepted(s, c.id);
+  p.war = enemiesOf(s, c.id).size ? Math.min(100, c.warWeariness * 2.2 + 6) * (accepted ? 0.35 : 1) : 0;
   const gap = CONSCRIPTION[c.conscription].level - CONSCRIPTION[c.base.conscription].level;
   p.draft = gap > 0 ? gap * 28 * (1 - c.threat.value) + (c.recentDraft ?? 0) : (c.recentDraft ?? 0);
   const harsh = SECURITY[c.security].fear - SECURITY[c.base.security].fear;
@@ -316,6 +317,32 @@ export function governmentTick(s, gar) {
 }
 
 /* ---------- Commands ---------- */
+
+export const WAR_CASE_WEEKS = 26;
+
+// A national address making the case for war on one country. For half a year a war on it is one the public
+// understands: little outcry when it starts, few anti-war protests, and a draft people accept.
+export function makeWarCase(s, c, target) {
+  if (!target || target === c.id || !(s.countries[target] || s.minors[target])) return 'Pick the country you want to make the case against.';
+  if ((c.cooldown.warCase ?? -1) > s.week) return `You addressed the nation recently. Try again in ${c.cooldown.warCase - s.week} weeks.`;
+  const cost = c.gdp * 0.0003;
+  if (cost > c.treasury) return 'Not enough money in the treasury for the campaign.';
+  c.treasury -= cost;
+  c.warCases = { ...(c.warCases ?? {}), [target]: s.week + WAR_CASE_WEEKS };
+  c.cooldown.warCase = s.week + 4;
+  c.boost += 2;
+  c.rally += 3;
+  addRelSafe(s, c.id, target, -8);
+  news(s, `${c.name}'s leader addresses the nation, laying out the case against ${nameOf(s, target)}.`, 'war', [c.id, target]);
+  alert(s, target, `${c.name}'s leader has made a televised case against us. War may be coming.`, 'warn');
+  return null;
+}
+
+function addRelSafe(s, a, b, delta) {
+  if (!s.countries[a] || !s.countries[b]) return;
+  const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+  s.rel[k] = clamp((s.rel[k] ?? 0) + delta, -100, 100);
+}
 
 export function setConscription(s, c, level) {
   initGovernment(c);

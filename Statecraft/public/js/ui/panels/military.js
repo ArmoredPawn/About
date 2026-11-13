@@ -142,7 +142,7 @@ function armies(ctx) {
   return h('div',
     h('div.item', h('div.item-head', h('span.name', 'Forces at home'), h('button.btn.small.primary', { onclick: () => formArmy(ctx) }, '＋ Draft & form army')),
       h('div.meta', `${troops(free.troops)} troops and ${num(free.tanks)} tanks garrison your provinces, with ${troops(Math.max(0, s.you.reserves))} reservists who can be drafted. Army groups are what you send to attack.`)),
-    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map((a) => armyCard(ctx, a)) : [h('div.empty', 'No army groups yet. 1) Draft & form one where you want it. 2) Press Attack and click the province to hit.')]));
+    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map((a) => armyCard(ctx, a)) : [h('div.empty', 'No army groups yet. 1) Draft & form one where you want it. 2) Click it on the map, then click where it should go.')]));
 }
 
 export function armyCard(ctx, a, compact = false) {
@@ -155,10 +155,9 @@ export function armyCard(ctx, a, compact = false) {
     h('div.meta', `${a.gen.name} · `, h('span', { title: 'Skill' }, stars), ` · ${trait?.name ?? ''}`, h('span.faint', ` (${trait?.note ?? ''})`)),
     h('div.meta', `${a.sea ? 'At sea' : regionName(a.region)} · ${num(a.tanks)} tanks · supply ${Math.round(a.supply * 100)}%`),
     h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span.muted', 'Organisation'), h('div.grow', bar(a.org, 100, a.org < 30 ? 'bad' : a.org < 60 ? 'warn' : 'good')), h('span.mono', `${a.org}%`)),
-    h('div.meta', { style: { color: 'var(--ink)' } }, a.status, a.op ? h('span.faint', ` · ${AGGRESSION[a.op.aggr]?.name ?? ''}`) : null),
+    h('div.meta', { style: { color: 'var(--ink)' } }, a.status),
     a.sea ? null : h('div.actions', { onclick: (e) => e.stopPropagation() },
-      h('button.btn.small.primary', { onclick: () => ctx.orderArmy(a, 'attack') }, 'Attack…'),
-      h('button.btn.small', { onclick: () => ctx.orderArmy(a, 'hold') }, 'Move / hold…'),
+      h('button.btn.small.primary', { onclick: () => ctx.selectArmy(a.id, true) }, 'Send…'),
       h('button.btn.small.ghost', { onclick: () => reinforce(ctx, a) }, 'Reinforce'),
       others.length ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'armyMerge', ids: [a.id, ...others.map((o) => o.id)] }) }, 'Merge here') : null,
       h('button.btn.small.ghost', { onclick: () => rename(ctx, a) }, 'Rename'),
@@ -213,7 +212,7 @@ export function formArmy(ctx, region) {
   modal({
     title: 'Draft & form an army group',
     body: h('div.stack', t.el, quick, note, k.el, where.el, h('label.field', h('span', 'Name'), name),
-      h('p.muted.small', 'A general is appointed. Next: press Attack on the army and click the province to hit.')),
+      h('p.muted.small', 'A general is appointed. Next: click the army on the map, then click where it should go.')),
     actions: [{ label: 'Cancel', kind: 'ghost' }, {
       label: 'Form army', kind: 'primary', onClick: async () => {
         const err = await ctx.send({ type: 'armyCreate', region: where.input.value, troops: Number(t.input.value), tanks: Number(k.input.value), name: name.value });
