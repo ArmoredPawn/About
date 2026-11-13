@@ -283,8 +283,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .res-icon circle { stroke: rgb(0 0 0 / 0.5); stroke-width: 0.4; }
 .map .res-icon text { fill: #0b0d14; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .map .chokepoint { pointer-events: none; }
-.map .front-line { stroke: #ffffff; stroke-width: 2; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; stroke-linecap: round; }
-.map .front-shadow { stroke: rgb(5 8 14 / 0.85); stroke-width: 4.5; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.map .front-line { fill: none; stroke: #ffffff; stroke-width: 2; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+.map .front-shadow { fill: none; stroke: rgb(5 8 14 / 0.85); stroke-width: 4.5; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
 .map .front-label { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: rgb(5 8 14 / 0.85); stroke-linejoin: round; pointer-events: none; }
 .map .enemy-edge { fill: none; stroke: #ff3b3b; stroke-width: 4; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .map .revolt { pointer-events: none; }

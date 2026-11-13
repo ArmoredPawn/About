@@ -286,6 +286,7 @@ function onMessage(msg) {
     case 'chatInit': ctx.chat.init(msg.channels); break;
     case 'channels': ctx.chat.setChannels(msg.channels); break;
     case 'chat': ctx.chat.receive(msg.msg, msg.channel); break;
+    case 'live': onLive(msg); break;
     case 'alert': onAlert(msg.item); break;
     case 'news': onNews(msg.item); break;
     case 'error':
@@ -303,6 +304,7 @@ function onState(s) {
   if (ticked || first) app.lastTick = performance.now();
   app.tickMs = SPEEDS[s.speed] ?? SPEEDS.normal;
   map.tickMs = app.tickMs;
+  map.stepMs = s.stepMs ?? app.tickMs;
   app.ticked = Boolean(ticked);
   for (const n of s.news ?? []) app.newsLog.set(n.id, n);
   if (app.newsLog.size > 1500) for (const k of [...app.newsLog.keys()].slice(0, app.newsLog.size - 1500)) app.newsLog.delete(k);
@@ -316,6 +318,26 @@ function onState(s) {
     mapReady.then(() => ctx.focusCountry(s.me));
     if (first && s.week <= 1) toast(`You lead ${s.countries[s.me].name}. Open the Cabinet for your briefing.`, 'info');
   }
+}
+
+// Every second or so: armies and battles only. Moves the map along without redrawing the panels.
+function onLive(m) {
+  const s = app.state;
+  if (!s || app.screen !== 'game' || m.week !== s.week) return;
+  s.armies = m.armies;
+  const battles = new Map(m.battles.map((b) => [b[0], b]));
+  s.regions.forEach((row, i) => {
+    const b = battles.get(i);
+    if (b) { row[5] = b[1]; row[6] = b[2]; row[12] = b[3]; } else if (row[5]) { row[5] = 0; row[6] = 0; row[12] = 0; }
+  });
+  mapReady.then(() => {
+    map.update(s, { live: true });
+    const sel = app.selection?.army;
+    if (sel) {
+      if (s.armies.some((a) => a.id === sel)) showArmy(ctx, sel);
+      else closeSelection();
+    }
+  });
 }
 
 function onAlert(item) {

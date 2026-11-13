@@ -5,7 +5,7 @@ import { RESOURCES } from './data/regions.js';
 import { createState } from './setup.js';
 import { alive, allied, nation, isMinor, dateLabel, news } from './core.js';
 import { marketTick, economyTick, debtRatio, upkeep, blockadeEffect } from './economy.js';
-import { militaryTick, garrisons } from './military.js';
+import { militaryTick, militaryStep, garrisons } from './military.js';
 import { diplomacyTick } from './diplomacy.js';
 import { aiTick, militaryPower, lostShare } from './ai.js';
 import { eventsTick } from './events.js';
@@ -36,6 +36,18 @@ export class Game {
     this.cache = null;
   }
 
+  // Many times a week: armies march and battles are fought in real time. dt is a fraction of a week; the
+  // steps never run more than a week ahead of the weekly tick.
+  step(dt) {
+    const s = this.s;
+    if (s.over) return;
+    dt = Math.min(dt, 1 - (s.stepped ?? 0));
+    if (!(dt > 0.0005)) return;
+    militaryStep(s, dt);
+    s.stepped = (s.stepped ?? 0) + dt;
+    this.cache = null;
+  }
+
   tick() {
     const s = this.s;
     if (s.over) return;
@@ -45,6 +57,9 @@ export class Game {
     const world = marketTick(s);
     economyTick(s, world);
     tradeTick(s);
+    // Whatever part of the week the real-time steps didn't cover (all of it, without a running clock)
+    militaryStep(s, Math.max(0, 1 - (s.stepped ?? 0)));
+    s.stepped = 0;
     militaryTick(s);
     governmentTick(s, garrisons(s));
     spiesTick(s);
@@ -81,6 +96,42 @@ export class Game {
   view(cid) {
     return view(this.s, cid, this.shared());
   }
+
+  // Between full updates: just the armies this leader can see and the battles, to animate the war in real time
+  live(cid) {
+    const s = this.s;
+    const battles = [];
+    ORDER.forEach((id, i) => {
+      const b = s.regions[id].battle;
+      if (b) battles.push([i, b.by, r0(b.prog), b.from ?? 0]);
+    });
+    return { type: 'live', week: s.week, armies: armiesFor(s, cid), battles };
+  }
+}
+
+// The armies a leader can see: their own and their allies' in full, foreign ones near their land (or known
+// through spies) in rough figures
+function armiesFor(s, cid) {
+  const me = s.countries[cid] ?? null;
+  const knows = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
+  const friend = (id) => id === cid || (me && allied(s, cid, id));
+  const watched = new Set();
+  if (me) {
+    for (const reg of Object.values(s.regions)) {
+      if (reg.ctrl !== cid && !allied(s, reg.ctrl, cid)) continue;
+      watched.add(reg.id);
+      for (const id of GEO[reg.id].adj) watched.add(id);
+    }
+  }
+  const sees = (a) => !me || friend(a.owner) || knows(a.owner)
+    || (a.attacking && s.regions[a.attacking]?.ctrl === cid)
+    || (a.sea ? s.regions[a.sea.to]?.ctrl === cid && a.sea.left <= 1 : watched.has(a.region));
+  return Object.values(s.armies).filter(sees).map((a) => {
+    const own = friend(a.owner) || knows(a.owner);
+    return own
+      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true }
+      : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: approx(a.troops, 5), tanks: approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false };
+  });
 }
 
 /* ---------- Rankings ---------- */
@@ -114,19 +165,6 @@ export function view(s, cid, { gar, ranks }) {
   const me = s.countries[cid] ?? null;
   const knows = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
   const friend = (id) => id === cid || (me && allied(s, cid, id));
-  // What our own forces can see: our land and the provinces next to it
-  const watched = new Set();
-  if (me) {
-    for (const reg of Object.values(s.regions)) {
-      if (reg.ctrl !== cid && !allied(s, reg.ctrl, cid)) continue;
-      watched.add(reg.id);
-      for (const id of GEO[reg.id].adj) watched.add(id);
-    }
-  }
-  const sees = (a) => !me || friend(a.owner) || knows(a.owner)
-    || (a.attacking && s.regions[a.attacking]?.ctrl === cid)
-    || (a.sea ? s.regions[a.sea.to]?.ctrl === cid && a.sea.left <= 1 : watched.has(a.region));
-
   const countries = {};
   for (const c of Object.values(s.countries)) {
     const open = knows(c.id);
@@ -168,12 +206,7 @@ export function view(s, cid, { gar, ranks }) {
     if (Object.keys(r.res).length) resources[id] = r.res;
   }
 
-  const armies = Object.values(s.armies).filter(sees).map((a) => {
-    const own = friend(a.owner) || knows(a.owner);
-    return own
-      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, sea: a.sea, status: a.status, attacking: a.attacking, exact: true }
-      : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: approx(a.troops, 5), tanks: approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false };
-  });
+  const armies = armiesFor(s, cid);
 
   const mine = (t) => t.a === cid || t.b === cid;
   return {

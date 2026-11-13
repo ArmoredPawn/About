@@ -13,6 +13,8 @@ import { alliancesOf, alive } from './core.js';
 export const MAX_PLAYERS = 20;
 export const SPEEDS = { slow: 15000, normal: 9000, fast: 5000, blitz: 2500 };
 export const POOLS = [50, 20, 10];
+// Armies march and battles are fought in steps this often (at least 8 a game week), so the war runs in real time
+export const stepMs = (speed) => Math.min(1000, (SPEEDS[speed] ?? SPEEDS.normal) / 8);
 const CHAT_KEEP = 150;
 const CARETAKER_MS = 120_000; // a disconnected leader's country is run by the computer after this
 const MAX_TEXT = 500;
@@ -171,10 +173,10 @@ export class Room {
   }
 
   #runClock() {
-    this.timers.stop?.(this.clock);
-    this.clock = null;
+    this.stopClock();
     if (this.phase !== 'playing' || this.paused) return;
     this.clock = this.timers.every(() => this.tick(), SPEEDS[this.settings.speed]);
+    this.stepper = this.timers.every(() => this.step(), stepMs(this.settings.speed));
   }
 
   tick() {
@@ -183,11 +185,23 @@ export class Room {
     this.#tickDone();
   }
 
+  // Armies move and battles progress. Anything newsworthy (a province falls, an army is destroyed) sends
+  // everyone the full picture; otherwise just the armies and battles.
+  step() {
+    if (!this.game || this.phase !== 'playing' || this.paused) return;
+    this.game.step(stepMs(this.settings.speed) / SPEEDS[this.settings.speed]);
+    if (this.game.s.fresh.length) {
+      this.#flush();
+      this.#everyone();
+      return;
+    }
+    for (const p of this.players.values()) if (p.conn) p.conn.send(this.game.live(p.cid));
+  }
+
   #tickDone() {
     if (this.game.s.over && this.phase === 'playing') {
       this.phase = 'over';
-      this.timers.stop?.(this.clock);
-      this.clock = null;
+      this.stopClock();
     }
     this.#syncAllianceChats();
     this.#flush();
@@ -372,12 +386,14 @@ export class Room {
 
   #sendState(player) {
     if (!this.game || !player.conn) return;
-    player.conn.send({ ...this.game.view(player.cid), paused: this.paused, speed: this.settings.speed, phase: this.phase });
+    player.conn.send({ ...this.game.view(player.cid), paused: this.paused, speed: this.settings.speed, stepMs: stepMs(this.settings.speed), phase: this.phase });
   }
 
   stopClock() {
     this.timers.stop?.(this.clock);
+    this.timers.stop?.(this.stepper);
     this.clock = null;
+    this.stepper = null;
   }
 }
 

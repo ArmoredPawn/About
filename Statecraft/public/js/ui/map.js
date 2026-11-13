@@ -74,9 +74,10 @@ export class WorldMap {
 
   /* ---------- Drawing ---------- */
 
-  update(state, { tick = false } = {}) {
+  // live: a real-time step (every second or so) rather than a full weekly update
+  update(state, { tick = false, live = false } = {}) {
     this.state = state;
-    this.moving = tick;
+    this.moving = tick || live;
     this.#paint();
     this.#drawEnemies();
     this.#drawLabels();
@@ -185,8 +186,8 @@ export class WorldMap {
         const clipId = `front-${id}`;
         const clip = svg('clipPath', { id: clipId }, svg('path', { d: this.d[id] }));
         const area = svg('polygon', { fill: color, opacity: 0.95 });
-        const shade = svg('line', { class: 'front-shadow' });
-        const line = svg('line', { class: 'front-line' });
+        const shade = svg('polyline', { class: 'front-shadow' });
+        const line = svg('polyline', { class: 'front-line' });
         const labelA = svg('text', { class: 'front-label' });
         const labelB = svg('text', { class: 'front-label' });
         const g = svg('g', { 'clip-path': `url(#${clipId})` }, area, shade, line);
@@ -203,10 +204,12 @@ export class WorldMap {
     }
   }
 
-  #placeFront(id, f) {
+  // The frame for a front across a province: t runs along the attack (lo = the edge it comes in from,
+  // hi = the far edge), u across it. `value` is the battle's progress, 0-100.
+  #frontFrame(id, origin, value) {
     const g = GEO[id];
-    let dx = g.x - f.origin.x;
-    let dy = g.y - f.origin.y;
+    let dx = g.x - origin.x;
+    let dy = g.y - origin.y;
     const len = Math.hypot(dx, dy) || 1;
     dx /= len; dy /= len;
     const nx = -dy;
@@ -220,8 +223,8 @@ export class WorldMap {
       const u = x * nx + y * ny;
       lo = Math.min(lo, t); hi = Math.max(hi, t); wlo = Math.min(wlo, u); whi = Math.max(whi, u);
     }
-    const front = lo + (hi - lo) * Math.max(0.02, Math.min(1, f.shown / 100));
-    const pad = (hi - lo) + (whi - wlo) + 10;
+    const v = Math.max(0.02, Math.min(1, value / 100));
+    const front = lo + (hi - lo) * v;
     // Where the front actually crosses the province: the outline points closest to the line
     let clo = Infinity;
     let chi = -Infinity;
@@ -232,21 +235,51 @@ export class WorldMap {
       clo = Math.min(clo, u); chi = Math.max(chi, u);
     }
     if (!(chi > clo)) { clo = wlo; chi = whi; }
-    const at = (t, u) => `${t * dx + u * nx},${t * dy + u * ny}`;
-    f.area.setAttribute('points', [at(lo - pad, wlo - pad), at(front, wlo - pad), at(front, whi + pad), at(lo - pad, whi + pad)].join(' '));
-    const [x1, y1] = at(front, wlo - 2).split(',').map(Number);
-    const [x2, y2] = at(front, whi + 2).split(',').map(Number);
-    for (const ln of [f.shade, f.line]) { ln.setAttribute('x1', x1); ln.setAttribute('y1', y1); ln.setAttribute('x2', x2); ln.setAttribute('y2', y2); }
-    // Name each side once zoomed in: "Spain holds this side, Portugal that one"
+    const mid = (clo + chi) / 2;
+    // A ragged front, not a ruler line: each province has its own pattern of bulges and dents, which shifts
+    // as the fighting moves, with a salient where the attack pushes hardest. It flattens out at the edges so
+    // it never pokes past the province.
+    const seed = [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+    const ph = (k) => ((seed >>> (k * 5)) % 628) / 100;
+    const width = Math.max(1, whi - wlo);
+    const depthT = hi - lo;
+    const edge = Math.min(1, v * 100 / 12, (1 - v) * 100 / 12);
+    const amp = depthT * 0.08 * edge;
+    const p = value / 100;
+    const jag = (u) => {
+      const x = (u - wlo) / width * Math.PI * 2;
+      const wave = 0.5 * Math.sin(x * 2.3 + ph(1) + p * 4.4) + 0.32 * Math.sin(x * 5.2 + ph(2) - p * 6.1) + 0.18 * Math.sin(x * 11.7 + ph(3) + p * 9.3);
+      const salient = 0.9 * Math.exp(-(((u - mid) / (width * 0.22)) ** 2));
+      return amp * (wave + salient);
+    };
+    const at = (t, u) => [t * dx + u * nx, t * dy + u * ny];
+    return { dx, dy, nx, ny, lo, hi, wlo, whi, front, mid, jag, at, depth: depthT };
+  }
+
+  #placeFront(id, f) {
+    const F = this.#frontFrame(id, f.origin, f.shown);
+    const { lo, wlo, whi, front, at, jag, mid, hi } = F;
+    const pad = (hi - lo) + (whi - wlo) + 10;
+    const line = [];
+    const n = 36;
+    for (let i = 0; i <= n; i++) {
+      const u = wlo - 2 + ((whi - wlo + 4) * i) / n;
+      line.push(at(front + jag(u), u));
+    }
+    const pts = (list) => list.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ');
+    f.area.setAttribute('points', pts([at(lo - pad, wlo - pad), at(front, wlo - pad), ...line, at(front, whi + pad), at(lo - pad, whi + pad)]));
+    for (const ln of [f.shade, f.line]) ln.setAttribute('points', pts(line));
+    // Name each side once zoomed in: "Spain holds this side, Portugal that one". Off to one side of the
+    // middle, where the attacking army stands.
     const unit = this.#unit();
     const show = unit >= 2;
-    const mid = (clo + chi) / 2;
     const off = Math.min(18 / unit, (hi - lo) * 0.25 + 4 / unit);
+    const lu = Math.min(whi - 4 / unit, mid + 30 / unit);
     const name = (x) => shortName(this.state.countries[x]?.name ?? this.state.minors[x]?.name ?? '');
-    for (const [el, t, who] of [[f.labelA, front - off, f.by], [f.labelB, front + off, f.holder]]) {
+    for (const [el, t, who] of [[f.labelA, front + jag(lu) - off, f.by], [f.labelB, front + jag(lu) + off, f.holder]]) {
       el.setAttribute('display', show ? 'inline' : 'none');
       if (!show) continue;
-      const [x, y] = at(t, mid).split(',').map(Number);
+      const [x, y] = at(t, lu);
       el.setAttribute('x', x); el.setAttribute('y', y);
       el.setAttribute('font-size', 9 / unit);
       el.setAttribute('stroke-width', 2.2 / unit);
@@ -278,7 +311,7 @@ export class WorldMap {
       const now = performance.now();
       let busy = false;
       for (const [id, f] of this.fronts) {
-        const k = Math.min(1, (now - f.t0) / (this.tickMs * 0.95));
+        const k = Math.min(1, (now - f.t0) / ((this.stepMs ?? this.tickMs) * 0.95));
         const shown = f.from + (f.to - f.from) * k;
         if (Math.abs(shown - f.shown) > 0.05) { f.shown = shown; this.#placeFront(id, f); }
         if (k < 1) busy = true;
@@ -346,6 +379,9 @@ export class WorldMap {
       const at = a.sea ? (a.attacking ?? a.sea.to) : a.region;
       (byRegion.get(at) ?? byRegion.set(at, []).get(at)).push(a);
     }
+    // Armies attacking each province, side by side along its front
+    const atFront = new Map();
+    for (const a of s.armies) if (a.attacking && !a.sea) (atFront.get(a.attacking) ?? atFront.set(a.attacking, []).get(a.attacking)).push(a.id);
     const arrows = [];
     const friendly = (owner) => owner === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(owner) && al.members.includes(s.me));
     for (const a of s.armies) {
@@ -370,13 +406,15 @@ export class WorldMap {
         const hgt = 14 / unit;
         let cx = g.x + (i % 2) * (w + 2 / unit) - (list.length > 1 ? (w + 2 / unit) / 2 : 0);
         let cy = g.y + Math.floor(i / 2) * (hgt + 2 / unit) + 6 / unit;
-        // Attacking armies stand on the front line, pushing into the province as the battle goes their way
+        // Attacking armies stand right on the front line and advance with it as the battle goes their way
         if (a.attacking && !a.sea && GEO[a.attacking]) {
-          const t = GEO[a.attacking];
-          const prog = (this.#region(a.attacking)?.prog ?? 0) / 100;
-          const k = 0.2 + 0.55 * prog;
-          cx += (t.x - g.x) * k;
-          cy += (t.y - g.y) * k;
+          const r = this.#region(a.attacking);
+          const origin = r.battleBy ? this.#attackFrom(a.attacking, r.battleBy) : g;
+          const F = this.#frontFrame(a.attacking, origin === GEO[a.attacking] ? g : origin, r.battleBy ? r.prog : 0);
+          const side = atFront.get(a.attacking);
+          const j = side.indexOf(a.id);
+          const u = F.mid + (j - (side.length - 1) / 2) * (w + 3 / unit);
+          [cx, cy] = F.at(F.front + F.jag(u) - hgt * 0.75, u);
         }
         if (a.sea && a.sea.from && a.sea.left != null && !a.attacking) {
           const f = GEO[a.sea.from];
@@ -394,7 +432,7 @@ export class WorldMap {
         }
         if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
           n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
-          n.dur = this.moving ? this.tickMs * 0.9 : 250;
+          n.dur = this.moving ? (this.stepMs ?? this.tickMs) * 0.95 : 250;
         }
         n.g.setAttribute('class', `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}`);
         n.g.setAttribute('opacity', a.sea ? '0.85' : '1');

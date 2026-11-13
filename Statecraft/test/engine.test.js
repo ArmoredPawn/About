@@ -324,3 +324,20 @@ test('making the case to the nation first takes the edge off the outcry over a w
   assert.ok(made.anti <= plain.anti, `anti-war protests ${made.anti} vs ${plain.anti}`);
   assert.ok(made.repHit < plain.repHit + 0.01 || made.repHit <= plain.repHit, `standing lost ${made.repHit} vs ${plain.repHit}`);
 });
+
+test('the war runs in real time: an army ordered off sets out within a second and crosses a country in seconds', () => {
+  const g = game(23, 'tur');
+  g.command('tur', { type: 'armyCreate', region: 'tur-se', troops: 120, tanks: 200 });
+  const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
+  assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'tur-is' }), null);
+  const second = 1 / 9; // a game week lasts 9 seconds at normal speed
+  g.step(second);
+  assert.notEqual(army.region, 'tur-se', 'moved on the first step');
+  for (let i = 0; i < 5 && army.region !== 'tur-is'; i++) g.step(second);
+  assert.equal(army.region, 'tur-is', 'across Turkey within six seconds');
+  // Steps never run ahead of the weekly clock
+  for (let i = 0; i < 30; i++) g.step(second);
+  assert.ok(g.s.stepped <= 1 + 1e-9);
+  g.tick();
+  assert.equal(g.s.stepped, 0);
+});

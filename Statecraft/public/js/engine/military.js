@@ -338,6 +338,8 @@ export function orderArmy(s, c, army, order) {
   if (plan.error) return plan.error;
   army.op = plan.op;
   army.path = plan.path;
+  // A fresh order: the army sets off on the very next step
+  army.mv = Math.max(army.mv ?? 0, 1.2);
   if (plan.sea) army.sea = plan.sea;
   army.status = plan.status;
   return null;
@@ -482,125 +484,146 @@ export function setAirCampaign(s, c, target, aircraft) {
   return null;
 }
 
-/* ---------- The weekly war ---------- */
+/* ---------- The war, in real time ---------- */
+//
+// Marching and fighting run in small steps many times a game week (militaryStep, with dt the fraction of a week),
+// so an order is carried out within a second and fronts move smoothly. Supply, logistics, recovery and the air
+// and sea campaigns are settled once a week (militaryTick).
 
-export function militaryTick(s) {
+// How far an army marches in a week, in provinces of open plains
+export const MARCH = 8;
+
+export function militaryStep(s, dt) {
+  if (!(dt > 0)) return;
+  s.stepNo = (s.stepNo ?? 0) + 1;
   const gar = garrisons(s);
-  supplyAll(s);
-  logistics(s);
   const fights = new Map(); // region -> attacking armies
-
   for (const a of Object.values(s.armies)) {
     const c = s.countries[a.owner];
     if (!c || !alive(s, a.owner)) { delete s.armies[a.id]; continue; }
     a.attacking = null;
-    if (a.sea) {
-      a.sea.left -= 1;
-      const enemyNavy = navalPower(nation(s, s.regions[a.sea.to].ctrl) ?? { ships: 0, carriers: 0, tech: {} });
-      const mine = navalPower(c);
-      if (enemyNavy > 0 && a.sea.left > 0) {
-        const lost = 0.06 * enemyNavy / (enemyNavy + mine + 1);
-        a.troops *= 1 - lost;
-        a.tanks *= 1 - lost;
-        c.ships = Math.max(0, c.ships - Math.round(c.ships * 0.01 * enemyNavy / (enemyNavy + mine + 1)));
-      }
-      if (a.sea.left <= 0 && a.landing && (a.org < 12 || a.troops < 3)) {
-        // The landing has failed: what is left re-embarks for home
-        a.region = a.sea.from;
-        a.sea = null;
-        a.landing = false;
-        a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
-        a.status = 'Withdrawn after a failed landing';
-        alert(s, a.owner, `${a.gen.name} reports: the landing has been thrown back. ${a.name} has re-embarked for ${regionName(a.region)}.`, 'bad');
-        news(s, `${nameOf(s, a.owner)}'s landing is thrown back into the sea.`, 'war', [a.owner]);
-        continue;
-      }
-      if (a.sea.left <= 0) {
-        const holder = s.regions[a.sea.to].ctrl;
-        if (holder === c.id || friendlyGround(s, c.id, holder)) {
-          a.region = a.sea.to;
-          a.sea = null;
-          a.status = `Landed in ${regionName(a.region)}`;
-        } else if (atWar(s, c.id, holder)) {
-          a.attacking = a.sea.to;
-          a.landing = true;
-          addFight(fights, a.sea.to, a);
-          a.status = `Storming the beaches of ${regionName(a.sea.to)}`;
-        } else {
-          a.region = a.sea.from;
-          a.sea = null;
-          a.status = 'Landing called off; returned to port';
-        }
-      }
+    if (a.sea) sail(s, a, c, dt, fights);
+    else march(s, a, c, dt, gar, fights);
+  }
+  const battled = new Set();
+  for (const [regionId, attackers] of fights) {
+    battle(s, regionId, attackers, gar, dt);
+    battled.add(regionId);
+  }
+  // Where the fighting has stopped, the attackers' gains melt away
+  for (const reg of Object.values(s.regions)) {
+    if (reg.battle && !battled.has(reg.id) && reg.battle.pushed !== s.stepNo) {
+      reg.battle.prog -= 40 * dt;
+      if (reg.battle.prog <= 0) reg.battle = null;
+    }
+  }
+}
+
+function sail(s, a, c, dt, fights) {
+  a.sea.left -= dt;
+  const enemyNavy = navalPower(nation(s, s.regions[a.sea.to].ctrl) ?? { ships: 0, carriers: 0, tech: {} });
+  const mine = navalPower(c);
+  if (enemyNavy > 0 && a.sea.left > 0) {
+    const lost = 0.06 * dt * enemyNavy / (enemyNavy + mine + 1);
+    a.troops *= 1 - lost;
+    a.tanks *= 1 - lost;
+    c.ships = Math.max(0, c.ships - c.ships * 0.01 * dt * enemyNavy / (enemyNavy + mine + 1));
+  }
+  if (a.sea.left > 0) return;
+  if (a.landing && (a.org < 12 || a.troops < 3)) {
+    // The landing has failed: what is left re-embarks for home
+    a.region = a.sea.from;
+    a.sea = null;
+    a.landing = false;
+    a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
+    a.status = 'Withdrawn after a failed landing';
+    alert(s, a.owner, `${a.gen.name} reports: the landing has been thrown back. ${a.name} has re-embarked for ${regionName(a.region)}.`, 'bad');
+    news(s, `${nameOf(s, a.owner)}'s landing is thrown back into the sea.`, 'war', [a.owner]);
+    return;
+  }
+  const holder = s.regions[a.sea.to].ctrl;
+  if (holder === c.id || friendlyGround(s, c.id, holder)) {
+    a.region = a.sea.to;
+    a.sea = null;
+    a.status = `Landed in ${regionName(a.region)}`;
+  } else if (atWar(s, c.id, holder)) {
+    a.attacking = a.sea.to;
+    a.landing = true;
+    addFight(fights, a.sea.to, a);
+    a.status = `Storming the beaches of ${regionName(a.sea.to)}`;
+  } else {
+    a.region = a.sea.from;
+    a.sea = null;
+    a.status = 'Landing called off; returned to port';
+  }
+}
+
+function march(s, a, c, dt, gar, fights) {
+  const maneuver = a.gen.trait === 'maneuver';
+  // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
+  if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
+    a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver }) ?? [];
+  }
+  a.mv = a.path.length ? Math.min(2.5, (a.mv ?? 0) + MARCH * dt * (maneuver ? 1.3 : 1)) : 0;
+  while (a.path.length) {
+    const next = a.path[0];
+    const holder = s.regions[next].ctrl;
+    if (friendlyGround(s, a.owner, holder)) {
+      const cost = terrainOf(next).move * (1 - 0.04 * s.regions[next].infra);
+      if (a.mv < cost) { a.status = `On the march to ${regionName(a.op.target)}`; break; }
+      a.region = next;
+      a.path.shift();
+      a.mv -= cost;
       continue;
     }
-    const recover = a.gen.trait === 'logistician' ? 12 : 8;
-    // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
-    if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
-      a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver: a.gen.trait === 'maneuver' }) ?? [];
-    }
-    let budget = 2;
-    while (a.path.length && budget > 0) {
-      const next = a.path[0];
-      const holder = s.regions[next].ctrl;
-      if (friendlyGround(s, a.owner, holder)) {
-        const terrain = terrainOf(next);
-        const cost = 0.45 * terrain.move * (1 - 0.04 * s.regions[next].infra) * (a.gen.trait === 'maneuver' ? 0.7 : 1);
-        a.region = next;
-        a.path.shift();
-        budget -= cost;
-        continue;
-      }
-      if (atWar(s, a.owner, holder) && a.op.kind === 'attack') {
-        // A leader's order is carried out at once. Only computer-run generals pause to regroup or wait for odds.
-        if (!c.human) {
-          const odds = armyAttackEstimate(s, a, next) / Math.max(1, defenceEstimate(s, next, gar));
-          if (a.org < 20) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; a.regrouping = true; break; }
-          if (a.regrouping && a.org < 45) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; break; }
-          a.regrouping = false;
-          if (odds < AGGRESSION[a.op.aggr].attackAt) { a.status = `Waiting for better odds at ${regionName(next)} (${odds.toFixed(1)}:1)`; break; }
-        }
+    if (atWar(s, a.owner, holder) && a.op.kind === 'attack') {
+      // A leader's order is carried out at once. Only computer-run generals pause to regroup or wait for odds.
+      if (!c.human) {
+        const odds = armyAttackEstimate(s, a, next) / Math.max(1, defenceEstimate(s, next, gar));
+        if (a.org < 20) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; a.regrouping = true; break; }
+        if (a.regrouping && a.org < 45) { a.status = `Regrouping before ${regionName(next)} (organisation ${Math.round(a.org)}%)`; break; }
         a.regrouping = false;
-        a.attacking = next;
-        addFight(fights, next, a);
-        a.status = `Attacking ${regionName(next)}`;
-        break;
+        if (odds < AGGRESSION[a.op.aggr].attackAt) { a.status = `Waiting for better odds at ${regionName(next)} (${odds.toFixed(1)}:1)`; break; }
       }
-      // Neutral ground or the target changed hands: look for another way
-      const again = route(s, a.owner, a.region, a.op.target, { offensive: a.op.kind === 'attack', maneuver: a.gen.trait === 'maneuver' });
-      if (again && again[0] !== next) { a.path = again; continue; }
-      a.path = [];
-      a.status = `Halted: ${nameOf(s, holder)} blocks the way`;
-      alert(s, a.owner, `${a.name} has halted: the route to ${regionName(a.op.target)} crosses ${nameOf(s, holder)}, which we are not at war with.`, 'warn');
+      a.regrouping = false;
+      a.mv = 0;
+      a.attacking = next;
+      addFight(fights, next, a);
+      a.status = `Attacking ${regionName(next)}`;
       break;
     }
-    if (!a.path.length && !a.attacking) {
-      if (a.op.kind === 'attack' && a.region === a.op.target) {
-        a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
-        alert(s, a.owner, `${a.gen.name} reports: ${a.name} has taken its objective, ${regionName(a.region)}, and is digging in.`, 'good');
-      }
-      if (a.op.kind === 'hold' || a.region === a.op.target) a.status = `Holding ${regionName(a.region)}`;
+    // Neutral ground or the target changed hands: look for another way
+    const again = route(s, a.owner, a.region, a.op.target, { offensive: a.op.kind === 'attack', maneuver });
+    if (again && again[0] !== next) { a.path = again; continue; }
+    a.path = [];
+    a.status = `Halted: ${nameOf(s, holder)} blocks the way`;
+    alert(s, a.owner, `${a.name} has halted: the route to ${regionName(a.op.target)} crosses ${nameOf(s, holder)}, which we are not at war with.`, 'warn');
+    break;
+  }
+  if (!a.path.length && !a.attacking) {
+    if (a.op.kind === 'attack' && a.region === a.op.target) {
+      a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
+      alert(s, a.owner, `${a.gen.name} reports: ${a.name} has taken its objective, ${regionName(a.region)}, and is digging in.`, 'good');
     }
+    if (a.op.kind === 'hold' || a.region === a.op.target) a.status = `Holding ${regionName(a.region)}`;
+  }
+}
+
+// Once a week: supply, the cost of the war, recovery, and the air and sea campaigns
+export function militaryTick(s) {
+  supplyAll(s);
+  logistics(s);
+  for (const a of Object.values(s.armies)) {
+    const c = s.countries[a.owner];
+    if (!c || !alive(s, a.owner)) { delete s.armies[a.id]; continue; }
+    if (a.sea) continue;
+    const recover = a.gen.trait === 'logistician' ? 12 : 8;
     a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply * (a.attacking ? 0.4 : 1));
     if (a.supply < 0.5) {
       a.troops *= 0.99;
       a.org = Math.max(0, a.org - 5);
     }
   }
-
-  // Battles
-  const battled = new Set();
-  for (const [regionId, attackers] of fights) {
-    battle(s, regionId, attackers, gar);
-    battled.add(regionId);
-  }
-  for (const reg of Object.values(s.regions)) {
-    if (reg.battle && !battled.has(reg.id) && reg.battle.pushed !== s.week) {
-      reg.battle.prog -= 20;
-      if (reg.battle.prog <= 0) reg.battle = null;
-    }
-  }
-
   airAndSea(s);
 }
 
@@ -608,7 +631,7 @@ function addFight(fights, regionId, army) {
   (fights.get(regionId) ?? fights.set(regionId, []).get(regionId)).push(army);
 }
 
-function battle(s, regionId, attackers, gar) {
+function battle(s, regionId, attackers, gar, dt = 1) {
   const reg = s.regions[regionId];
   const holder = reg.ctrl;
   const terrain = terrainOf(regionId);
@@ -651,7 +674,7 @@ function battle(s, regionId, attackers, gar) {
 
   const fresh = !(reg.battle && reg.battle.by === lead);
   reg.battle = fresh ? { by: lead, prog: 0, weeks: 0, from: attackers[0].landing ? null : attackers[0].region } : reg.battle;
-  reg.battle.weeks = (reg.battle.weeks ?? 0) + 1;
+  reg.battle.weeks = (reg.battle.weeks ?? 0) + dt;
   // Ground the defenders thought impassable: lightly held, and the attack comes as a shock
   const sneak = surpriseFeature(regionId);
   if (sneak && reg.fort <= 1 && !defenders.some((a) => a.op.kind === 'hold') && reg.battle.weeks <= 3) {
@@ -662,30 +685,30 @@ function battle(s, regionId, attackers, gar) {
     }
   }
   const ratio = attack / defence;
-  // The front moves fast: an even fight still gains ground slowly, a strong attack breaks through in a week or two
-  const step = (ratio >= 1 ? Math.min(100, 25 + 45 * (ratio - 1)) : ratio >= 0.8 ? 8 * (ratio - 0.8) / 0.2 : -30 * (0.8 - ratio) / 0.8) / depth(regionId);
-  reg.battle.prog = clamp(reg.battle.prog + step, 0, 100);
+  // The front moves fast: an even fight takes a province in under two weeks, a strong attack in days
+  const step = (ratio >= 1 ? Math.min(200, 60 + 100 * (ratio - 1)) : ratio >= 0.8 ? 20 * (ratio - 0.8) / 0.2 : -60 * (0.8 - ratio) / 0.8) / depth(regionId);
+  reg.battle.prog = clamp(reg.battle.prog + step * dt, 0, 100);
   // Beaten back with nothing gained, the defenders counter-attack into the ground the attack came from
-  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / (terrain.defend * (1 + 0.15 * reg.fort)), gar);
+  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / (terrain.defend * (1 + 0.15 * reg.fort)), gar, dt);
 
   // Losses
   let attackLoss = 0;
   for (const a of attackers) {
     const style = AGGRESSION[a.op.aggr].losses * (a.gen.trait === 'aggressive' ? 1.2 : a.gen.trait === 'cautious' ? 0.75 : 1);
-    const rate = 0.016 * clamp(1 / ratio, 0.35, 2.5) * style * (a.landing ? 1.8 : 1);
+    const rate = 0.016 * dt * clamp(1 / ratio, 0.35, 2.5) * style * (a.landing ? 1.8 : 1);
     const lost = a.troops * rate;
     a.troops -= lost;
     a.tanks *= 1 - rate * 1.4;
-    a.org = Math.max(0, a.org - (a.op.aggr === 'allout' ? 8 : 6));
+    a.org = Math.max(0, a.org - (a.op.aggr === 'allout' ? 8 : 6) * dt);
     attackLoss += lost;
   }
-  const defRate = 0.016 * clamp(ratio, 0.35, 2.5);
+  const defRate = 0.016 * dt * clamp(ratio, 0.35, 2.5);
   let defendLoss = 0;
   for (const a of defenders) {
     const lost = a.troops * defRate * (a.gen.trait === 'defensive' ? 0.85 : 1);
     a.troops -= lost;
     a.tanks *= 1 - defRate * 1.3;
-    a.org = Math.max(0, a.org - 6);
+    a.org = Math.max(0, a.org - 6 * dt);
     defendLoss += lost;
   }
   const gLost = g.troops * defRate;
@@ -704,12 +727,12 @@ function battle(s, regionId, attackers, gar) {
   // The dead are gone from the population, and civilians in the battle zone die or flee
   for (const a of attackers) bury(s, a.owner, attackLoss * (a.troops / Math.max(1, attackTroops)));
   bury(s, holder, defendLoss);
-  reg.pop *= 1 - 0.0008 * Math.min(2, ratio);
+  reg.pop *= 1 - 0.0008 * dt * Math.min(2, ratio);
   const war = s.wars.find((w) => (w.a === lead && w.b === holder) || (w.b === lead && w.a === holder));
   if (war) {
     if (war.a === lead) { war.lossA += attackLoss; war.lossB += defendLoss; } else { war.lossB += attackLoss; war.lossA += defendLoss; }
   }
-  reg.dmg = Math.min(0.9, reg.dmg + 0.006);
+  reg.dmg = Math.min(0.9, reg.dmg + 0.006 * dt);
 
   if (reg.battle.prog >= 100) capture(s, regionId, lead, attackers);
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
@@ -718,16 +741,16 @@ function battle(s, regionId, attackers, gar) {
 // The defenders of `from` push into `back`, the province an attack on them came from. Held long enough, it
 // falls: the front line moves the other way.
 // `strength` is what held the attack off; it has to beat whatever guards the ground behind the attackers.
-function counterAttack(s, backId, by, from, strength, gar) {
+function counterAttack(s, backId, by, from, strength, gar, dt = 1) {
   const back = s.regions[backId];
   if (!back || !atWar(s, by, back.ctrl)) return;
   const odds = (strength * 0.6) / Math.max(1, defenceEstimate(s, backId, gar));
   if (odds < 1) return;
-  const push = Math.min(60, 15 + 30 * (odds - 1)) / depth(backId);
+  const push = (Math.min(120, 30 + 60 * (odds - 1)) / depth(backId)) * dt;
   if (!(back.battle && back.battle.by === by)) back.battle = { by, prog: 0, weeks: 0, from };
   back.battle.prog = clamp(back.battle.prog + push, 0, 100);
-  back.battle.weeks += 1;
-  back.battle.pushed = s.week;
+  back.battle.weeks += dt;
+  back.battle.pushed = s.stepNo;
   if (back.battle.prog >= 100) capture(s, backId, by, []);
 }
 
@@ -800,6 +823,8 @@ export function capture(s, regionId, by, attackers = []) {
       a.region = regionId;
       a.path.shift();
     }
+    if (a.attacking === regionId) a.attacking = null;
+    a.status = a.path.length ? `Advancing on ${regionName(a.op.target)}` : `Holding ${regionName(a.region)}`;
   }
   const liberated = by === reg.owner;
   news(s, liberated
