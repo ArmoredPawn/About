@@ -222,7 +222,7 @@ function menu() {
   $('solo-continue').hidden = !saved;
   if (saved) {
     const c = Object.values(saved.state.countries).find((x) => x.human);
-    $('solo-meta').textContent = c ? `Saved: ${c.name}, week ${saved.state.week} of ${saved.state.settings.years * 52}.` : '';
+    $('solo-meta').textContent = c ? `Saved: ${c.name}, week ${saved.state.week}.` : '';
   } else $('solo-meta').textContent = '';
   if (!serverBase()) {
     $('menu-status').textContent = 'The multiplayer server isn\'t set up yet. Solo play works now.';
@@ -364,10 +364,9 @@ function renderLobby() {
     'aria-pressed': String(o === value), disabled: !isHost, onclick: () => app.net.send({ type: 'settings', [key]: o }),
   }, fmt(o)))));
   $('lobby-settings').replaceChildren(
-    seg('Length', l.years, l.settings.years, 'years', (y) => `${y} years`),
     seg('Speed (a week passes every…)', l.speeds, l.settings.speed, 'speed', (sp) => ({ slow: '15 s', normal: '9 s', fast: '5 s', blitz: '2.5 s' }[sp] ?? sp)),
     seg('Countries handed out from', l.pools, l.settings.pool, 'pool', (p) => `Top ${p}`),
-    h('p.muted.small', `Each leader gets a random country from the ${l.settings.pool} largest economies. The world runs in real time with no pausing: a ${l.settings.years}-year game at this speed lasts about ${Math.round((l.settings.years * 52 * { slow: 15, normal: 9, fast: 5, blitz: 2.5 }[l.settings.speed]) / 60)} minutes.`));
+    h('p.muted.small', `Each leader gets a random country from the ${l.settings.pool} largest economies. The world runs in real time with no pausing, and there is no time limit: the game ends only when one country has conquered the entire world.`));
   $('start').hidden = !isHost;
   $('start').disabled = l.settings.pool < l.players.length;
   $('lobby-status').textContent = isHost ? (l.settings.pool < l.players.length ? 'More leaders than countries: pick a bigger pool.' : 'Start when everyone is in. Others can still join until then.') : 'Waiting for the host to start…';
@@ -490,7 +489,9 @@ function renderFinal() {
   const podium = (humans.length >= 3 ? humans : ranks).slice(0, 3);
   const byGrowth = [...ranks].sort((a, b) => b.growth - a.growth).slice(0, 8);
   const byLand = [...ranks].sort((a, b) => b.gained - a.gained).slice(0, 8);
-  $('final-date').textContent = `${s.date} · ${s.week} weeks of history`;
+  const victor = s.winner ? ranks.find((r) => r.id === s.winner) : null;
+  $('final-title').textContent = s.winner ? `${nationName(s, s.winner)} rules the world` : 'The verdict of history';
+  $('final-date').textContent = `${s.date} · ${s.week} weeks of history` + (victor?.human ? ` · led by ${victor.human}` : '') + (s.winner === s.me ? ' · you won' : '');
   const table = (title, rows, value) => h('div.card', h('h2', { style: { marginBottom: '10px' } }, title), h('table.tbl', h('tbody', rows.map((r, i) => h('tr', { class: r.id === s.me ? 'me' : '' }, h('td', i + 1), h('td', name(r)), h('td.num', value(r)))))));
   $('final-body').replaceChildren(
     h('div.podium', podium.map((r, i) => h('div.card', h('div.muted.small', ['First', 'Second', 'Third'][i]), flag(r.id, true), h('h2', nationName(s, r.id)), r.human ? h('div.muted', r.human) : null, h('div.small', `Power ${r.power.toFixed(1)} · ${money(r.gdp)}`)))),

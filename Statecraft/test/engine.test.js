@@ -7,7 +7,7 @@ import { GEO, ORDER } from '../public/js/engine/data/geo.js';
 import { route, freeForces, bury } from '../public/js/engine/military.js';
 
 function game(seed = 1, leader = 'usa') {
-  const g = Game.create({ seed, years: 5 });
+  const g = Game.create({ seed });
   g.setLeader(leader, 'Tester');
   return g;
 }
@@ -340,4 +340,29 @@ test('the war runs in real time: an army ordered off sets out within a second an
   assert.ok(g.s.stepped <= 1 + 1e-9);
   g.tick();
   assert.equal(g.s.stepped, 0);
+});
+
+test('there is no time limit: the game ends only when one country owns the whole world', () => {
+  const g = game(31);
+  g.s.week = 52 * 100;
+  g.tick();
+  assert.equal(g.s.over, false, 'still going after a century');
+  // Even with no human leader left alive, the world keeps turning
+  g.setLeader('usa', null);
+  g.tick();
+  assert.equal(g.s.over, false, 'still going with no human leaders');
+  for (const reg of Object.values(g.s.regions)) { reg.owner = 'usa'; reg.ctrl = 'usa'; }
+  g.tick();
+  assert.equal(g.s.over, true);
+  assert.equal(g.s.winner, 'usa');
+  assert.equal(g.view('usa').winner, 'usa');
+});
+
+test('declaring war costs no money, even after making the case for it', () => {
+  const g = game(37);
+  const c = g.s.countries.usa;
+  c.treasury = 0;
+  assert.equal(g.command('usa', { type: 'warCase', target: 'mex' }), null);
+  assert.equal(g.command('usa', { type: 'war', target: 'mex', goal: 'conquest' }), null);
+  assert.equal(c.treasury, 0);
 });

@@ -8,14 +8,16 @@ export function renderHud(ctx) {
   const lobby = ctx.lobby;
   const me = s.you;
   const c = s.countries[s.me];
-  const total = s.years * 52;
+  // No time limit, so the bar under the date shows how much of the world you hold
+  const held = s.ranks.find((r) => r.id === s.me)?.provinces ?? 0;
+  const share = s.provinces ? (held / s.provinces) * 100 : 0;
 
   // The world runs in real time: no pause, no speed control. The date ticks forward day by day.
   const clock = h('div.hud-clock',
     h('span.live-dot', { title: 'Live: the world keeps moving' }),
     h('div',
       h('div.date', { id: 'hud-date' }, liveDate(s, ctx.tickAge?.() ?? 0)),
-      h('div.progress', { title: `Week ${s.week} of ${total}` }, h('i', { style: { width: `${Math.min(100, (s.week / total) * 100)}%` } }))),
+      h('div.progress', { title: `Week ${s.week} · you hold ${held} of ${s.provinces} provinces (${share.toFixed(1)}% of the world)` }, h('i', { style: { width: `${Math.min(100, share)}%` } }))),
   );
 
   const stats = me ? h('div.hud-stats',

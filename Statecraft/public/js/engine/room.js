@@ -2,12 +2,12 @@
 // It knows nothing about networks: a connection is { send(object) }. The server runs many rooms;
 // solo play runs one in the browser.
 //
-// From players: settings { years, speed, pool } (host), start (host), end (host), again (host), cmd { req, cmd }, chat { ch, text }, dm { to }, group { name, members },
+// From players: settings { speed, pool } (host), start (host), again (host), cmd { req, cmd }, chat { ch, text }, dm { to }, group { name, members },
 //   groupInvite { ch, members }, groupLeave { ch }
 // To players: lobby, state, chat, channels, cmdResult, alert/news (fresh events), error
 
 import { COUNTRY_IDS, COUNTRIES } from './data/countries.js';
-import { Game, YEAR_OPTIONS } from './game.js';
+import { Game } from './game.js';
 import { alliancesOf, alive } from './core.js';
 
 export const MAX_PLAYERS = 20;
@@ -35,7 +35,7 @@ export class Room {
     this.players = new Map();
     this.hostId = null;
     this.phase = 'lobby';
-    this.settings = { years: 5, speed: 'normal', pool: 50 };
+    this.settings = { speed: 'normal', pool: 50 };
     this.paused = false;
     this.game = null;
     this.clock = null;
@@ -107,7 +107,6 @@ export class Room {
     switch (msg.type) {
       case 'settings':
         if (!isHost || this.phase !== 'lobby') return;
-        if (YEAR_OPTIONS.includes(msg.years)) this.settings.years = msg.years;
         if (SPEEDS[msg.speed]) this.settings.speed = msg.speed;
         if (POOLS.includes(msg.pool)) this.settings.pool = msg.pool;
         return this.#everyone();
@@ -118,10 +117,9 @@ export class Room {
       case 'pause':
       case 'speed':
         return;
+      // No one can call the game early: it ends only when one country has conquered the world
       case 'end':
-        if (!isHost || this.phase !== 'playing') return;
-        this.game.finish();
-        return this.#tickDone();
+        return;
       case 'again':
         if (!isHost || this.phase !== 'over') return;
         this.phase = 'lobby';
@@ -147,7 +145,7 @@ export class Room {
     if (this.phase !== 'lobby') return;
     const players = [...this.players.values()];
     const pool = COUNTRY_IDS.slice(0, Math.max(this.settings.pool, players.length));
-    this.game = Game.create({ seed: this.seed ?? Math.floor(Math.random() * 2 ** 31), years: this.settings.years });
+    this.game = Game.create({ seed: this.seed ?? Math.floor(Math.random() * 2 ** 31) });
     const s = this.game.s;
     const order = shuffleWith(pool, () => (s.seed = (s.seed * 1103515245 + 12345) | 0, ((s.seed >>> 0) % 100000) / 100000));
     players.forEach((p, i) => {
@@ -164,7 +162,6 @@ export class Room {
   // Restores a saved solo game
   restore(state, player) {
     this.game = new Game(state);
-    this.settings.years = state.settings.years;
     this.phase = state.over ? 'over' : 'playing';
     player.cid = Object.values(state.countries).find((c) => c.human)?.id ?? null;
     this.paused = false;
@@ -370,7 +367,7 @@ export class Room {
   #lobby() {
     return {
       type: 'lobby', code: this.code, phase: this.phase, hostId: this.hostId, settings: this.settings, paused: this.paused,
-      max: MAX_PLAYERS, speeds: Object.keys(SPEEDS), years: YEAR_OPTIONS, pools: POOLS,
+      max: MAX_PLAYERS, speeds: Object.keys(SPEEDS), pools: POOLS,
       players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, cid: p.cid, connected: p.connected })),
     };
   }

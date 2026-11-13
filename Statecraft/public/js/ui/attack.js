@@ -118,7 +118,7 @@ export function warNotice(ctx, foe, shared = []) {
       : h('label.row.gap', { style: { alignItems: 'flex-start', cursor: wait > 0 ? 'default' : 'pointer' } }, box,
         h('span', h('b', 'Address the nation first'), h('span.muted.small', { style: { display: 'block' } },
           wait > 0 ? `You addressed the nation recently; possible again in ${wait} weeks.`
-            : 'Explain why this war is necessary. Far less public outcry, fewer anti-war protests, and a smaller hit to your standing. Costs a little from the treasury.'))),
+            : 'Explain why this war is necessary. Far less public outcry, fewer anti-war protests, and a smaller hit to your standing.'))),
   );
   return {
     el,

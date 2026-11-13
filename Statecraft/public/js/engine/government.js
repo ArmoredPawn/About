@@ -325,9 +325,6 @@ export const WAR_CASE_WEEKS = 26;
 export function makeWarCase(s, c, target) {
   if (!target || target === c.id || !(s.countries[target] || s.minors[target])) return 'Pick the country you want to make the case against.';
   if ((c.cooldown.warCase ?? -1) > s.week) return `You addressed the nation recently. Try again in ${c.cooldown.warCase - s.week} weeks.`;
-  const cost = c.gdp * 0.0003;
-  if (cost > c.treasury) return 'Not enough money in the treasury for the campaign.';
-  c.treasury -= cost;
   c.warCases = { ...(c.warCases ?? {}), [target]: s.week + WAR_CASE_WEEKS };
   c.cooldown.warCase = s.week + 4;
   c.boost += 2;

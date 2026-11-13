@@ -3,7 +3,7 @@
 import { ORDER, GEO } from './data/geo.js';
 import { RESOURCES } from './data/regions.js';
 import { createState } from './setup.js';
-import { alive, allied, nation, isMinor, dateLabel, news } from './core.js';
+import { allied, nation, isMinor, dateLabel, news } from './core.js';
 import { marketTick, economyTick, debtRatio, upkeep, blockadeEffect } from './economy.js';
 import { militaryTick, militaryStep, garrisons } from './military.js';
 import { diplomacyTick } from './diplomacy.js';
@@ -15,16 +15,14 @@ import { tradeTick, marketView } from './trade.js';
 import { spiesTick, initSpies } from './spies.js';
 import { initRange } from './science.js';
 
-export const YEAR_OPTIONS = [2, 5, 10, 25];
-
 export class Game {
   constructor(state) {
     this.s = state;
     this.cache = null;
   }
 
-  static create({ seed, years = 5 } = {}) {
-    const s = createState({ seed, years });
+  static create({ seed } = {}) {
+    const s = createState({ seed });
     Object.values(s.countries).forEach((c, i) => { c.ai.next = i % 4; initGovernment(c); initSpies(c); initRange(c); });
     news(s, `${dateLabel(0)}: a new year begins in a tense, divided world.`, 'info');
     return new Game(s);
@@ -64,16 +62,19 @@ export class Game {
     governmentTick(s, garrisons(s));
     spiesTick(s);
     eventsTick(s);
-    if (s.week >= s.settings.years * 52 || !Object.values(s.countries).some((c) => c.human && alive(s, c.id))) this.finish();
+    // There is no time limit: the game ends only when one country rules every province in the world
+    const conqueror = worldConqueror(s);
+    if (conqueror) this.finish(conqueror);
     this.cache = null;
   }
 
-  finish() {
+  finish(winner) {
     const s = this.s;
     if (s.over) return;
     s.over = true;
+    s.winner = winner;
     s.final = rankings(s);
-    news(s, `${dateLabel(s.week)}: the game is over.`, 'info');
+    news(s, `${dateLabel(s.week)}: ${nation(s, winner)?.name ?? winner} has conquered the entire world.`, 'info');
   }
 
   command(cid, cmd) {
@@ -135,6 +136,16 @@ function armiesFor(s, cid) {
 }
 
 /* ---------- Rankings ---------- */
+
+// The one country that owns every province on the map, if there is one
+export function worldConqueror(s) {
+  let owner = null;
+  for (const reg of Object.values(s.regions)) {
+    if (owner === null) owner = reg.owner;
+    else if (reg.owner !== owner) return null;
+  }
+  return owner && s.countries[owner] ? owner : null;
+}
 
 export function rankings(s) {
   const list = Object.values(s.countries).filter((c) => !c.exile);
@@ -211,7 +222,7 @@ export function view(s, cid, { gar, ranks }) {
   const mine = (t) => t.a === cid || t.b === cid;
   return {
     type: 'state',
-    week: s.week, date: dateLabel(s.week), years: s.settings.years, over: s.over, final: s.final,
+    week: s.week, date: dateLabel(s.week), provinces: ORDER.length, over: s.over, winner: s.winner ?? null, final: s.final,
     me: cid,
     you: me ? own(s, me) : null,
     countries, minors, regions, resources, armies, ranks,

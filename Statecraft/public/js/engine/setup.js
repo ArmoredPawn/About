@@ -17,12 +17,12 @@ export function allMinors() {
   return { ...MINORS, ...EXTRA_MINORS };
 }
 
-export function createState({ seed = Date.now() % 2147483647, years = 5 } = {}) {
+export function createState({ seed = Date.now() % 2147483647 } = {}) {
   const s = {
     v: 1,
     seed: seed | 0,
     week: 0,
-    settings: { years },
+    settings: {},
     over: false,
     countries: {},
     minors: {},
