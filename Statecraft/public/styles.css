@@ -178,9 +178,12 @@ input[type="checkbox"] { width: auto; min-height: 0; accent-color: var(--accent)
 .hud-country strong { display: block; font-size: 15px; white-space: nowrap; }
 .hud-country span { display: block; font-size: 11px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 .hud-clock { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); height: 100%; flex: none; }
-.hud-clock .date { font-family: var(--mono); font-size: 13px; min-width: 104px; }
+.hud-clock .date { font-family: var(--mono); font-size: 13px; min-width: 124px; }
 .hud-clock .progress { width: 60px; height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
 .hud-clock .progress i { display: block; height: 100%; background: var(--accent); }
+.hud-clock .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 0 rgb(242 112 106 / 0.6); animation: live 2s infinite; flex: none; }
+@keyframes live { 70% { box-shadow: 0 0 0 6px rgb(242 112 106 / 0); } 100% { box-shadow: 0 0 0 0 rgb(242 112 106 / 0); } }
+@media (prefers-reduced-motion: reduce) { .hud-clock .live-dot { animation: none; } }
 .hud-stats { display: flex; gap: 18px; overflow: hidden; min-width: 0; flex: 1; }
 .stat { min-width: 0; flex: none; }
 .stat b { display: block; font-size: 14px; font-weight: 650; white-space: nowrap; }
@@ -243,8 +246,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .budget .num { text-align: right; font-family: var(--mono); }
 .budget .total { border-top: 1px solid var(--line); padding-top: 4px; font-weight: 650; }
 
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; overflow-x: auto; }
-.tabs button { border: 0; background: none; padding: 8px 10px; color: var(--ink-faint); font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; font-size: 13px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.tabs button { border: 0; background: none; padding: 8px 9px; color: var(--ink-faint); font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; font-size: 13px; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 
 .warning { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: var(--radius-sm); font-size: 12.5px; background: var(--warn-soft); color: #f6d396; }
@@ -280,6 +283,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .res-icon circle { stroke: rgb(0 0 0 / 0.5); stroke-width: 0.4; }
 .map .res-icon text { fill: #0b0d14; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .map .chokepoint { pointer-events: none; }
+.map .front-line { stroke: #ffffff; stroke-width: 2; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.map .front-shadow { stroke: rgb(5 8 14 / 0.85); stroke-width: 4.5; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.map .front-label { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: rgb(5 8 14 / 0.85); stroke-linejoin: round; pointer-events: none; }
+.map .enemy-edge { fill: none; stroke: #ff3b3b; stroke-width: 4; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.map .revolt { pointer-events: none; }
 
 .map-tools { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 90px); }
 .map-tools .seg { background: rgb(15 20 32 / 0.92); backdrop-filter: blur(6px); }
@@ -290,16 +298,10 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .zoom { position: absolute; right: 12px; top: 12px; display: grid; gap: 4px; }
 .zoom button { width: 34px; height: 34px; border-radius: 8px; background: rgb(15 20 32 / 0.92); border: 1px solid var(--line-strong); cursor: pointer; font-size: 16px; }
 .zoom button:hover { background: var(--surface-3); }
-.ticker { position: absolute; left: 0; right: 0; bottom: 0; height: 32px; background: rgb(10 14 24 / 0.94); border-top: 1px solid var(--line); display: flex; align-items: center; overflow: hidden; font-size: 12.5px; }
-.ticker .label { flex: none; padding: 0 12px; height: 100%; display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--bad); border-right: 1px solid var(--line); font-size: 11px; letter-spacing: 0.08em; }
-.ticker .label::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); }
-.ticker .items { flex: 1; overflow: hidden; white-space: nowrap; }
-.ticker .track { display: inline-block; padding-left: 100%; animation: ticker 90s linear infinite; }
-.ticker .track span { margin-right: 48px; color: var(--ink-soft); }
-.ticker .track span b { color: var(--ink); font-weight: 600; }
-.ticker:hover .track { animation-play-state: paused; }
-@keyframes ticker { to { transform: translateX(-100%); } }
-@media (prefers-reduced-motion: reduce) { .ticker .track { animation: none; padding-left: 12px; } }
+.map-hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: min(720px, calc(100% - 24px)); background: rgb(15 20 32 / 0.96); border: 1px solid var(--line-strong); border-left: 3px solid var(--warn); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 13px; color: var(--ink); box-shadow: var(--shadow); z-index: 6; pointer-events: none; transition: opacity 0.25s; }
+.map-hint.bad { border-left-color: var(--bad); }
+.map-hint.info { border-left-color: var(--accent); }
+.map-hint[hidden] { display: block; opacity: 0; }
 
 .target-bar { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--accent); border-radius: 999px; padding: 6px 8px 6px 16px; display: flex; gap: 10px; align-items: center; box-shadow: var(--shadow); font-size: 13px; z-index: 5; max-width: calc(100% - 24px); }
 
@@ -409,6 +411,6 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .menu-grid, .lobby-grid, .podium, .final-tables { grid-template-columns: 1fr; }
   .brand h1 { font-size: 30px; }
   .legend { display: none; }
-  .ticker { bottom: 0; }
+  .map-hint { font-size: 12px; }
   .toasts { bottom: 72px; left: 16px; }
 }

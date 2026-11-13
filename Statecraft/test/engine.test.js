@@ -4,7 +4,7 @@ import { Game } from '../public/js/engine/game.js';
 import { COUNTRY_IDS, COUNTRIES } from '../public/js/engine/data/countries.js';
 import { PROVINCES } from '../public/js/engine/data/regions.js';
 import { GEO, ORDER } from '../public/js/engine/data/geo.js';
-import { route } from '../public/js/engine/military.js';
+import { route, freeForces, bury } from '../public/js/engine/military.js';
 
 function game(seed = 1, leader = 'usa') {
   const g = Game.create({ seed, years: 5 });
@@ -80,7 +80,10 @@ test('peace treaties hand over provinces and end the war', () => {
   const inv = Object.values(g.s.proposals).find((x) => x.kind === 'alliance' && x.to === 'kaz');
   assert.ok(inv, `invite sent (${res})`);
   assert.equal(g.command('kaz', { type: 'respond', id: inv.id, accept: true }), null);
-  assert.match(g.command('rus', { type: 'war', target: 'kaz' }) ?? '', /Steppe Pact/);
+  // Declaring war on a fellow member leaves the alliance in the same step
+  assert.equal(g.command('rus', { type: 'war', target: 'kaz' }), null);
+  assert.ok(g.s.wars.some((w) => w.a === 'rus' && w.b === 'kaz'), 'at war');
+  assert.ok(!Object.values(g.s.alliances).some((al) => al.members.includes('rus') && al.members.includes('kaz')), 'pact left');
   assert.equal(g.command('ind', { type: 'war', target: 'pak' }), null);
   g.s.regions['pak-gb'].ctrl = 'ind';
   const err = g.command('ind', { type: 'propose', to: 'pak', kind: 'peace', terms: { cede: [{ region: 'pak-gb', to: 'ind' }] } });
@@ -107,10 +110,19 @@ test('a view never leaks another leader\'s secrets', () => {
   const v = g.view('usa');
   assert.equal(v.countries.chn.treasury, null);
   assert.equal(v.countries.chn.stability, null);
-  const army = v.armies.find((a) => a.owner === 'chn');
-  assert.equal(army.exact, false);
-  assert.equal(army.path, undefined);
+  // Fog of war: an army far from American soil is invisible without spies
+  assert.equal(v.armies.find((a) => a.owner === 'chn'), undefined);
   assert.equal(v.you.id, 'usa');
+  // A neighbour sees it roughly, but not its plans
+  const near = GEO['chn-fj'].adj.map((id) => g.s.regions[id].ctrl).find((h) => h !== 'chn' && g.s.countries[h]);
+  if (near) {
+    const seen = g.view(near).armies.find((a) => a.owner === 'chn');
+    assert.equal(seen.exact, false);
+    assert.equal(seen.path, undefined);
+  }
+  // A spy network deep enough inside shows it exactly
+  g.s.countries.usa.intel.chn = g.s.week + 5;
+  assert.equal(g.view('usa').armies.find((a) => a.owner === 'chn').exact, true);
 });
 
 test('the state survives a save and reload', () => {
@@ -121,4 +133,156 @@ test('the state survives a save and reload', () => {
   g.tick();
   assert.equal(copy.s.week, g.s.week);
   assert.equal(Math.round(copy.s.countries.usa.gdp), Math.round(g.s.countries.usa.gdp));
+});
+
+test('drafting: an army bigger than the forces at home calls up reservists', () => {
+  const g = game(10, 'deu');
+  const c = g.s.countries.deu;
+  const free = freeForces(g.s, c);
+  const before = { troops: c.troops, reserves: c.reserves };
+  const want = Math.floor(free.troops) + 20;
+  assert.equal(g.command('deu', { type: 'armyCreate', region: 'deu-be', troops: want, tanks: 0 }), null);
+  assert.equal(Math.round(c.troops - before.troops), 20, 'troops grow by the draft');
+  assert.equal(Math.round(before.reserves - c.reserves), 20, 'reserves shrink by the draft');
+  const army = Object.values(g.s.armies).find((a) => a.owner === 'deu');
+  assert.equal(army.troops, want);
+  assert.match(g.command('deu', { type: 'armyCreate', region: 'deu-be', troops: c.reserves + 9999, tanks: 0 }), /reservists can be drafted/);
+  // Mobilising afterwards can't pull reservists that are already gone
+  g.command('deu', { type: 'mobilize', level: 2 });
+  for (let i = 0; i < 30; i++) g.tick();
+  assert.ok(c.reserves >= -0.001, `reserves ${c.reserves}`);
+});
+
+test('one click: attacking a country we are allied with declares war, leaves the alliance and attacks', () => {
+  const g = game(11, 'tur');
+  g.setLeader('irq', 'Neighbour');
+  g.command('tur', { type: 'allianceCreate', name: 'Tigris Pact', kind: 'military', invite: ['irq'] });
+  const inv = Object.values(g.s.proposals).find((x) => x.kind === 'alliance' && x.to === 'irq');
+  assert.equal(g.command('irq', { type: 'respond', id: inv.id, accept: true }), null);
+  g.command('tur', { type: 'armyCreate', region: 'tur-se', troops: 150, tanks: 300 });
+  const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
+  // Without "declare" the order is refused and nothing changes
+  assert.match(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'attack', target: 'irq-ms' }), /not at war/);
+  assert.equal(g.s.wars.length, 0);
+  // A landing on a landlocked province is refused before any war starts
+  assert.match(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'invade', target: 'irq-ms', declare: true }), /landlocked|port/);
+  assert.equal(g.s.wars.length, 0, 'an impossible attack does not start a war');
+  assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'attack', target: 'irq-ms', declare: true, aggr: 'allout' }), null);
+  assert.ok(g.s.wars.some((w) => w.a === 'tur' && w.b === 'irq'), 'war declared');
+  for (let i = 0; i < 20 && g.s.regions['irq-ms'].ctrl !== 'tur'; i++) g.tick();
+  assert.equal(g.s.regions['irq-ms'].ctrl, 'tur', 'Mosul taken');
+});
+
+test('empty deserts are their own provinces, worth little next to the oil fields', () => {
+  const g = game(12, 'usa');
+  const r = g.s.regions;
+  for (const [desert, prize] of [['irn-ds', 'irn-kh'], ['sau-eq', 'sau-ep'], ['aus-ob', 'aus-wa'], ['ind-th', 'ind-gj'], ['arg-sp', 'arg-pt']]) {
+    assert.ok(r[desert], `${desert} exists`);
+    assert.ok(r[desert].gdp < r[prize].gdp / 5, `${desert} is worth far less than ${prize}`);
+    assert.ok(GEO[desert].area > 200, `${desert} has real land`);
+  }
+  assert.equal(Object.keys(r['sau-eq'].res).length, 0, 'nothing to extract in the Empty Quarter');
+  assert.ok(r['sau-ep'].res.oil[0] > 8, 'Ghawar stays in the Eastern Province');
+});
+
+/* ---------- Government, the market, spies, range and fog of war ---------- */
+
+test('a draft with no reason brings protests; a nation under attack accepts it', () => {
+  const g = game(21, 'deu');
+  g.setLeader('pol', 'Defender');
+  g.setLeader('rus', 'Aggressor');
+  g.tick();
+  assert.equal(g.command('rus', { type: 'war', target: 'pol' }), null);
+  assert.equal(g.command('deu', { type: 'conscription', level: 'national' }), null);
+  assert.equal(g.command('pol', { type: 'conscription', level: 'national' }), null);
+  const deuApproval = g.s.countries.deu.approval;
+  for (let i = 0; i < 10; i++) g.tick();
+  const draftProtest = (id) => g.s.countries[id].protests.find((p) => p.cause === 'draft')?.size ?? 0;
+  assert.ok(draftProtest('deu') > 15, `Germans protest the draft (${draftProtest('deu')})`);
+  assert.ok(draftProtest('pol') < 5, `Poles under attack accept it (${draftProtest('pol')})`);
+  assert.ok(g.s.countries.deu.approval < deuApproval, 'German approval falls');
+  assert.ok(g.s.countries.deu.troops > COUNTRIES.deu.troops + 50, 'conscripts arrive');
+});
+
+test('an invaded computer-run country calls up its people and drafts reservists', () => {
+  const g = game(22, 'rus');
+  const k = g.s.countries.kaz;
+  const troops = k.troops;
+  assert.equal(g.command('rus', { type: 'war', target: 'kaz' }), null);
+  for (let i = 0; i < 8; i++) g.tick();
+  assert.ok(k.mob >= 1, 'mobilised');
+  assert.notEqual(k.conscription, k.base.conscription, 'conscription raised');
+  assert.ok(k.troops > troops * 1.3, `more soldiers (${Math.round(troops)}K → ${Math.round(k.troops)}K)`);
+});
+
+test('a purchase ships the cargo; it is delivered, or stopped with both sides told who did it', () => {
+  let stopped = 0;
+  let delivered = 0;
+  for (let seed = 30; seed < 36; seed++) {
+    const g = game(seed, 'jpn');
+    g.setLeader('chn', 'Raider');
+    g.tick();
+    const seller = g.view('jpn').market.sellers.oil.find((x) => !x.covert && x.route?.mode === 'sea');
+    assert.ok(seller, 'someone sells oil to Japan by sea');
+    const before = g.s.countries.jpn.treasury;
+    assert.equal(g.command('jpn', { type: 'marketBuy', res: 'oil', qty: 3, from: seller.id }), null);
+    assert.ok(g.s.countries.jpn.treasury < before, 'paid up front');
+    const sh = g.s.shipments.find((x) => x.buyer === 'jpn');
+    assert.equal(g.command('chn', { type: 'intercept', id: sh.id, how: 'seize' }), null);
+    g.tick();
+    if (sh.done && sh.left > 0) {
+      stopped++;
+      if (g.s.countries[seller.id]) assert.ok(g.s.countries[seller.id].inbox.some((m) => /China stopped your shipment of oil to Japan/.test(m.text)), 'the seller is told');
+      assert.ok(g.s.countries.jpn.inbox.some((m) => /China stopped the shipment of oil/.test(m.text)), 'the buyer is told');
+    } else {
+      for (let i = 0; i < 8 && !sh.done; i++) g.tick();
+      if (sh.done) delivered++;
+    }
+  }
+  assert.ok(stopped > 0, 'some cargoes are stopped');
+  assert.ok(stopped + delivered === 6, 'every cargo is either delivered or stopped');
+});
+
+test('spies, once settled in, report armies on the move and reveal them on the map', () => {
+  const g = game(23, 'usa');
+  g.setLeader('chn', 'Rival');
+  g.s.countries.chn.counterIntel = 0;
+  assert.equal(g.command('usa', { type: 'spyPlant', target: 'chn', agents: 12 }), null);
+  g.command('chn', { type: 'armyCreate', region: 'chn-fj', troops: 150, tanks: 0 });
+  const army = Object.values(g.s.armies).find((a) => a.owner === 'chn');
+  g.command('chn', { type: 'armyOrder', id: army.id, kind: 'hold', target: 'chn-gd' });
+  for (let i = 0; i < 7; i++) g.tick();
+  const usa = g.s.countries.usa;
+  assert.ok(usa.reports.some((r) => r.about === 'chn'), 'reports arrive');
+  if (usa.spies.chn) assert.ok(g.view('usa').armies.some((a) => a.owner === 'chn'), 'their armies show on our map');
+});
+
+test('aircraft and missiles only reach so far from a base', () => {
+  const g = game(24, 'irn');
+  g.setLeader('usa', 'Far');
+  assert.equal(g.command('irn', { type: 'war', target: 'usa' }), null);
+  const err = g.command('irn', { type: 'air', region: 'usa-ma', aircraft: 10 });
+  assert.match(err, /km from our nearest base/);
+  assert.equal(g.command('irn', { type: 'range', kind: 'air' }), null, 'range can be extended');
+});
+
+test('secret alliances are hidden from outsiders', () => {
+  const g = game(25, 'pak');
+  assert.equal(g.command('pak', { type: 'allianceCreate', name: 'Quiet Pact', kind: 'military', secret: true }), null);
+  g.setLeader('ind', 'Outsider');
+  assert.ok(g.view('pak').alliances.some((a) => a.name === 'Quiet Pact'));
+  assert.ok(!g.view('ind').alliances.some((a) => a.name === 'Quiet Pact'));
+  assert.ok(!g.s.news.some((n) => /Quiet Pact/.test(n.text)), 'no public news of it');
+});
+
+test('soldiers killed in battle come off the population; conquered people join the conqueror', () => {
+  const g = game(26, 'rus');
+  const pop = g.s.countries.rus.pop;
+  bury(g.s, 'rus', 1000);
+  const homes = Object.values(g.s.regions).filter((r) => r.owner === 'rus').reduce((t, r) => t + r.pop, 0);
+  assert.ok(Math.abs(homes - (pop - 0.35)) < 0.05, 'a thousand thousand casualties, 350,000 dead');
+  const ukr = g.s.regions['m-ukraine'];
+  ukr.ctrl = 'rus';
+  g.tick();
+  assert.ok(g.s.countries.rus.pop > homes + ukr.pop * 0.9, 'Ukraine\'s people are counted under Russian rule');
 });

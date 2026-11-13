@@ -3,7 +3,6 @@
 import { h, flag, money, pct, nationName, regionName, troops, num, relBar } from '../dom.js';
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { TECH_FIELDS, CHOKEPOINTS } from '../../engine/data/world.js';
-import { INTEL } from '../../engine/events.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { proposalCard } from './overview.js';
 import { describeProposal } from '../describe.js';
@@ -87,7 +86,10 @@ export function dossier(ctx, id) {
       stat('Approval', c.approval != null ? `${c.approval}%` : 'unknown'), stat('Stability', c.stability != null ? String(c.stability) : 'unknown'), stat('Standing', String(c.rep)),
       stat('Troops', troops(c.mil.troops)), stat('Tanks', num(c.mil.tanks)), stat('Aircraft', num(c.mil.aircraft)),
       stat('Warships', num(c.mil.ships)), c.mil.carriers ? stat('Carriers', num(c.mil.carriers)) : null, stat('Missiles', num(c.mil.missiles)), stat('Warheads', c.mil.nukes ? num(c.mil.nukes) : c.nukeProgram ? (typeof c.nukeProgram === 'number' ? `programme ${c.nukeProgram}%` : 'programme!') : 'none'),
-      intel ? stat('Reserves', money(c.treasury)) : null, stat('Debt', `${c.debt}%`), stat('Inflation', pct(c.infl))),
+      intel ? stat('Reserves', money(c.treasury)) : null, stat('Debt', `${c.debt}%`), stat('Inflation', pct(c.infl)),
+      stat('Conscription', { volunteer: 'Volunteers', selective: 'Selective', national: 'National service', total: 'Total draft' }[c.conscription] ?? '—')),
+    c.civilWar ? h('div.warning.bad', { style: { marginTop: '10px' } }, `${c.name} is in civil war.`) : null,
+    c.protests?.length ? h('div.warning', { style: { marginTop: '10px' } }, `Protests: ${c.protests.map((p) => `${({ schools: 'school cuts', hospitals: 'hospital cuts', pensions: 'pension cuts', taxes: 'taxes', prices: 'cost of living', shortages: 'shortages', jobs: 'jobs', war: 'the war', draft: 'the draft', rights: 'repression', opposition: 'opposition rallies', occupation: 'occupation' })[p.cause] ?? p.cause} (${p.size}%)`).join(', ')}.`) : null,
     c.exile ? null : h('div.section', h('h3', 'Talk'),
       c.human
         ? h('button.btn.small.primary', { onclick: () => ctx.chat.directTo(id) }, `Message ${c.human}`)
@@ -115,11 +117,12 @@ export function dossier(ctx, id) {
       embassyReady ? null : h('p.muted.small', { style: { marginTop: '6px' } }, `Diplomats ready again in ${cool - s.week} weeks.`),
       h('div.row.gap', { style: { marginTop: '10px' } }, h('span.small', 'Tariff on their goods'),
         h('div.seg.grow', TARIFFS.map((t) => h('button', { 'aria-pressed': String(t === tariff), onclick: () => ctx.send({ type: 'tariff', target: id, level: t }) }, `${t}%`))))),
-    c.exile ? null : h('div.section', h('h3', 'Covert operations'),
-      h('div.list', Object.entries(INTEL).map(([op, d]) => {
-        const wait = (me.cooldown[`intel:${op}:${id}`] ?? -1) - s.week;
-        return h('div.item', h('div.item-head', h('span.name', d.name), h('button.btn.small', { disabled: wait > 0, onclick: () => covert(ctx, op, id) }, wait > 0 ? `${wait} wk` : 'Order')), h('div.meta', d.note));
-      }))),
+    c.exile ? null : h('div.section', h('h3', 'Intelligence'),
+      h('p.muted.small', me.spies?.[id] ? `${me.spies[id].agents} of our agents are inside ${c.name}.` : `We have no agents in ${c.name}.`),
+      h('div.row.wrap.gap', { style: { marginTop: '6px' } },
+        h('button.btn.small', { onclick: () => { ctx.ui.opTarget = id; ctx.go('spies', 'ops'); } }, 'Covert operations…'),
+        me.spies?.[id] ? h('button.btn.small', { onclick: () => { ctx.ui.spyFilter = id; ctx.go('spies', 'reports'); } }, 'Agent reports') : null,
+        h('button.btn.small.ghost', { onclick: () => { ctx.ui.newsCountry = id; ctx.go('news', 'world'); } }, 'News about them'))),
     c.exile ? null : h('div.section', h('h3', 'War'),
       atWar
         ? h('p.muted.small', 'Plan operations from the Military tab or by clicking their provinces on the map.')
@@ -147,18 +150,22 @@ function minorDossier(ctx, id, back) {
   );
 }
 
-async function declareWar(ctx, id) {
+// One click: any alliance or trade bloc we share with them is left as part of declaring war
+export async function declareWar(ctx, id) {
   const s = ctx.state;
+  const shared = s.alliances.filter((al) => al.members.includes(s.me) && al.members.includes(id));
   const defenders = new Set();
   for (const al of s.alliances) if (al.kind === 'military' && al.members.includes(id)) for (const m of al.members) if (m !== id && m !== s.me) defenders.add(m);
   const g = s.minors[id]?.guarantor;
-  if (g) defenders.add(g);
+  if (g && g !== s.me) defenders.add(g);
   const claim = s.you.claims.some((rid) => s.regions[ctx.regionIndex[rid]]?.[1] === id);
   const body = h('div.stack',
     h('p', `War with ${nationName(s, id)} will cost world standing${claim ? ' (less, since you have a claim on its land)' : ''} and may bring sanctions from its friends.`),
+    shared.length ? h('div.warning.warn', `You'll leave ${shared.map((al) => al.name).join(' and ')} as you declare war. Its other members will think less of you.`) : null,
     defenders.size ? h('div.warning.bad', `Its allies may join the war: ${[...defenders].map((d) => nationName(s, d)).join(', ')}.`) : h('div.warning.info', 'It has no allies bound to defend it.'),
     s.treaties.some((t) => t.kind === 'nap' && ((t.a === s.me && t.b === id) || (t.b === s.me && t.a === id))) ? h('div.warning.bad', 'You have a non-aggression pact with them. Breaking it will badly damage your standing.') : null);
-  if (await confirmBox(`Declare war on ${nationName(s, id)}?`, body, { ok: 'Declare war', danger: true })) ctx.send({ type: 'war', target: id });
+  if (!(await confirmBox(`Declare war on ${nationName(s, id)}?`, body, { ok: shared.length ? 'Leave & declare war' : 'Declare war', danger: true }))) return;
+  if (!(await ctx.send({ type: 'war', target: id }))) ctx.toast(`We are at war with ${nationName(s, id)}. Pick an army group and press Attack, or click one of its provinces.`, 'war');
 }
 
 function inviteDialog(ctx, id, alliances) {
@@ -226,20 +233,6 @@ function techDialog(ctx, id) {
   modal({ title: `Share technology with ${nationName(ctx.state, id)}`, body: h('div.stack', h('p.muted.small', 'Gives them half a level of progress in a field where we lead.'), sel.el), actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Share', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'tech', to: id, field: sel.input.value })) || false }] });
 }
 
-function covert(ctx, op, id) {
-  const d = INTEL[op];
-  if (d.region) {
-    ctx.target({
-      text: `Pick a province held by ${nationName(ctx.state, id)} to sabotage`,
-      filter: (rid) => ctx.state.regions[ctx.regionIndex[rid]][1] === id,
-      onPick: (rid) => { ctx.endTarget(); ctx.send({ type: 'intel', op, target: id, region: rid }); },
-    });
-    ctx.focusCountry(id);
-    return;
-  }
-  ctx.send({ type: 'intel', op, target: id });
-}
-
 /* ---------- Peace ---------- */
 
 export function peaceDialog(ctx, foe) {
@@ -296,10 +289,11 @@ function alliances(ctx) {
   const mine = s.alliances.filter((a) => a.members.includes(s.me));
   const others = s.alliances.filter((a) => !a.members.includes(s.me));
   const card = (a, member) => h('div.item',
-    h('div.item-head', h('span.name', a.name), h('span.chip', { class: a.kind === 'military' ? 'accent' : 'good' }, a.kind === 'military' ? 'Military' : 'Trade bloc')),
+    h('div.item-head', h('span.name', a.name), a.secret ? h('span.chip.warn', 'Secret') : null, h('span.chip', { class: a.kind === 'military' ? 'accent' : 'good' }, a.kind === 'military' ? 'Military' : 'Trade bloc')),
     h('div.row.wrap.gap', { style: { marginTop: '6px' } }, a.members.map((m) => h('span.chip', { style: { cursor: 'pointer' }, onclick: () => ctx.openCountry(m) }, flag(m), nationName(s, m)))),
     member ? h('div.actions',
       h('button.btn.small', { onclick: () => inviteMany(ctx, a) }, 'Invite…'),
+      a.secret ? h('button.btn.small', { onclick: async () => { if (await confirmBox(`Make ${a.name} public?`, 'The world will learn who is in it. A public pact deters attackers; it can\'t be made secret again.')) ctx.send({ type: 'allianceReveal', id: a.id }); } }, 'Announce it') : null,
       a.members.some((m) => m !== s.me && s.countries[m]?.human) ? h('button.btn.small', { onclick: () => { ctx.chat.toggle(true); ctx.chat.show(`al:${a.id}`); } }, 'Alliance chat') : null,
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Leave ${a.name}?`, 'Its members will think less of you, and you lose their protection.')) ctx.send({ type: 'allianceLeave', id: a.id }); } }, 'Leave')) : null);
   return h('div',
@@ -319,11 +313,14 @@ function pickCountries(ctx, exclude = []) {
 function newAlliance(ctx) {
   const name = h('input', { maxlength: 40, placeholder: 'e.g. Indo-Pacific Pact' });
   const kind = selectField('Kind', [['military', 'Military alliance (mutual defence)'], ['economic', 'Trade bloc (free trade)']], 'military');
+  const secret = h('input', { type: 'checkbox' });
   const boxes = pickCountries(ctx);
   modal({
     title: 'Found an alliance',
-    body: h('div.stack', h('label.field', h('span', 'Name'), name), kind.el, h('div.field', h('span', 'Invite'), h('div.choice-grid', boxes.map(([id, box, c]) => h('label.choice', box, flag(id), c.name, c.human ? h('span.faint', ' ★') : null))))),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Found it', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'allianceCreate', name: name.value, kind: kind.input.value, invite: boxes.filter(([, b]) => b.checked).map(([id]) => id) })) || false }],
+    body: h('div.stack', h('label.field', h('span', 'Name'), name), kind.el,
+      h('label.choice', secret, h('span', h('b', 'Secret pact'), h('span.muted', ': only members (and spies inside them) know. It is revealed if a member goes to war for another.'))),
+      h('div.field', h('span', 'Invite'), h('div.choice-grid', boxes.map(([id, box, c]) => h('label.choice', box, flag(id), c.name, c.human ? h('span.faint', ' ★') : null))))),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Found it', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'allianceCreate', name: name.value, kind: kind.input.value, secret: secret.checked, invite: boxes.filter(([, b]) => b.checked).map(([id]) => id) })) || false }],
   });
 }
 
@@ -365,7 +362,8 @@ function world(ctx) {
   return h('div',
     settle.length ? h('div.section', h('h3', 'Surrendered to you'), h('div.list', settle.map(([id, m]) => h('div.item.clickable', { onclick: () => ctx.openCountry(id) }, h('div.item-head', h('span.name', m.name), h('span.chip.good', 'Decide')))))) : null,
     h('div.section', h('h3', 'Shipping chokepoints'),
-      h('p.muted.small', 'Hold a strait and you can close it. Closing one sends prices up worldwide and costs standing.'),
+      h('p.muted.small', 'Hold a strait and you can close it, charge a toll or turn it on enemy shipping; any navy in reach can patrol one.'),
+      h('button.btn.small', { style: { margin: '6px 0' }, onclick: () => ctx.go('market', 'straits') }, 'Tolls, patrols and policies…'),
       h('div.list', { style: { marginTop: '8px' } }, Object.entries(CHOKEPOINTS).map(([key, cp]) => {
         const closedBy = s.chokepoints[key]?.closedBy;
         const holders = [...new Set(cp.regions.map((r) => s.regions[ctx.regionIndex[r]]?.[1]).filter(Boolean))];

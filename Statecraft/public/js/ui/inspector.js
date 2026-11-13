@@ -6,9 +6,11 @@ import { GEO } from '../engine/data/geo.js';
 import { CHOKEPOINTS } from '../engine/data/world.js';
 import { MINOR_TERRAIN } from '../engine/names.js';
 import { PROJECT_WEEKS } from '../engine/economy.js';
-import { AGGRESSION } from '../engine/military.js';
 import { modal, numberField, selectField, confirmBox } from './dialogs.js';
 import { armyCard, myArmies, formArmy } from './panels/military.js';
+import { declareWar } from './panels/diplomacy.js';
+import { attackDialog, attackable } from './attack.js';
+import { subregions, GOING } from '../engine/terrain.js';
 
 const TERRAIN_OF = Object.fromEntries(PROVINCES.map((p) => [p.id, p.terrain]));
 
@@ -20,7 +22,7 @@ export function showRegion(ctx, id) {
   const s = ctx.state;
   const row = s.regions[ctx.regionIndex[id]];
   if (!row) return closeInspector();
-  const [owner, ctrl, dmg, infra, fort, battleBy, prog, unrest, gar, gdp, pop] = row;
+  const [owner, ctrl, dmg, infra, fort, battleBy, prog, unrest, gar, gdp, pop, rebels] = row;
   const me = s.me;
   const atWarWith = (x) => s.wars.some((w) => (w.a === me && w.b === x) || (w.b === me && w.a === x));
   const occupied = owner !== ctrl;
@@ -44,15 +46,19 @@ export function showRegion(ctx, id) {
     actions.push(h('button.btn.small', { onclick: () => fortify(ctx, id, fort) }, `Fortify (${fort}/5)`));
     if (!s.minors[owner]?.capitulated) actions.push(h('button.btn.small.danger', { onclick: async () => { if (await confirmBox(`Annex ${regionName(id)}?`, 'It becomes part of your country. Its old owner will claim it back, and most countries will refuse to recognise the annexation.', { ok: 'Annex', danger: true })) ctx.send({ type: 'annex', region: id }); } }, 'Annex'));
   }
+  if (!enemyHeld && attackable(ctx, id)) {
+    actions.push(h('button.btn.small.primary', { onclick: () => attackDialog(ctx, { target: id }) }, 'Attack…'));
+    actions.push(h('button.btn.small.danger', { onclick: () => declareWar(ctx, ctrl) }, `Declare war on ${nationName(s, ctrl)}…`));
+  }
   if (enemyHeld) {
-    actions.push(h('button.btn.small.primary', { onclick: () => pickArmy(ctx, id, 'attack') }, mineOwned ? 'Liberate…' : 'Attack…'));
-    if (GEO[id].coast) actions.push(h('button.btn.small', { onclick: () => pickArmy(ctx, id, 'invade') }, 'Amphibious landing…'));
+    actions.push(h('button.btn.small.primary', { onclick: () => attackDialog(ctx, { target: id }) }, mineOwned ? 'Liberate…' : 'Attack…'));
     actions.push(h('button.btn.small', { onclick: () => airStrike(ctx, id) }, 'Air campaign…'));
     actions.push(h('button.btn.small', { onclick: () => missile(ctx, id) }, 'Missile strike…'));
     if (s.you?.nukes > 0) actions.push(h('button.btn.small.danger', { onclick: () => nuke(ctx, id) }, '☢ Nuclear strike…'));
   }
-  if (mineHeld) actions.push(h('button.btn.small', { onclick: () => pickArmy(ctx, id, 'hold') }, 'Send an army to hold it…'));
+  if (mineHeld) actions.push(h('button.btn.small', { onclick: () => pickArmy(ctx, id) }, 'Send an army to hold it…'));
   if (!mineOwned) actions.push(h('button.btn.small.ghost', { onclick: () => ctx.openCountry(owner) }, `${nationName(s, owner)} dossier`));
+  if (cps.length) actions.push(h('button.btn.small.ghost', { onclick: () => ctx.go('market', 'straits') }, 'Strait: tolls & patrols…'));
   for (const [key, cp] of cps) {
     if (ctrl !== me) continue;
     const closedBy = s.chokepoints[key]?.closedBy;
@@ -65,10 +71,15 @@ export function showRegion(ctx, id) {
     h('button.icon-btn.close', { onclick: () => ctx.closeSelection(), 'aria-label': 'Close' }, '✕'),
     h('h2', regionName(id)),
     h('div.row.gap.sub', flag(owner), h('span', nationName(s, owner)), occupied ? h('span.chip.bad', `Held by ${nationName(s, ctrl)}`) : null, GEO[id].coast ? h('span.chip', 'Coastal') : h('span.chip', 'Landlocked')),
-    battleBy ? h('div.warning.bad', { style: { marginTop: '10px' } }, `Battle: ${nationName(s, battleBy)} is ${prog}% of the way to taking it.`) : null,
+    battleBy ? h('div.warning.bad', { style: { marginTop: '10px' } }, `Battle: ${nationName(s, battleBy)} is ${prog}% of the way to taking it. The dashed white line on the map is the front: ${nationName(s, battleBy)} holds the ground behind it.`) : null,
+    rebels > 0 ? h('div.warning.bad', { style: { marginTop: '10px' } }, `🔥 Uprising: about ${troops(rebels)} armed rebels.`,
+      ctrl === me ? h('div.actions',
+        h('button.btn.small', { onclick: () => pickArmy(ctx, id) }, 'Send an army'),
+        h('button.btn.small', { onclick: () => ctx.send({ type: 'uprising', region: id, action: 'crush' }) }, 'Crack down'),
+        h('button.btn.small', { onclick: () => ctx.send({ type: 'uprising', region: id, action: 'amnesty' }) }, 'Offer amnesty')) : null) : null,
     h('div.facts',
       fact('Population', people(pop)), fact('Output', money(gdp)),
-      fact('Terrain', `${terrain.name} (×${terrain.defend} defence)`), fact('Garrison', mineHeld || ctrl === me ? troops(gar) : `~${troops(Math.round(gar / 10) * 10)}`),
+      h('div', h('span', 'Terrain'), h('b', `${terrain.name} (×${terrain.defend} defence)`), h('button.btn.small.ghost', { style: { marginTop: '2px', padding: '2px 6px' }, onclick: () => ground(ctx, id) }, 'Ground & passes…')), fact('Garrison', mineHeld || ctrl === me ? troops(gar) : `~${troops(Math.round(gar / 10) * 10)}`),
       fact('Infrastructure', `${infra}/10`), fact('Fortifications', `${fort}/5`),
       fact('War damage', `${dmg}%`), fact('Unrest', `${unrest}%`)),
     Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '4px 0 6px' } }, 'RESOURCES'), Object.entries(res).map(([r, [cur, pot]]) => {
@@ -96,8 +107,26 @@ export function showArmy(ctx, id) {
     h('h2', a.name),
     h('div.row.gap.sub', flag(a.owner), h('span', nationName(s, a.owner)), h('span.faint', a.sea ? 'at sea' : regionName(a.region))),
     h('div', { style: { marginTop: '10px' } }, a.owner === s.me ? armyCard(ctx, a, true) : foreignArmy(ctx, a)),
+    a.owner === s.me && !a.sea ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Tip: with this army selected, right-click any province to send it there: an enemy one to attack it, one of ours to move and hold.') : null,
   );
   $('inspector').hidden = false;
+}
+
+// The ground inside a province, and whether infantry and tanks can get through it
+function ground(ctx, id) {
+  const list = subregions(id);
+  const chip = (g) => h('span.chip', { class: { good: 'good', slow: '', hard: 'warn', none: 'bad' }[g] }, GOING[g].name);
+  modal({
+    title: `${regionName(id)}: the ground`,
+    body: h('div.stack',
+      h('p.muted.small', 'Armies cross a province along its easiest ground. Forest, mountains, marsh and jungle slow them and favour the defender; open plains and desert suit tanks.'),
+      h('div.list', list.map((x) => h('div.item',
+        h('div.item-head', h('span.name', x.name), h('span.muted.small', x.terrainName)),
+        h('div.row.wrap.gap', { style: { marginTop: '6px' } }, h('span.small.muted', 'Infantry'), chip(x.inf), h('span.small.muted', 'Armour'), chip(x.arm)),
+        h('div.meta', x.note),
+        x.surprise ? h('div.warning', { style: { marginTop: '6px' } }, 'Widely thought impassable, so defenders leave it thin. An attack through here hits hard for its first weeks, unless an army is holding the province or it is well fortified.') : null)))),
+    actions: [{ label: 'Close', kind: 'ghost' }],
+  });
 }
 
 function foreignArmy(ctx, a) {
@@ -112,20 +141,19 @@ function foreignArmy(ctx, a) {
 
 /* ---------- Actions ---------- */
 
-function pickArmy(ctx, target, kind) {
+// Sends one of our armies to hold a province (attacks go through attackDialog)
+function pickArmy(ctx, target) {
   const s = ctx.state;
-  const list = myArmies(s).filter((a) => !a.sea && (kind !== 'invade' || GEO[a.region]?.coast));
+  const list = myArmies(s).filter((a) => !a.sea);
   if (!list.length) {
-    ctx.toast(kind === 'invade' ? 'You need an army group in a coastal province first.' : 'Form an army group first (Military tab).', 'warn');
+    ctx.toast('Form an army group first: click "Form army here" on one of your provinces.', 'warn');
     return;
   }
   const sel = selectField('Army group', list.map((a) => [a.id, `${a.name} · ${troops(a.troops)} · ${regionName(a.region)}`]));
-  const aggr = selectField('How hard should the general push?', Object.entries(AGGRESSION).map(([k, v]) => [k, `${v.name}${k === 'cautious' ? ' (attacks only with clear odds)' : k === 'allout' ? ' (attacks whatever the odds)' : ''}`]), 'balanced');
-  const verb = { attack: 'Attack', hold: 'Hold', invade: 'Land in' }[kind];
   modal({
-    title: `${verb} ${regionName(target)}`,
-    body: h('div.stack', sel.el, kind === 'hold' ? null : aggr.el, h('p.muted.small', kind === 'attack' ? 'The general picks the route and fights through any enemy provinces on the way.' : kind === 'invade' ? 'The army sails from its coastal province; enemy fleets can sink part of it on the way, and landings are costly.' : 'The army moves through friendly ground and digs in.')),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: verb, kind: 'primary', onClick: async () => !(await ctx.send({ type: 'armyOrder', id: sel.input.value, kind, target, aggr: aggr.input.value })) || false }],
+    title: `Hold ${regionName(target)}`,
+    body: h('div.stack', sel.el, h('p.muted.small', 'The army moves through friendly ground and digs in.')),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Hold', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'armyOrder', id: sel.input.value, kind: 'hold', target })) || false }],
   });
 }
 

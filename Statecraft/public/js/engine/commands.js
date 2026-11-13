@@ -4,17 +4,22 @@
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
-import { clamp, news, alert, alive, nameOf, money, nextId } from './core.js';
+import { clamp, news, alert, alive, nameOf, money, nextId, atWar } from './core.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor } from './economy.js';
 import {
   createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setBlockade,
-  setAirCampaign, settleMinor,
+  setAirCampaign, settleMinor, checkOrder,
 } from './military.js';
 import {
   declareWar, propose, respond, createAlliance, leaveAlliance, setSanctions, setTariff, giveAid, shareTech, embassy,
   annex, setChokepoint, proposeResolution, vote,
 } from './diplomacy.js';
 import { covertOp } from './events.js';
+import { setConscription, setSecurity, setPress, handleProtest, handleUprising } from './government.js';
+import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, setPatrol } from './trade.js';
+import { plant, recall, setCounterIntel, sweep } from './spies.js';
+import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
+import { setAllianceSecrecy } from './diplomacy.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 export const SPEND_KEYS = ['defence', 'infra', 'edu', 'health', 'research', 'welfare'];
@@ -219,9 +224,20 @@ const HANDLERS = {
 
   /* ---------- Armies and operations ---------- */
   armyCreate(s, c, cmd) { return createArmy(s, c, cmd); },
-  armyOrder(s, c, { id, ids, kind, target, aggr }) {
+  // With declare, an attack on a country we're not at war with declares war first (leaving shared alliances),
+  // but only once the attack itself is known to be possible
+  armyOrder(s, c, { id, ids, kind, target, aggr, declare }) {
     const list = (ids ?? [id]).map((x) => s.armies[x]);
     if (!list.length || list.some((a) => !a)) return 'Pick an army.';
+    const holder = s.regions[target]?.ctrl;
+    if (declare && (kind === 'attack' || kind === 'invade') && holder && holder !== c.id && !atWar(s, c.id, holder)) {
+      for (const a of list) {
+        const err = checkOrder(s, c, a, { kind, target, aggr });
+        if (err) return list.length > 1 ? `${a.name}: ${err}` : err;
+      }
+      const err = declareWar(s, c, holder, 'conquest', { leaveShared: true });
+      if (err) return err;
+    }
     for (const a of list) {
       const err = orderArmy(s, c, a, { kind, target, aggr });
       if (err) return list.length > 1 ? `${a.name}: ${err}` : err;
@@ -246,11 +262,11 @@ const HANDLERS = {
   air(s, c, { region, aircraft }) { return setAirCampaign(s, c, region, aircraft); },
 
   /* ---------- Diplomacy ---------- */
-  war(s, c, { target, goal }) { return declareWar(s, c, target, goal); },
+  war(s, c, { target, goal }) { return declareWar(s, c, target, goal, { leaveShared: true }); },
   propose(s, c, { to, kind, terms }) { return propose(s, c.id, to, kind, terms && typeof terms === 'object' ? terms : {}); },
   respond(s, c, { id, accept }) { return respond(s, c.id, id, Boolean(accept)); },
-  allianceCreate(s, c, { name, kind, invite }) {
-    const result = createAlliance(s, c, { name, kind });
+  allianceCreate(s, c, { name, kind, invite, secret }) {
+    const result = createAlliance(s, c, { name, kind, secret: Boolean(secret) });
     if (typeof result === 'string') return result;
     for (const to of Array.isArray(invite) ? invite.slice(0, 49) : []) propose(s, c.id, to, 'alliance', { alliance: result.id });
     return null;
@@ -272,6 +288,35 @@ const HANDLERS = {
   unPropose(s, c, { kind, target }) { return proposeResolution(s, c, kind, target); },
   unVote(s, c, { id, vote: v }) { return vote(s, c, id, v); },
   intel(s, c, { op, target, region }) { return covertOp(s, c, op, target, region); },
+  allianceReveal(s, c, { id }) { return setAllianceSecrecy(s, c, id, false); },
+
+  /* ---------- Government ---------- */
+  conscription(s, c, { level }) { return setConscription(s, c, level); },
+  security(s, c, { level }) { return setSecurity(s, c, level); },
+  press(s, c, { level }) { return setPress(s, c, level); },
+  protest(s, c, { id, action }) { return handleProtest(s, c, id, action); },
+  uprising(s, c, { region, action }) { return handleUprising(s, c, region, action); },
+
+  /* ---------- Market and shipping ---------- */
+  marketBuy(s, c, { res, qty, from, covert }) { return buy(s, c, { res, qty, from, covert: Boolean(covert) }); },
+  marketSell(s, c, { res, qty }) { return sellToWorld(s, c, { res, qty }); },
+  marketOffer(s, c, { res, qty, markup }) { return setOffer(s, c, { res, qty, markup }); },
+  intercept(s, c, { id, how }) { return orderIntercept(s, c, { id, how }); },
+  toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
+  straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
+  patrol(s, c, { key, ships, mode }) { return setPatrol(s, c, key, ships, mode); },
+
+  /* ---------- Spies ---------- */
+  spyPlant(s, c, { target, agents }) { return plant(s, c, target, agents); },
+  spyRecall(s, c, { target }) { return recall(s, c, target); },
+  counterIntel(s, c, { level }) { return setCounterIntel(s, c, level); },
+  spySweep(s, c) { return sweep(s, c); },
+
+  /* ---------- Science ---------- */
+  research(s, c, { field }) { return startResearch(s, c, field); },
+  cancelResearch(s, c, { id }) { return cancelResearch(s, c, id); },
+  licence(s, c, { from, field }) { return buyLicence(s, c, from, field); },
+  range(s, c, { kind }) { return extendRange(s, c, kind); },
 };
 
 function pay(c, cost) {

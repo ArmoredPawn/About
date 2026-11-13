@@ -6,6 +6,8 @@ import { CHOKEPOINTS, TECH_FIELDS } from './data/world.js';
 import { demandWeight, STOCK_WEEKS } from './setup.js';
 import { clamp, news, alert, alive, atWar, allied, enemiesOf, alliancesOf, treaty, chance, rand, money, nameOf, isMinor } from './core.js';
 import { REGION_NAMES } from './names.js';
+import { researchTick, rangeTick } from './science.js';
+import { patrolBlocks } from './trade.js';
 
 // Share of output lost when a resource is completely short
 const SHORT_WEIGHT = { oil: 0.3, gas: 0.12, coal: 0.08, iron: 0.04, food: 0.08, rare: 0.03, uran: 0, metal: 0.05, chip: 0.1 };
@@ -86,7 +88,8 @@ export function blockadeEffect(s, target) {
 function closedChokepoints(s, id) {
   const out = [];
   for (const [key, cp] of Object.entries(s.chokepoints)) {
-    if (!cp.closedBy || cp.closedBy === id || allied(s, cp.closedBy, id)) continue;
+    const closed = cp.closedBy && cp.closedBy !== id && !allied(s, cp.closedBy, id);
+    if (!closed && !patrolBlocks(s, key, id)) continue;
     out.push(CHOKEPOINTS[key]);
   }
   return out;
@@ -137,7 +140,11 @@ export function marketTick(s) {
   const acc = new Map(nations.map((n) => [n.id, access(s, n.id, world)]));
   const chokes = new Map(nations.map((n) => [n.id, closedChokepoints(s, n.id)]));
   let shock = 0;
-  for (const [key, cp] of Object.entries(s.chokepoints)) if (cp.closedBy) shock += CHOKEPOINTS[key].priceShock ?? 0;
+  for (const [key, cp] of Object.entries(s.chokepoints)) {
+    const blockedAll = Object.values(cp.patrols ?? {}).some((pt) => pt.mode === 'all');
+    if (cp.closedBy || blockedAll) shock += CHOKEPOINTS[key].priceShock ?? 0;
+    if (cp.toll) shock += (CHOKEPOINTS[key].priceShock ?? 0.04) * cp.toll.rate / 50;
+  }
   for (const n of nations) n.windfall = 0;
   const index = new Map();
   for (const reg of Object.values(s.regions)) {
@@ -233,6 +240,8 @@ export function economyTick(s, world) {
     mobilisation(s, c);
     opinion(s, c, mods);
     research(s, c);
+    researchTick(s, c);
+    rangeTick(s, c);
     production_(s, c);
     projects(s, c);
     nuclearProgramme(s, c);
@@ -243,13 +252,23 @@ export function economyTick(s, world) {
     if (m.annexed) continue;
     // At war, minor nations call up reserves to replace their losses
     m.baseTroops ??= m.troops;
-    if (enemiesOf(s, m.id).size && m.troops < m.baseTroops * 1.4) m.troops += m.baseTroops * 0.012;
+    const foes = enemiesOf(s, m.id);
+    if (foes.size) {
+      // Everyone who can hold a rifle: up to about 4% of the people against a stronger invader
+      let threat = 0;
+      for (const f of foes) threat += s.countries[f] ? s.countries[f].troops * 0.3 : (s.minors[f]?.troops ?? 0);
+      const cap = Math.max(m.baseTroops * 1.4, Math.min(m.pop * 1000 * 0.04, m.baseTroops + threat * 0.5));
+      if (m.troops < cap) m.troops += Math.max(m.baseTroops * 0.012, (cap - m.troops) * 0.04);
+    }
     let gdp = 0;
     let pop = 0;
     for (const reg of Object.values(s.regions)) {
       if (reg.owner !== m.id) continue;
       reg.gdp *= 1 + 2.5 / 5200;
       if (reg.ctrl === m.id) { gdp += reg.gdp * (1 - 0.8 * reg.dmg); pop += reg.pop; }
+    }
+    for (const reg of Object.values(s.regions)) {
+      if (reg.owner !== m.id && reg.ctrl === m.id) pop += reg.pop;
     }
     m.gdp = gdp;
     m.pop = pop;
@@ -263,8 +282,8 @@ function output(s, c, mods) {
   for (const reg of Object.values(s.regions)) {
     if (reg.ctrl !== c.id) continue;
     const own = reg.owner === c.id;
-    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250);
-    if (own) pop += reg.pop;
+    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1);
+    pop += reg.pop;
   }
   c.pot = pot;
   c.pop = pop || c.pop * 0.99;
@@ -274,7 +293,9 @@ function output(s, c, mods) {
   const tot = clamp(((c.windfall ?? 0) * 52) / Math.max(1, pot) * 0.3, -0.08, 0.12);
   let level = 1;
   for (const m of mods) if (m.kind === 'gdp') level *= 1 + m.value;
-  c.gdp = Math.max(0.5, pot * (1 - clamp(loss, 0, 0.6)) * (1 + tot) * [1, 0.985, 0.95][c.mob] * level);
+  // Conscripts are workers taken out of farms and factories
+  const drafted = Math.max(0, c.conscripts ?? 0) / Math.max(1, c.pop * 1000);
+  c.gdp = Math.max(0.5, pot * (1 - clamp(loss, 0, 0.6)) * (1 + tot) * [1, 0.985, 0.95][c.mob] * level * (1 - (c.strike ?? 0)) * (1 - drafted * 0.9));
 }
 
 export function tradeScore(s, c, world) {
@@ -379,6 +400,8 @@ function mobilisation(s, c) {
   c.reserveBase ??= c.reserves + c.mobTroops;
   const want = c.reserveBase * [0, 0.3, 0.8][c.mob];
   let step = clamp(want - c.mobTroops, -0.08 * c.reserveBase, 0.08 * c.reserveBase);
+  // Reservists already drafted straight into armies can't be called up twice
+  if (step > 0) step = Math.min(step, Math.max(0, c.reserves));
   if (step < 0) {
     const inArmies = Object.values(s.armies).filter((a) => a.owner === c.id).reduce((t, a) => t + a.troops, 0);
     step = Math.max(step, -(c.troops - inArmies));
@@ -397,6 +420,7 @@ function opinion(s, c, mods) {
     - 1.0 * (c.tax - b.tax)
     + 0.8 * (sp.health - b.spend.health) + 0.5 * (sp.welfare - b.spend.welfare) + 0.4 * (sp.edu - b.spend.edu)
     - Math.min(30, c.warWeariness)
+    - (c.protestDrag ?? 0) - (c.draftDrag ?? 0)
     + c.rally + c.boost
     - 25 * (c.short.food ?? 0) - 10 * (c.short.gas ?? 0) - 8 * (c.short.oil ?? 0);
   let lost = 0;
@@ -418,7 +442,8 @@ function opinion(s, c, mods) {
   c.boost *= 0.94;
   c.warWeariness *= enemiesOf(s, c.id).size ? 0.995 : 0.97;
 
-  let stab = 0.6 * c.approval + (autocracy ? 32 : c.gov === 'hybrid' ? 26 : 22) + (c.martial ? 15 : 0) - occupied * 20 - 20 * (c.short.food ?? 0);
+  let stab = 0.6 * c.approval + (autocracy ? 32 : c.gov === 'hybrid' ? 26 : 22) + (c.martial ? 15 : 0) - occupied * 20 - 20 * (c.short.food ?? 0)
+    - (c.protestDrag ?? 0) * 0.8 - (c.civilWar ? 15 : 0);
   for (const m of mods) if (m.kind === 'stability') stab += m.value;
   c.stability = clamp(c.stability + (clamp(stab, 0, 100) - c.stability) * 0.05, 0, 100);
   c.rep += (b.rep - c.rep) * 0.004;
@@ -432,7 +457,7 @@ function opinion(s, c, mods) {
 }
 
 function research(s, c) {
-  const points = (c.gdp * c.spend.research) / 100 / 52 * (1 + 0.03 * (c.spend.edu - c.base.spend.edu));
+  const points = (c.gdp * c.spend.research) / 100 / 52 * (1 + 0.03 * (c.spend.edu - c.base.spend.edu)) * 0.5;
   const fields = Object.keys(TECH_FIELDS);
   for (const f of fields) {
     const share = f === c.focus ? 0.4 : 0.6 / (fields.length - 1);

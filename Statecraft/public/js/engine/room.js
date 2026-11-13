@@ -2,8 +2,7 @@
 // It knows nothing about networks: a connection is { send(object) }. The server runs many rooms;
 // solo play runs one in the browser.
 //
-// From players: settings { years, speed, pool } (host), start (host), pause { on } (host), speed { speed } (host),
-//   end (host), again (host), cmd { req, cmd }, chat { ch, text }, dm { to }, group { name, members },
+// From players: settings { years, speed, pool } (host), start (host), end (host), again (host), cmd { req, cmd }, chat { ch, text }, dm { to }, group { name, members },
 //   groupInvite { ch, members }, groupLeave { ch }
 // To players: lobby, state, chat, channels, cmdResult, alert/news (fresh events), error
 
@@ -113,17 +112,10 @@ export class Room {
       case 'start':
         if (!isHost) return;
         return this.start();
+      // The world runs in real time: no pausing, and the pace is fixed when the game starts
       case 'pause':
-        if (!isHost || this.phase !== 'playing') return;
-        this.paused = Boolean(msg.on);
-        this.#system(this.paused ? `${player.name} paused the game.` : `${player.name} resumed the game.`);
-        this.#runClock();
-        return this.#everyone();
       case 'speed':
-        if (!isHost || !SPEEDS[msg.speed]) return;
-        this.settings.speed = msg.speed;
-        this.#runClock();
-        return this.#everyone();
+        return;
       case 'end':
         if (!isHost || this.phase !== 'playing') return;
         this.game.finish();
@@ -173,7 +165,7 @@ export class Room {
     this.settings.years = state.settings.years;
     this.phase = state.over ? 'over' : 'playing';
     player.cid = Object.values(state.countries).find((c) => c.human)?.id ?? null;
-    this.paused = true;
+    this.paused = false;
     this.#runClock();
     this.#everyone();
   }

@@ -3,7 +3,7 @@
 import { $, h, flag, money, pct, nationName, regionName, colorOf, RES_COLORS, RES_LETTERS } from './ui/dom.js';
 import { RemoteLink, LocalLink, hasSavedRoom, loadSolo, clearSolo, serverBase } from './net.js';
 import { WorldMap, INDEX, CAPITALS } from './ui/map.js';
-import { renderHud } from './ui/hud.js';
+import { renderHud, liveDate } from './ui/hud.js';
 import { Chat } from './ui/chat.js';
 import { toast, confirmBox, closeModal } from './ui/dialogs.js';
 import { showRegion, showArmy, closeInspector, airStrike, missile } from './ui/inspector.js';
@@ -13,18 +13,29 @@ import { military } from './ui/panels/military.js';
 import { diplomacy } from './ui/panels/diplomacy.js';
 import { research } from './ui/panels/research.js';
 import { world } from './ui/panels/world.js';
+import { government } from './ui/panels/government.js';
+import { market } from './ui/panels/market.js';
+import { spies } from './ui/panels/spies.js';
+import { news } from './ui/panels/news.js';
+import { SPEEDS } from './engine/room.js';
+import { rangeProblem } from './engine/science.js';
 import { RESOURCES, RESOURCE_INFO } from './engine/data/regions.js';
 import { GEO } from './engine/data/geo.js';
 import { route } from './engine/military.js';
 import { fauxState } from './ui/map.js';
+import { attackDialog, attackOptions, canAttackWith, attackBlocker } from './ui/attack.js';
 
 const NAME_KEY = 'statecraft.name';
 const TABS = [
   ['overview', 'Cabinet', '<path d="M3 21h18M5 21V10M19 21V10M9 21V10M15 21V10M2 10l10-6 10 6"/>', overview],
+  ['government', 'Govern', '<path d="M12 3v3M5 21V11h14v10M3 21h18M8 11V8h8v3"/><path d="M10 21v-5h4v5"/>', government],
   ['economy', 'Economy', '<path d="M3 20h18M6 16V9M11 16V5M16 16v-5M21 16V8"/>', economy],
+  ['market', 'Market', '<path d="M3 9l2-5h14l2 5M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zM5 13v8h14v-8"/>', market],
   ['military', 'Military', '<path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>', military],
   ['diplomacy', 'Diplomacy', '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-4 6-4 9s1 6 4 9M12 3c3 3 4 6 4 9s-1 6-4 9"/>', diplomacy],
+  ['spies', 'Spies', '<circle cx="8" cy="15" r="3"/><circle cx="16" cy="15" r="3"/><path d="M11 15h2M3 10h18M6 10l2-6h8l2 6"/>', spies],
   ['research', 'Research', '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/><path d="M7.5 15h9"/>', research],
+  ['news', 'News', '<path d="M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M7 9h7M7 13h7M7 16h4"/>', news],
   ['world', 'World', '<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>', world],
 ];
 const MODES = [['political', 'Political'], ['alliances', 'Blocs'], ['resources', 'Resources'], ['economy', 'Economy'], ['relations', 'Relations']];
@@ -47,6 +58,9 @@ const app = {
   panelDirty: false,
   finalShown: false,
   focused: false,
+  newsLog: new Map(),
+  lastTick: 0,
+  tickMs: SPEEDS.normal,
 };
 
 /* ---------- The context handed to every panel ---------- */
@@ -95,6 +109,18 @@ const ctx = {
   closeSelection,
   orderArmy(army, kind) {
     const s = app.state;
+    if (kind === 'attack' || kind === 'invade') {
+      ctx.target({
+        text: `Attack: click the province ${army.name} should attack`,
+        from: army.region, kind: 'attack',
+        filter: (id) => canAttackWith(ctx, army, id),
+        reason: (id) => attackBlocker(ctx, army, id),
+        onReject: (id) => hint(attackBlocker(ctx, army, id) ?? `${army.name} can't attack ${regionName(id)}.`, 'bad', 7000),
+        path: (id) => { const o = attackOptions(ctx, army, id); return o.path ?? (o.sea ? [id] : null); },
+        onPick: (id) => { ctx.endTarget(); attackDialog(ctx, { army, target: id }); },
+      });
+      return;
+    }
     const verbs = { attack: 'Attack', hold: 'Hold or move', invade: 'Amphibious landing' };
     const filter = (id) => {
       const ctrl = s.regions[INDEX[id]][1];
@@ -108,10 +134,13 @@ const ctx = {
       const b = h('button', { 'aria-pressed': String(k === aggr), onclick: () => { aggr = k; for (const x of seg.children) x.setAttribute('aria-pressed', String(x === b)); } }, l);
       return b;
     }));
+    const why = (id) => (kind === 'hold' ? `${army.name} can't reach ${regionName(id)} through friendly ground. Ask for military access, or attack instead.` : `${regionName(id)} isn't a valid target.`);
     ctx.target({
       text: `${verbs[kind]}: pick a target for ${army.name}`,
       extra: seg,
       from: army.region, kind, filter,
+      reason: why,
+      onReject: (id) => hint(why(id), 'bad'),
       onPick: async (id) => {
         ctx.endTarget();
         const err = await ctx.send({ type: 'armyOrder', id: army.id, kind, target: id, aggr });
@@ -121,12 +150,16 @@ const ctx = {
   },
   strikeTarget(kind) {
     const s = app.state;
+    const enemy = (id) => {
+      const ctrl = s.regions[INDEX[id]][1];
+      return s.wars.some((w) => (w.a === s.me && w.b === ctrl) || (w.b === s.me && w.a === ctrl));
+    };
+    const why = (id) => (!enemy(id) ? `${regionName(id)} isn't held by a country we are at war with.` : rangeProblem(fauxState(s), s.you, id, kind === 'missile' ? 'missile' : 'air'));
     ctx.target({
       text: kind === 'missile' ? 'Pick an enemy-held province to strike' : 'Pick an enemy-held province to bomb',
-      filter: (id) => {
-        const ctrl = s.regions[INDEX[id]][1];
-        return s.wars.some((w) => (w.a === s.me && w.b === ctrl) || (w.b === s.me && w.a === ctrl));
-      },
+      filter: (id) => !why(id),
+      reason: why,
+      onReject: (id) => hint(why(id), 'bad', 7000),
       onPick: (id) => { ctx.endTarget(); (kind === 'missile' ? missile : airStrike)(ctx, id); },
     });
   },
@@ -140,6 +173,7 @@ const ctx = {
   endTarget() {
     map.stopTargeting();
     $('target-bar').hidden = true;
+    hint(null);
   },
   mapMode(mode, res) {
     app.ui.mapMode = mode;
@@ -148,6 +182,9 @@ const ctx = {
     renderMapTools();
   },
   toast: (text, kind, onClick) => toast(text, kind, onClick),
+  hint: (text, kind) => hint(text, kind),
+  newsLog: () => [...app.newsLog.values()].sort((a, b) => b.id - a.id),
+  tickAge: () => (app.lastTick ? (performance.now() - app.lastTick) / app.tickMs : 0),
   chatUnread: () => ctx.chat?.unread() ?? 0,
   toggleChat: (force) => ctx.chat.toggle(force),
   refreshHud: () => { if (app.screen === 'game' && app.state) renderHud(ctx); },
@@ -157,7 +194,40 @@ const ctx = {
 const map = new WorldMap($('map'), {
   onRegion: (id) => (id ? selectRegion(id) : closeSelection()),
   onArmy: (id) => ctx.selectArmy(id),
+  onContext: (id) => quickOrder(id),
+  onTargetHint: (text) => hint(text, 'bad', 0),
 });
+
+// Messages along the bottom of the map: why an order can't be carried out, and other short notices
+let hintTimer = null;
+function hint(text, kind = 'bad', ms = 6000) {
+  const el = $('map-hint');
+  clearTimeout(hintTimer);
+  if (!text) { el.hidden = true; return; }
+  el.textContent = text;
+  el.className = `map-hint ${kind}`;
+  el.hidden = false;
+  if (ms) hintTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+// Right-click with an army selected: attack an enemy (or foreign) province, or move to one of ours
+function quickOrder(id) {
+  const s = app.state;
+  const armyId = app.selection?.army;
+  const a = s?.armies.find((x) => x.id === armyId && x.owner === s.me);
+  if (!a) return hint('Select one of your armies first, then right-click where it should go.', 'info');
+  if (a.sea) return hint(`${a.name} is at sea and can't take new orders until it lands.`, 'bad');
+  const holder = s.regions[INDEX[id]][1];
+  const ours = holder === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(holder) && al.members.includes(s.me))
+    || s.minors[holder]?.puppetOf === s.me || s.treaties.some((t) => t.kind === 'access' && [t.a, t.b].includes(s.me) && [t.a, t.b].includes(holder));
+  if (ours) {
+    ctx.send({ type: 'armyOrder', id: a.id, kind: 'hold', target: id }).then((err) => { if (!err) hint(`${a.name}: moving to hold ${regionName(id)}.`, 'info', 3000); });
+    return;
+  }
+  const why = attackBlocker(ctx, a, id);
+  if (why) return hint(why, 'bad', 8000);
+  attackDialog(ctx, { army: a, target: id });
+}
 ctx.chat = new Chat(ctx);
 const mapReady = map.load();
 // A handle for automated tests and the curious; the server still checks every command
@@ -191,6 +261,7 @@ function connect(kind) {
   app.lobby = null;
   app.drafts = {};
   app.ui = {};
+  app.newsLog = new Map();
   ctx.chat.reset();
   app.solo = kind === 'local';
   const Link = kind === 'local' ? LocalLink : RemoteLink;
@@ -232,7 +303,7 @@ function onMessage(msg) {
     case 'cmdResult': {
       const resolve = app.pending.get(msg.req);
       app.pending.delete(msg.req);
-      if (msg.error) toast(msg.error, 'warn');
+      if (msg.error) { hint(msg.error, 'bad', 8000); if ($('modal').open) toast(msg.error, 'warn'); }
       resolve?.(msg.error ?? null);
       break;
     }
@@ -252,6 +323,13 @@ function onMessage(msg) {
 
 function onState(s) {
   const first = !app.state;
+  const ticked = app.state && s.week !== app.state.week;
+  if (ticked || first) app.lastTick = performance.now();
+  app.tickMs = SPEEDS[s.speed] ?? SPEEDS.normal;
+  map.tickMs = app.tickMs;
+  app.ticked = Boolean(ticked);
+  for (const n of s.news ?? []) app.newsLog.set(n.id, n);
+  if (app.newsLog.size > 1500) for (const k of [...app.newsLog.keys()].slice(0, app.newsLog.size - 1500)) app.newsLog.delete(k);
   app.state = s;
   if (s.phase === 'over' || s.over) {
     if (!app.finalShown) { app.finalShown = true; renderFinal(); show('final'); }
@@ -291,7 +369,7 @@ function renderLobby() {
     seg('Length', l.years, l.settings.years, 'years', (y) => `${y} years`),
     seg('Speed (a week passes every…)', l.speeds, l.settings.speed, 'speed', (sp) => ({ slow: '15 s', normal: '9 s', fast: '5 s', blitz: '2.5 s' }[sp] ?? sp)),
     seg('Countries handed out from', l.pools, l.settings.pool, 'pool', (p) => `Top ${p}`),
-    h('p.muted.small', `Each leader gets a random country from the ${l.settings.pool} largest economies. A ${l.settings.years}-year game at this speed lasts about ${Math.round((l.settings.years * 52 * { slow: 15, normal: 9, fast: 5, blitz: 2.5 }[l.settings.speed]) / 60)} minutes, plus pauses.`));
+    h('p.muted.small', `Each leader gets a random country from the ${l.settings.pool} largest economies. The world runs in real time with no pausing: a ${l.settings.years}-year game at this speed lasts about ${Math.round((l.settings.years * 52 * { slow: 15, normal: 9, fast: 5, blitz: 2.5 }[l.settings.speed]) / 60)} minutes.`));
   $('start').hidden = !isHost;
   $('start').disabled = l.settings.pool < l.players.length;
   $('lobby-status').textContent = isHost ? (l.settings.pool < l.players.length ? 'More leaders than countries: pick a bigger pool.' : 'Start when everyone is in. Others can still join until then.') : 'Waiting for the host to start…';
@@ -305,9 +383,8 @@ function renderGame() {
   renderRail();
   renderPanel();
   renderMapTools();
-  renderTicker();
   mapReady.then(() => {
-    map.update(app.state);
+    map.update(app.state, { tick: app.ticked });
     if (app.selection?.region) showRegion(ctx, app.selection.region);
     else if (app.selection?.army) {
       if (app.state.armies.some((a) => a.id === app.selection.army)) showArmy(ctx, app.selection.army);
@@ -321,6 +398,8 @@ function renderRail() {
   const badges = {
     overview: s ? s.proposals.filter((p) => p.to === s.me).length : 0,
     diplomacy: s ? s.un.filter((r) => !r.done && !r.votes[s.me]).length : 0,
+    government: s?.you ? (s.you.protests ?? []).filter((p) => p.size >= 30).length + (s.you.civilWar ? 1 : 0) : 0,
+    spies: s?.you ? (s.you.reports ?? []).filter((r) => r.w >= s.week - 1).length : 0,
   };
   const panelOpen = !$('game').classList.contains('panel-closed');
   $('rail').replaceChildren(...TABS.map(([id, label, icon]) => {
@@ -380,20 +459,12 @@ function renderMapTools() {
   $('map-tools').replaceChildren(seg, sel ?? '');
   const legend = [];
   const item = (color, text, hatch) => h('div.row', h('span.swatch', { style: { background: hatch ? `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` : color } }), text);
-  if (mode === 'political') legend.push(item('#e5e7ef', 'Occupied provinces are striped in the occupier\'s colour', true), item('#2a3142', 'Minor nations (computer-run)'));
+  if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#2a3142', 'Minor nations (computer-run)'));
   if (mode === 'alliances') legend.push(item('#8f95ff', 'You'), item('#4f8fe0', 'Military allies'), item('#3f9e7a', 'Trade partners / friendly'), item('#e5484d', 'At war with you'), item('#b0444a', 'Hostile'));
   if (mode === 'resources') legend.push(h('div.row', h('span.res-dot', { style: { background: RES_COLORS[res], width: '14px', height: '14px', fontSize: '7px' } }, RES_LETTERS[res]), `${RESOURCE_INFO[res].name} (${RESOURCE_INFO[res].unit}). Brighter = more`), h('div.faint', 'Hollow circles: untapped reserves to develop'));
   if (mode === 'economy') legend.push(item('#7fb6ff', 'Economic output per area'));
   if (mode === 'relations') legend.push(item('#4cc38a', 'Friendly toward you'), item('#e5484d', 'Hostile toward you'));
   $('legend').replaceChildren(...legend);
-}
-
-function renderTicker() {
-  const items = [...app.state.news].reverse().slice(0, 14);
-  const key = items.map((n) => n.id).join(',');
-  if (key === app.tickerKey) return;
-  app.tickerKey = key;
-  $('ticker').replaceChildren(h('span.label', 'LIVE'), h('div.items', h('div.track', items.map((n) => h('span', h('b', `Week ${n.w}`), ` — ${n.text}`)))));
 }
 
 function selectRegion(id) {
@@ -495,7 +566,7 @@ $('solo-continue').addEventListener('click', () => {
   const net = connect('local');
   app.myName = Object.values(loadSolo()?.state.countries ?? {}).find((c) => c.human)?.human.name ?? 'You';
   net.open({ name: app.myName, restore: true });
-  toast('Game loaded and paused. Press ▶ to carry on.', 'info');
+  toast('Game loaded. The world carries on from where you left it.', 'info');
 });
 $('help-btn').addEventListener('click', () => $('help').showModal());
 $('help').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === $('help')) $('help').close(); });
@@ -527,6 +598,14 @@ document.addEventListener('keydown', (e) => {
   else if (app.selection) closeSelection();
   else if (ctx.chat.open) ctx.chat.toggle(false);
 });
+
+/* ---------- The live clock: the date runs day by day between weekly updates ---------- */
+
+setInterval(() => {
+  if (app.screen !== 'game' || !app.state || app.state.over) return;
+  const el = document.getElementById('hud-date');
+  if (el) el.textContent = liveDate(app.state, ctx.tickAge());
+}, 1000);
 
 /* ---------- Start ---------- */
 

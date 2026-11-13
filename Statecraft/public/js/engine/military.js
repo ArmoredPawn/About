@@ -8,11 +8,13 @@ import { TERRAIN } from './data/regions.js';
 import { REGION_NAMES, MINOR_TERRAIN, MINOR_QUALITY } from './names.js';
 import {
   clamp, rand, chance, pick, news, alert, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
-  onSameSide, addRel, nextId, troopsLabel, alive,
+  onSameSide, addRel, nextId, troopsLabel, alive, money,
 } from './core.js';
 import { navalPower } from './economy.js';
 import { PROVINCES } from './data/regions.js';
 import { COUNTRIES } from './data/countries.js';
+import { surpriseFeature } from './terrain.js';
+import { rangeProblem } from './science.js';
 
 export const MAX_ARMIES = 14;
 export const TRAITS = {
@@ -146,8 +148,55 @@ export function route(s, owner, from, to, { offensive = true, maneuver = false }
   return path;
 }
 
+// The neutral countries standing between an army and its objective (when there is no route without them)
+export function blockers(s, owner, from, to) {
+  const dist = new Map([[from, 0]]);
+  const prev = new Map();
+  const open = [[0, from]];
+  const done = new Set();
+  while (open.length) {
+    open.sort((a, b) => a[0] - b[0]);
+    const [d, id] = open.shift();
+    if (done.has(id)) continue;
+    done.add(id);
+    if (id === to) break;
+    for (const next of GEO[id].adj) {
+      const reg = s.regions[next];
+      if (!reg) continue;
+      const holder = reg.ctrl;
+      const friendly = friendlyGround(s, owner, holder);
+      const cost = friendly ? 1 : atWar(s, owner, holder) ? 2 : 6;
+      const nd = d + cost;
+      if (nd < (dist.get(next) ?? Infinity)) { dist.set(next, nd); prev.set(next, id); open.push([nd, next]); }
+    }
+  }
+  if (!prev.has(to)) return [];
+  const out = new Set();
+  for (let id = to; id && id !== from; id = prev.get(id)) {
+    const h = s.regions[id].ctrl;
+    if (!friendlyGround(s, owner, h) && !atWar(s, owner, h)) out.add(h);
+  }
+  return [...out];
+}
+
+export function noRouteReason(s, owner, from, to) {
+  const holder = s.regions[to]?.ctrl;
+  const block = blockers(s, owner, from, to).filter((h) => h !== holder);
+  if (block.length) {
+    const names = block.map((h) => nameOf(s, h)).join(' and ');
+    return `The only way to ${regionName(to)} crosses ${names}, which ${block.length > 1 ? 'don\'t' : 'doesn\'t'} let our troops through. Ask for military access (Diplomacy), or declare war and fight through.`;
+  }
+  return `There is no land route to ${regionName(to)}.${GEO[to].coast ? ' Try an amphibious landing.' : ''}`;
+}
+
 /* ---------- Orders ---------- */
 
+export const MIN_ARMY = 5;
+// Training and kit for reservists called straight into an army, per thousand troops, before the country's cost level
+export const DRAFT_COST = 0.006;
+export const draftCost = (c, k) => k * DRAFT_COST * (0.45 + 0.55 * Math.min(1.2, (c.gdp / Math.max(0.01, c.pop)) / 60));
+
+// Forms an army group in a province. Troops beyond those free at home are drafted from the reserves on the spot.
 export function createArmy(s, c, { region, troops, tanks = 0, name }) {
   const mine = Object.values(s.armies).filter((a) => a.owner === c.id);
   if (mine.length >= MAX_ARMIES) return `You can field at most ${MAX_ARMIES} army groups. Merge or disband one first.`;
@@ -156,14 +205,33 @@ export function createArmy(s, c, { region, troops, tanks = 0, name }) {
   const free = freeForces(s, c);
   troops = Math.floor(Number(troops));
   tanks = Math.floor(Number(tanks) || 0);
-  if (!(troops >= 5)) return 'An army group needs at least 5,000 troops.';
-  if (troops > free.troops) return `Only ${troopsLabel(free.troops)} troops are free to assign.`;
+  if (!(troops >= MIN_ARMY)) return `An army group needs at least ${MIN_ARMY},000 troops.`;
   if (tanks < 0 || tanks > free.tanks) return `Only ${Math.floor(free.tanks)} tanks are free to assign.`;
+  const draft = Math.max(0, troops - Math.floor(free.troops));
+  if (draft > Math.floor(Math.max(0, c.reserves))) {
+    return `Only ${troopsLabel(free.troops)} troops are free and ${troopsLabel(Math.max(0, c.reserves))} reservists can be drafted.`;
+  }
+  if (draft > 0) {
+    const cost = draftCost(c, draft);
+    if (cost > c.milFunds + c.treasury) return `Drafting ${troopsLabel(draft)} reservists costs ${money(cost)}; you have ${money(c.milFunds + c.treasury)}.`;
+    const fromFunds = Math.min(c.milFunds, cost);
+    c.milFunds -= fromFunds;
+    c.treasury -= cost - fromFunds;
+    c.reserveBase = (c.reserveBase ?? c.reserves + c.mobTroops) - draft;
+    c.reserves -= draft;
+    c.troops += draft;
+    // A sudden call-up is unpopular, more so in a democracy, and most of all with no threat to explain it
+    const share = draft / Math.max(1, c.troops);
+    const reason = c.threat?.value ?? (enemiesOf(s, c.id).size ? 0.6 : 0);
+    c.boost -= Math.min(10, share * (c.gov === 'autocracy' ? 6 : 14) * (1.2 - reason));
+    c.recentDraft = (c.recentDraft ?? 0) + Math.min(40, share * 120 * (1 - reason));
+    news(s, `${c.name} drafts ${troopsLabel(draft)} reservists into the army.`, 'war', [c.id]);
+  }
   const id = nextId(s, 'a');
-  const n = mine.length + 1;
   s.armies[id] = {
     id, owner: c.id, name: String(name || `${ordinal(c.generalsUsed + 1)} Army`).slice(0, 28),
-    gen: newGeneral(s, c), region, troops, tanks, org: 70, supply: 1,
+    // Fresh draftees are less organised than standing troops
+    gen: newGeneral(s, c), region, troops, tanks, org: Math.round(70 - 25 * (draft / troops)), supply: 1,
     op: { kind: 'hold', target: region, aggr: 'balanced' }, path: [], move: null, sea: null, attacking: null,
     status: `Forming up in ${regionName(region)}`,
   };
@@ -186,47 +254,74 @@ function newGeneral(s, c) {
   return { name: `Gen. ${surname}${rank}`.trim(), skill: r < 0.15 ? 5 : r < 0.4 ? 4 : r < 0.75 ? 3 : 2, trait: pick(s, Object.keys(TRAITS)) };
 }
 
+// The world as it would be if `me` declared war on `foe` (leaving any alliance they share): for checking an attack first
+export function hypotheticalWar(s, me, foe) {
+  if (atWar(s, me, foe)) return s;
+  const alliances = {};
+  for (const [id, al] of Object.entries(s.alliances)) {
+    alliances[id] = al.members.includes(foe) && al.members.includes(me) ? { ...al, members: al.members.filter((m) => m !== me) } : al;
+  }
+  return { ...s, alliances, wars: [...s.wars, { a: me, b: foe }] };
+}
 
-export function orderArmy(s, c, army, { kind, target, aggr = 'balanced' }) {
-  if (!army || army.owner !== c.id) return 'That army is not yours.';
-  if (!s.regions[target]) return 'Pick a province on the map.';
+export const seaReach = (c) => (c.carriers > 0 ? 20000 : 1500 + c.ships * 25);
+
+// Why a landing from `from` on `target` can't go ahead, or null if it can. `c` needs id, ships and carriers.
+export function landingProblem(s, c, from, target) {
+  if (!GEO[from].coast || s.regions[from].ctrl !== c.id) return 'The army isn\'t in a coastal province you hold, so it has no port to sail from.';
+  if (!GEO[target].coast) return `${regionName(target)} is landlocked: there is no water to land from.`;
+  if (c.ships < 3) return 'You need at least 3 warships to escort a landing.';
+  const km = distanceKm(from, target);
+  const reach = seaReach(c);
+  if (km > reach) return `${regionName(target)} is ${Math.round(km)} km away, beyond your navy's reach (${Math.round(reach)} km). Aircraft carriers extend it.`;
+  return null;
+}
+
+// Works out an order without carrying it out: { error } or the new operation
+function planOrder(s, c, army, { kind, target, aggr = 'balanced' }) {
+  if (!army || army.owner !== c.id) return { error: 'That army is not yours.' };
+  if (!s.regions[target]) return { error: 'Pick a province on the map.' };
   if (!AGGRESSION[aggr]) aggr = 'balanced';
-  if (army.sea) return `${army.name} is at sea and can't take new orders until it lands.`;
+  if (army.sea) return { error: `${army.name} is at sea and can't take new orders until it lands.` };
   const maneuver = army.gen.trait === 'maneuver';
   if (kind === 'hold') {
     const path = route(s, c.id, army.region, target, { offensive: false, maneuver });
-    if (!path) return `${army.gen.name} can't find a route to ${regionName(target)} through friendly ground.`;
-    army.op = { kind, target, aggr };
-    army.path = path;
-    army.status = path.length ? `Moving to hold ${regionName(target)}` : `Holding ${regionName(target)}`;
-    return null;
+    if (!path) return { error: noRouteReason(s, c.id, army.region, target) };
+    return { op: { kind, target, aggr }, path, status: path.length ? `Moving to hold ${regionName(target)}` : `Holding ${regionName(target)}` };
+  }
+  if (kind === 'attack' || kind === 'invade') {
+    const holder = s.regions[target].ctrl;
+    if (!atWar(s, c.id, holder)) return { error: `You are not at war with ${nameOf(s, holder)}. Declare war first.` };
   }
   if (kind === 'attack') {
-    const holder = s.regions[target].ctrl;
-    if (!atWar(s, c.id, holder)) return `You are not at war with ${nameOf(s, holder)}. Declare war first.`;
     const path = route(s, c.id, army.region, target, { offensive: true, maneuver });
-    if (!path) return `${army.gen.name} reports no land route to ${regionName(target)}. Try an amphibious invasion.`;
-    army.op = { kind, target, aggr };
-    army.path = path;
-    army.status = `Advancing on ${regionName(target)}`;
-    return null;
+    if (!path) return { error: noRouteReason(s, c.id, army.region, target) };
+    return { op: { kind, target, aggr }, path, status: `Advancing on ${regionName(target)}` };
   }
   if (kind === 'invade') {
-    const holder = s.regions[target].ctrl;
-    if (!atWar(s, c.id, holder)) return `You are not at war with ${nameOf(s, holder)}. Declare war first.`;
-    if (!GEO[army.region].coast || s.regions[army.region].ctrl !== c.id) return 'Amphibious landings set out from a coastal province you control.';
-    if (!GEO[target].coast) return `${regionName(target)} has no coast to land on.`;
-    if (c.ships < 3) return 'You need at least 3 warships to escort a landing.';
+    const problem = landingProblem(s, c, army.region, target);
+    if (problem) return { error: problem };
     const km = distanceKm(army.region, target);
-    const reach = c.carriers > 0 ? 20000 : 1500 + c.ships * 25;
-    if (km > reach) return `${regionName(target)} is ${Math.round(km)} km away, beyond your navy's reach (${Math.round(reach)} km). Aircraft carriers extend it.`;
-    army.op = { kind, target, aggr };
-    army.path = [];
-    army.sea = { from: army.region, to: target, left: Math.ceil(km / 1500) + 1 };
-    army.status = `At sea, bound for ${regionName(target)}`;
-    return null;
+    return { op: { kind, target, aggr }, path: [], sea: { from: army.region, to: target, left: Math.ceil(km / 1500) + 1 }, status: `At sea, bound for ${regionName(target)}` };
   }
-  return 'Unknown order.';
+  return { error: 'Unknown order.' };
+}
+
+// Checks an attack as if war were already declared, so a leader can declare war and attack in one step
+export function checkOrder(s, c, army, order) {
+  const holder = s.regions[order.target]?.ctrl;
+  const world = holder && order.kind !== 'hold' ? hypotheticalWar(s, c.id, holder) : s;
+  return planOrder(world, c, army, order).error ?? null;
+}
+
+export function orderArmy(s, c, army, order) {
+  const plan = planOrder(s, c, army, order);
+  if (plan.error) return plan.error;
+  army.op = plan.op;
+  army.path = plan.path;
+  if (plan.sea) army.sea = plan.sea;
+  army.status = plan.status;
+  return null;
 }
 
 export function disbandArmy(s, c, army) {
@@ -269,6 +364,8 @@ export function missileStrike(s, c, target, count) {
   const reg = s.regions[target];
   if (!reg) return 'Pick a province.';
   if (!atWar(s, c.id, reg.ctrl)) return `You are not at war with ${nameOf(s, reg.ctrl)}.`;
+  const far = rangeProblem(s, c, target, 'missile');
+  if (far) return far;
   count = Math.floor(Number(count));
   if (!(count > 0) || count > c.missiles) return `You have ${c.missiles} missiles.`;
   const def = s.countries[reg.ctrl];
@@ -290,11 +387,13 @@ export function nuclearStrike(s, c, target, retaliation = false) {
   if (!reg) return 'Pick a province.';
   if (c.nukes < 1) return 'You have no nuclear weapons.';
   if (!atWar(s, c.id, reg.ctrl) && !retaliation) return `You are not at war with ${nameOf(s, reg.ctrl)}.`;
+  const far = rangeProblem(s, c, target, 'nuke');
+  if (far) return far;
   const victim = reg.ctrl;
   c.nukes -= 1;
   s.nukesUsed++;
   const deaths = reg.pop * 0.25;
-  reg.pop *= 0.55;
+  reg.pop *= 0.75;
   reg.gdp *= 0.3;
   reg.dmg = 0.92;
   reg.unrest = 90;
@@ -355,6 +454,8 @@ export function setAirCampaign(s, c, target, aircraft) {
   if (aircraft <= 0) return null;
   const reg = s.regions[target];
   if (!reg || !atWar(s, c.id, reg.ctrl)) return 'Air campaigns target provinces held by an enemy.';
+  const far = rangeProblem(s, c, target, 'air');
+  if (far) return far;
   const committed = c.airOps.reduce((t, o) => t + o.aircraft, 0);
   if (aircraft + committed > c.aircraft) return `You have ${c.aircraft - committed} aircraft free.`;
   c.airOps.push({ region: target, aircraft });
@@ -367,6 +468,7 @@ export function setAirCampaign(s, c, target, aircraft) {
 export function militaryTick(s) {
   const gar = garrisons(s);
   supplyAll(s);
+  logistics(s);
   const fights = new Map(); // region -> attacking armies
 
   for (const a of Object.values(s.armies)) {
@@ -520,8 +622,19 @@ function battle(s, regionId, attackers, gar) {
   defence *= terrain.defend * (1 + 0.15 * reg.fort) * (1 - 0.2 * airEdge);
   defence = Math.max(defence, 0.5);
 
+  const fresh = !(reg.battle && reg.battle.by === lead);
+  reg.battle = fresh ? { by: lead, prog: 0, weeks: 0, from: attackers[0].landing ? null : attackers[0].region } : reg.battle;
+  reg.battle.weeks = (reg.battle.weeks ?? 0) + 1;
+  // Ground the defenders thought impassable: lightly held, and the attack comes as a shock
+  const sneak = surpriseFeature(regionId);
+  if (sneak && reg.fort <= 1 && !defenders.some((a) => a.op.kind === 'hold') && reg.battle.weeks <= 3) {
+    defence *= 0.55;
+    if (fresh) {
+      news(s, `${nameOf(s, lead)}'s forces strike through ${sneak.name}, ground ${nameOf(s, holder)} thought impassable. Its defenders are caught off guard.`, 'war', [lead, holder]);
+      alert(s, lead, `Surprise: our attack through ${sneak.name} has caught ${nameOf(s, holder)} off guard.`, 'good', { region: regionId });
+    }
+  }
   const ratio = attack / defence;
-  reg.battle = reg.battle && reg.battle.by === lead ? reg.battle : { by: lead, prog: 0 };
   const step = (ratio >= 1 ? Math.min(45, 10 + 20 * (ratio - 1)) : -12 * (1 - ratio)) / depth(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step, 0, 100);
 
@@ -558,6 +671,10 @@ function battle(s, regionId, attackers, gar) {
   }
   record(s, lead, attackLoss);
   record(s, holder, defendLoss);
+  // The dead are gone from the population, and civilians in the battle zone die or flee
+  for (const a of attackers) bury(s, a.owner, attackLoss * (a.troops / Math.max(1, attackTroops)));
+  bury(s, holder, defendLoss);
+  reg.pop *= 1 - 0.0008 * Math.min(2, ratio);
   const war = s.wars.find((w) => (w.a === lead && w.b === holder) || (w.b === lead && w.a === holder));
   if (war) {
     if (war.a === lead) { war.lossA += attackLoss; war.lossB += defendLoss; } else { war.lossB += attackLoss; war.lossA += defendLoss; }
@@ -566,6 +683,20 @@ function battle(s, regionId, attackers, gar) {
 
   if (reg.battle.prog >= 100) capture(s, regionId, lead, attackers);
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
+}
+
+// Soldiers killed (in thousands) come off their home population: about a third of losses are dead, the rest
+// wounded or captured
+export function bury(s, id, lossK) {
+  const dead = (lossK * 0.35) / 1000;
+  if (!(dead > 0)) return;
+  const homes = Object.values(s.regions).filter((r) => r.owner === id && r.ctrl === id);
+  const total = homes.reduce((t, r) => t + r.pop, 0);
+  if (!total) return;
+  const f = Math.max(0.5, 1 - dead / total);
+  for (const r of homes) r.pop *= f;
+  const n = nation(s, id);
+  if (n) n.dead = (n.dead ?? 0) + lossK * 0.35;
 }
 
 function record(s, id, lossK) {
@@ -684,6 +815,46 @@ export function settleMinor(s, by, minorId, how) {
   return null;
 }
 
+/* ---------- Logistics: money, factories and men to keep armies fed far from home ---------- */
+
+// For each country: what its armies abroad cost each week, whether its factories keep up with munitions, and
+// whether enough troops are free to guard the supply lines. Shortfalls cut every army's supply.
+function logistics(s) {
+  const hopsCache = new Map();
+  for (const c of Object.values(s.countries)) {
+    if (!alive(s, c.id)) continue;
+    const mine = Object.values(s.armies).filter((a) => a.owner === c.id);
+    const cf = 0.45 + 0.55 * Math.min(1.2, (c.gdp / Math.max(0.01, c.pop)) / 60);
+    let cost = 0;
+    let demand = 0;
+    let rear = 0;
+    for (const a of mine) {
+      const reg = s.regions[a.region];
+      const abroad = Boolean(a.sea) || reg.owner !== c.id;
+      const fighting = Boolean(a.attacking) || Boolean(reg.battle);
+      let hops = 0;
+      if (abroad && !a.sea) {
+        const map = hopsCache.get(c.id) ?? hopsCache.set(c.id, homeDistance(s, c.id)).get(c.id);
+        hops = map.get(a.region) ?? 8;
+      }
+      cost += a.troops * (abroad ? 0.0009 : 0.0002) * (1 + hops * 0.2) * cf + a.tanks * (fighting ? 0.00012 : 0.00003) * cf;
+      // Fighting far from home burns munitions and fuel fastest; defending at home draws on local stocks
+      demand += (a.troops * 0.001 + a.tanks * 0.00015) * (abroad ? (fighting ? 2.5 : 1.2) : (fighting ? 1 : 0.4));
+      if (abroad) rear += a.troops * Math.min(0.3, 0.03 * Math.max(1, hops));
+    }
+    const capacity = c.gdp * (0.5 + c.tech.industry / 20) * 0.0008 * [1, 1.5, 2.2][c.mob] * (1 - 0.6 * (c.short.metal ?? 0)) * (1 - 0.5 * (c.short.iron ?? 0));
+    const fromFunds = Math.min(c.milFunds, cost);
+    c.milFunds -= fromFunds;
+    c.treasury -= cost - fromFunds;
+    const free = Math.max(0, c.troops - mine.reduce((t, a) => t + a.troops, 0));
+    const factories = demand > 0 ? Math.min(1, capacity / demand) : 1;
+    const guards = rear > 0 ? Math.min(1, free / rear) : 1;
+    const funds = c.readiness ?? 1;
+    c.logistics = { cost: cost * 52, capacity, demand, factories, rear, free, guards, ratio: (0.55 + 0.45 * factories) * (0.6 + 0.4 * guards) * funds };
+    for (const a of mine) if (!a.sea) a.supply *= c.logistics.ratio;
+  }
+}
+
 /* ---------- Supply ---------- */
 
 function supplyAll(s) {
@@ -739,7 +910,7 @@ function airAndSea(s) {
       const defAir = def ? def.aircraft * airQuality(def) * 0.3 : 5;
       const adf = def ? def.tech.missile * 15 : 10;
       const mine = op.aircraft * airQuality(c);
-      const eff = mine / (mine + defAir + adf);
+      const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0));
       reg.dmg = Math.min(0.9, reg.dmg + 0.012 * eff * Math.min(1, op.aircraft / 80));
       const lost = Math.max(0, Math.round(op.aircraft * 0.006 * (1.2 - eff)));
       op.aircraft -= lost;
