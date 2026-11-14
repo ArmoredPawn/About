@@ -294,9 +294,6 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .res-icon circle { stroke: rgb(0 0 0 / 0.5); stroke-width: 0.4; }
 .map .res-icon text { fill: #0b0d14; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .map .chokepoint { cursor: pointer; }
-.whatsnew .item-head { align-items: center; }
-.modal-head #whatsnew-btn { margin-left: auto; margin-right: 8px; }
-.whatsnew-icon { font-size: 18px; width: 26px; text-align: center; }
 .map .fleet { cursor: pointer; }
 .map .fleet rect { stroke: #d8f1ff; stroke-width: 0.9; vector-effect: non-scaling-stroke; }
 .map .fleet text { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; font-family: var(--mono); }

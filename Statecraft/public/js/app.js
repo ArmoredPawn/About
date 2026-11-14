@@ -9,7 +9,6 @@ import { Chat } from './ui/chat.js';
 import { toast, confirmBox, closeModal } from './ui/dialogs.js';
 import { showRegion, showArmy, showFleet, closeInspector, airStrike, missile } from './ui/inspector.js';
 import { orderDialog, waterOff } from './ui/panels/navy.js';
-import { whatsNew } from './ui/whatsnew.js';
 import { overview } from './ui/panels/overview.js';
 import { economy } from './ui/panels/economy.js';
 import { military } from './ui/panels/military.js';
@@ -369,7 +368,6 @@ function onState(s) {
     app.focused = true;
     mapReady.then(() => ctx.focusCountry(s.me));
     if (first && s.week <= 1) toast(`You lead ${s.countries[s.me].name}. Open the Cabinet for your briefing.`, 'info');
-    if (first) setTimeout(() => { if (app.screen === 'game' && !$('modal').open) whatsNew(ctx); }, 1200);
   }
 }
 
@@ -662,11 +660,6 @@ $('solo-continue').addEventListener('click', () => {
   toast('Game loaded. The world carries on from where you left it.', 'info');
 });
 $('help-btn').addEventListener('click', () => $('help').showModal());
-$('whatsnew-btn').addEventListener('click', () => {
-  $('help').close();
-  if (app.screen === 'game' && app.state?.you) whatsNew(ctx, { force: true });
-  else toast('Start or join a game to try the new features.', 'info');
-});
 $('help').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === $('help')) $('help').close(); });
 
 $('lobby-leave').addEventListener('click', leave);
