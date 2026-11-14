@@ -704,3 +704,15 @@ test('the world\'s main sea trade is estimated from who exports and imports what
   assert.ok(!g.s.tradeFlows.some(([x, y]) => (x === a && y === b) || (x === b && y === a)), 'no trade between countries at war');
   assert.equal(g.view('usa').trade.length, g.s.tradeFlows.length);
 });
+
+test('the browser finds a route through home ground from what the server sends it', () => {
+  const g = game(1, 'mex');
+  const v = g.view('mex');
+  // The same fields the map's fauxState keeps from each region row
+  const regions = Object.fromEntries(ORDER.map((id, i) => [id, { id, ctrl: v.regions[i][1], owner: v.regions[i][0], infra: v.regions[i][3] }]));
+  const s = { regions, wars: v.wars, alliances: {}, treaties: v.treaties, minors: {}, countries: v.countries, fleets: {} };
+  assert.deepEqual(route(s, 'mex', 'mex-mx', 'mex-nw', { offensive: false }), ['mex-bj', 'mex-nw']);
+  // Missing infrastructure must not make every friendly move impossible
+  for (const r of Object.values(regions)) delete r.infra;
+  assert.ok(route(s, 'mex', 'mex-mx', 'mex-nw', { offensive: false }));
+});

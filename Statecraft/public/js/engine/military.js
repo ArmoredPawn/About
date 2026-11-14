@@ -568,7 +568,7 @@ export function marchSpeed(s, a) {
 
 // The cost of marching from one province into the next, in km of open road: the distance between them, made
 // longer by rough terrain and shorter by good infrastructure
-const moveCost = (s, from, to) => distanceKm(from, to) * terrainOf(to).move * (1 - 0.04 * s.regions[to].infra);
+const moveCost = (s, from, to) => distanceKm(from, to) * terrainOf(to).move * (1 - 0.04 * (s.regions[to].infra ?? 0));
 
 export function militaryStep(s, dt) {
   if (!(dt > 0)) return;

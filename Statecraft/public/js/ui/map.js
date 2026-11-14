@@ -1044,7 +1044,7 @@ export function fauxState(s) {
   const regions = {};
   for (const id of ORDER) {
     const row = s.regions[INDEX[id]];
-    regions[id] = { id, ctrl: row[1], owner: row[0] };
+    regions[id] = { id, ctrl: row[1], owner: row[0], infra: row[3] };
   }
   return {
     regions,
