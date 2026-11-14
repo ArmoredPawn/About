@@ -8,6 +8,11 @@ import { clamp, news, alert, alive, atWar, allied, enemiesOf, alliancesOf, treat
 import { REGION_NAMES } from './names.js';
 import { researchTick, rangeTick } from './science.js';
 import { patrolBlocks } from './trade.js';
+import { seasOf, fleetStrength } from './navy.js';
+import { cartelOutput, embargoCut, pipelineShare, bypassShare } from './energy.js';
+import { climateYield } from './climate.js';
+
+const CP_KEY = new Map(Object.entries(CHOKEPOINTS).map(([k, v]) => [v, k]));
 
 // Share of output lost when a resource is completely short
 const SHORT_WEIGHT = { oil: 0.3, gas: 0.12, coal: 0.08, iron: 0.04, food: 0.08, rare: 0.03, uran: 0, metal: 0.05, chip: 0.1 };
@@ -71,15 +76,23 @@ function sanctionShare(s, id, world) {
   return Math.min(0.9, t / world);
 }
 
+// The defender's fleets in its own seas, which keep its ports open
+function homeWaters(s, id) {
+  const seas = new Set(seasOf(s, id));
+  let p = 0;
+  for (const f of Object.values(s.fleets ?? {})) if (f.owner === id && seas.has(f.at) && !(f.prog > 0)) p += fleetStrength(s, f);
+  return p;
+}
+
 export function blockadeEffect(s, target) {
   const t = s.countries[target] ?? s.minors[target];
   if (!t) return 0;
-  const defence = s.countries[target] ? navalPower(t) : (t.troops / 50);
+  const defence = s.countries[target] ? homeWaters(s, target) : (t.troops / 50);
   let open = 1;
   for (const c of Object.values(s.countries)) {
     const ships = c.blockades[target];
     if (!ships || !atWar(s, c.id, target)) continue;
-    const p = navalPower(c, ships, 0) + c.carriers * 6;
+    const p = navalPower(c, ships, c.blockadeCarriers?.[target] ?? 0);
     open *= 1 - (p / (p + defence * 1.2 + 0.01)) * 0.8;
   }
   return 1 - open;
@@ -109,7 +122,7 @@ export function production(s, nationId, r, index) {
   let total = 0;
   for (const reg of index ? index.get(nationId) ?? [] : Object.values(s.regions)) {
     if (reg.ctrl !== nationId || !reg.res[r]) continue;
-    total += reg.res[r][0] * regionEfficiency(reg, nationId);
+    total += reg.res[r][0] * regionEfficiency(reg, nationId) * (r === 'food' ? climateYield(s, reg.id) : 1);
   }
   return r === 'food' && s.winterUntil > s.week ? total * 0.6 : total;
 }
@@ -130,6 +143,8 @@ function demand(s, n, r) {
       d += military * (enemiesOf(s, c.id).size ? 3 : 1);
     }
     if (c.ration && (r === 'oil' || r === 'gas' || r === 'food')) d *= 0.85;
+    // A carbon tax moves people and firms off fossil fuels over a few years
+    if (r === 'oil' || r === 'gas' || r === 'coal') d *= 1 - 0.07 * (c.carbonEffect ?? 0) * (r === 'coal' ? 1.4 : 1);
   }
   return d;
 }
@@ -158,20 +173,27 @@ export function marketTick(s) {
     let bids = 0;
     for (const n of nations) {
       // Producers with spare capacity pump more when prices are high (and less when they slump)
-      const prod = production(s, n.id, r, index) * (1 + clamp(0.08 * (s.market.price[r] - 1), -0.08, 0.1));
+      const prod = production(s, n.id, r, index) * (1 + clamp(0.08 * (s.market.price[r] - 1), -0.08, 0.1)) * (r === 'oil' ? cartelOutput(s, n.id) : 1);
       const dem = demand(s, n, r);
       const a = acc.get(n.id);
       let exp = a.exp;
       let imp = a.imp;
       for (const cp of chokes.get(n.id)) {
-        if (cp.exportCut && cp.exportCut.nations.includes(n.id) && cp.exportCut.res.includes(r)) exp *= cp.exportCut.factor;
+        // A bypass pipeline gets part of the exports out without passing the strait
+        if (cp.exportCut && cp.exportCut.nations.includes(n.id) && cp.exportCut.res.includes(r)) exp *= cp.exportCut.factor + (1 - cp.exportCut.factor) * bypassShare(s, n.id, CP_KEY.get(cp));
         if (cp.importCut && cp.importCut.nations.includes(n.id)) imp *= 1 - cp.importCut.factor;
       }
+      if (r === 'oil') imp *= 1 - embargoCut(s, n.id);
+      // Fuel that arrives by pipeline gets through whatever happens at sea
+      if (r === 'oil' || r === 'gas') imp += (1 - imp) * pipelineShare(s, n.id, r);
       const net = prod - dem;
       const stock = n.stock[r] ?? 0;
       const target = dem * STOCK_WEEKS;
       let offer = net > 0 ? net * exp : 0;
       if (stock > target * 1.5) offer += (stock - target * 1.5) * 0.1 * exp;
+      // A strategic reserve being released goes onto the market a quarter at a time
+      const released = Math.min(n.releasing?.[r] ?? 0, Math.max(0.01, (n.releasing?.[r] ?? 0) / 4), stock);
+      if (released > 0) { offer += released; n.releasing[r] -= released; }
       let bid = net < 0 ? -net * imp : 0;
       if (stock < target && s.market.price[r] < 1.4) bid += (target - stock) * 0.04 * imp;
       rows.push({ n, prod, dem, offer, bid });
@@ -282,7 +304,7 @@ function output(s, c, mods) {
   for (const reg of Object.values(s.regions)) {
     if (reg.ctrl !== c.id) continue;
     const own = reg.owner === c.id;
-    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1);
+    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1);
     pop += reg.pop;
   }
   c.pot = pot;
@@ -334,6 +356,7 @@ function growthRate(s, c, world, mods, drag) {
   if (c.infl > Math.max(12, b.infl + 6)) g -= (c.infl - Math.max(12, b.infl + 6)) * 0.08;
   if (c.stimulus && c.stimulus.until > s.week) g += c.stimulus.boost;
   if (c.martial) g -= 0.5;
+  g -= 0.12 * (c.carbonEffect ?? 0);
   g -= drag;
   for (const m of mods) if (m.kind === 'growth') g += m.value;
   return clamp(g, -15, 15);

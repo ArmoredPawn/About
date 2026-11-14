@@ -11,7 +11,13 @@ import {
   sanctioning, warBetween, friendlyGround,
 } from './core.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower } from './economy.js';
-import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setBlockade, setAirCampaign, missileStrike, settleMinor } from './military.js';
+import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor } from './military.js';
+import { aiNavy } from './navy.js';
+import { aiPeoples } from './peoples.js';
+import { aiAid } from './proxy.js';
+import { aiEnergy } from './energy.js';
+import { aiClimate } from './climate.js';
+import { aiSpace } from './space.js';
 import { respond, propose, makePeace, setTariff, setChokepoint, declareWar, createAlliance } from './diplomacy.js';
 import { CONSCRIPTION, setConscription, handleProtest, handleUprising, neighbours } from './government.js';
 import { plant, initSpies } from './spies.js';
@@ -45,7 +51,10 @@ export function aiTick(s) {
   for (const c of Object.values(s.countries)) {
     if (c.human || !alive(s, c.id)) continue;
     answerProposals(s, c);
-    if ((s.week + c.ai.next) % 4 === 0) { economy(s, c); homeFront(s, c); }
+    if ((s.week + c.ai.next) % 4 === 0) { economy(s, c); homeFront(s, c); aiPeoples(s, c); }
+    if ((s.week + c.ai.next) % 4 === 1) aiEnergy(s, c);
+    if ((s.week + c.ai.next) % 26 === 7) aiClimate(s, c);
+    if ((s.week + c.ai.next) % 8 === 6) aiSpace(s, c);
     if (enemiesOf(s, c.id).size) war(s, c, gar);
     else {
       if (c.mob > 0 && (s.week + c.ai.next) % 8 === 0) c.mob -= 1;
@@ -53,6 +62,8 @@ export function aiTick(s) {
       if ((s.week + c.ai.next) % 4 === 2) ambition(s, c, gar);
     }
     if ((s.week + c.ai.next) % 8 === 5) standing(s, c);
+    if ((s.week + c.ai.next) % 8 === 3) aiAid(s, c);
+    aiNavy(s, c);
   }
   for (const m of Object.values(s.minors)) {
     if (m.pendingSettle && m.pendingSettle.until <= s.week) settleMinor(s, m.pendingSettle.by, m.id, 'puppet');
@@ -227,6 +238,11 @@ function war(s, c, gar) {
 
   // Orders: liberate our land first, then hold the most threatened front, and counter-attack if much stronger
   const occupied = Object.values(s.regions).filter((reg) => reg.owner === c.id && enemySet.has(reg.ctrl));
+  // Troops already heading to each front, so armies spread out instead of all chasing the emptiest one
+  const bound = new Map();
+  for (const a of Object.values(s.armies)) {
+    if (a.owner === c.id && !a.sea && a.op.kind === 'hold' && a.region !== a.op.target) bound.set(a.op.target, (bound.get(a.op.target) ?? 0) + a.troops);
+  }
   for (const a of Object.values(s.armies)) {
     if (a.owner !== c.id || a.sea) continue;
     const busy = a.op.kind === 'attack' && a.path.length && enemySet.has(s.regions[a.op.target].ctrl);
@@ -248,8 +264,18 @@ function war(s, c, gar) {
       if (best) order = { kind: 'attack', target: best[0].id, aggr: 'balanced' };
     }
     if (!order) {
-      const threatened = fronts.map((reg) => [reg, threatTo(s, c.id, reg.id, enemySet) - defenceHere(s, c.id, reg.id)]).sort((x, y) => y[1] - x[1])[0];
-      if (threatened && a.op.target !== threatened[0].id) order = { kind: 'hold', target: threatened[0].id, aggr: 'balanced' };
+      // How badly each front needs troops, not counting this army itself. It only moves for a front that needs
+      // them clearly more than the one it holds: otherwise every army shuttles back and forth between the two
+      // emptiest fronts each week.
+      const mineThere = (id) => (a.region === id ? a.troops : 0) + (a.op.kind === 'hold' && a.op.target === id && a.region !== id ? a.troops : 0);
+      const need = (id) => threatTo(s, c.id, id, enemySet) - defenceHere(s, c.id, id) - (bound.get(id) ?? 0) + mineThere(id);
+      const threatened = fronts.map((reg) => [reg, need(reg.id)]).sort((x, y) => y[1] - x[1])[0];
+      const here = a.op.kind === 'hold' ? a.op.target : a.region;
+      const stay = fronts.some((reg) => reg.id === here) ? need(here) : -Infinity;
+      if (threatened && here !== threatened[0].id && threatened[1] > stay + Math.max(30, Math.abs(stay) * 0.3)) {
+        order = { kind: 'hold', target: threatened[0].id, aggr: 'balanced' };
+        bound.set(threatened[0].id, (bound.get(threatened[0].id) ?? 0) + a.troops);
+      }
     }
     if (order && !(order.kind === a.op.kind && order.target === a.op.target)) {
       if (!orderArmy(s, c, a, order)) a.orderedAt = s.week;
@@ -257,10 +283,6 @@ function war(s, c, gar) {
   }
 
   // Air, sea and missiles
-  for (const e of enemies) {
-    const t = s.countries[e];
-    if (t && !c.blockades[e] && c.ships > 10 && navalPower(c) > navalPower(t) * 1.5) setBlockade(s, c, e, Math.floor(c.ships * 0.4));
-  }
   if (!c.airOps.length && c.aircraft > 40) {
     const targets = Object.values(s.regions).filter((reg) => enemySet.has(reg.ctrl) && GEO[reg.id].adj.some((x) => s.regions[x]?.ctrl === c.id));
     if (targets.length) setAirCampaign(s, c, pick(s, targets).id, Math.floor(c.aircraft * 0.3));

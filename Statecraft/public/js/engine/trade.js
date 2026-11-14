@@ -24,7 +24,7 @@ const BASINS = {
   zaf: ['atl', 'ind'], che: [], aut: [], cze: [], kaz: [],
 };
 // Sea lanes between them: [from, to, length, strait on the way]
-const LANES = [
+export const LANES = [
   ['gulf', 'ind', 1, 'hormuz'],
   ['ind', 'eas', 2.5, 'malacca'],
   ['ind', 'eas', 4, null], // the long way, through the Lombok Strait
@@ -43,6 +43,9 @@ export const SEA_NAMES = { atl: 'Atlantic', pac: 'Pacific', med: 'Mediterranean'
 const basinCache = new Map();
 export function basinsOf(s, id) {
   if (BASINS[id]) return BASINS[id];
+  // A nation born of a breakaway province trades from that province's coast
+  const home = s?.minors?.[id]?.home;
+  if (home) return basinsOf(s, home);
   if (basinCache.has(id)) return basinCache.get(id);
   const g = GEO[id];
   let out = [];
@@ -53,9 +56,11 @@ export function basinsOf(s, id) {
     else if (lon > 32 && lon < 45 && lat > 11 && lat < 30) out = ['red'];
     else if (lat > 40 && lat < 48 && lon > 27 && lon < 42) out = ['black'];
     else if (lat > 30 && lat < 46 && lon > -6 && lon < 37) out = ['med'];
-    else if (lon < -30) out = lon < -79 || (lon < -77 && lat < 9) ? ['pac'] : ['atl'];
+    else if (lon < -30) out = americasCoast(lat, lon);
     else if (lon < 20) out = ['atl'];
+    else if (lat >= 46 && lon < 70) out = ['atl']; // the Baltic, the White Sea and the Barents Sea
     else if (lon < 100 && lat < 30) out = ['ind'];
+    else if (lon >= 100 && lon < 130 && lat < -8) out = ['ind']; // Western Australia
     else if (lon >= 100 && lon < 150 && lat > -8) out = ['eas'];
     else out = ['pac'];
   }
@@ -64,6 +69,15 @@ export function basinsOf(s, id) {
   if (id === 'm-ukraine' || id === 'm-georgia') out = ['black'];
   basinCache.set(id, out);
   return out;
+}
+
+// Which ocean an American coast faces: the Pacific along the west coast (Alaska to Chile), the Atlantic along
+// the east coast, the Gulf of Mexico and the Caribbean
+function americasCoast(lat, lon) {
+  if (lat >= 32) return lon < -114 ? ['pac'] : ['atl'];
+  if (lat >= 14) return lon < -100 ? ['pac'] : ['atl'];
+  if (lat >= 0) return lon < -79 || (lon < -77 && lat < 9) ? ['pac'] : ['atl'];
+  return lon < -70 ? ['pac'] : ['atl'];
 }
 
 // Can a ship pass this strait? Not if it is closed to the cargo's owners, or a hostile navy blocks it.
@@ -300,10 +314,6 @@ function nearestCoastKm(s, cid, targetId) {
   }
   return best;
 }
-export function canReachStrait(s, c, key) {
-  const where = CHOKEPOINTS[key].regions[0];
-  return nearestCoastKm(s, c.id, where) <= seaReach(c);
-}
 function shipmentReach(s, c, sh) {
   if (sh.mode === 'land') return sh.transit.some((t) => t === c.id || allied(s, t, c.id));
   if (c.ships < 3) return false;
@@ -347,7 +357,7 @@ function escortPower(s, sh) {
   for (const cp of sh.straits) {
     for (const [owner, pt] of Object.entries(s.chokepoints[cp].patrols ?? {})) {
       if (pt.mode !== 'escort') continue;
-      if ([sh.buyer, sh.seller].some((x) => x === owner || allied(s, x, owner))) p += navalStrength({ ...s.countries[owner], ships: pt.ships, carriers: 0 });
+      if ([sh.buyer, sh.seller].some((x) => x === owner || allied(s, x, owner))) p += navalStrength({ ...s.countries[owner], ships: pt.ships, carriers: pt.carriers ?? 0 });
     }
   }
   return p;
@@ -416,37 +426,8 @@ export function setStraitPolicy(s, c, key, policy) {
   return null;
 }
 
-export const PATROL_MODES = { escort: 'Escort our and allied ships', enemies: 'Stop our enemies\' cargoes', all: 'Stop all traffic (except allies)' };
-export function setPatrol(s, c, key, ships, mode) {
-  const cp = CHOKEPOINTS[key];
-  if (!cp) return 'Unknown strait.';
-  const st = s.chokepoints[key];
-  st.patrols ??= {};
-  ships = Math.floor(Number(ships) || 0);
-  if (ships <= 0) {
-    delete st.patrols[c.id];
-    return null;
-  }
-  if (!PATROL_MODES[mode]) return 'Pick what the patrol does.';
-  if (!canReachStrait(s, c, key)) return `The ${cp.name} is beyond your navy's reach (${Math.round(seaReach(c))} km). Aircraft carriers or a base nearby would help.`;
-  const busy = Object.values(c.blockades).reduce((t, v) => t + v, 0)
-    + Object.entries(s.chokepoints).reduce((t, [k, x]) => t + (k !== key ? (x.patrols?.[c.id]?.ships ?? 0) : 0), 0);
-  if (ships + busy > c.ships) return `You have ${Math.max(0, c.ships - busy)} warships free.`;
-  const was = st.patrols[c.id];
-  st.patrols[c.id] = { ships, mode, since: was?.since ?? s.week };
-  if (!was || was.mode !== mode) {
-    news(s, mode === 'escort'
-      ? `${c.name} sends warships to escort shipping through the ${cp.name}.`
-      : mode === 'all'
-        ? `${c.name}'s navy blocks the ${cp.name}: no ship passes without its say-so.`
-        : `${c.name}'s navy patrols the ${cp.name}, stopping cargoes bound for its enemies.`, mode === 'escort' ? 'trade' : 'war', [c.id]);
-    if (mode === 'all') {
-      c.rep = Math.max(0, c.rep - 8);
-      for (const o of Object.values(s.countries)) if (o.id !== c.id && !allied(s, o.id, c.id)) addRel(s, o.id, c.id, -10);
-    }
-  }
-  return null;
-}
+// What a patrol in a strait does. Patrols are fleets sent there (navy.js).
+export const PATROL_MODES = { escort: 'Escort our and allied ships', enemies: "Stop our enemies' cargoes", all: 'Stop all traffic (except allies)' };
 
 // Is a nation's trade through this strait blocked by someone's patrol?
 export function patrolBlocks(s, key, nationId) {
@@ -511,7 +492,7 @@ export function tradeTick(s) {
           if (pt.mode === 'escort' || owner === sh.buyer || owner === sh.seller) continue;
           const target = [sh.buyer, sh.seller].some((x) => !allied(s, owner, x) && (pt.mode === 'all' || atWar(s, owner, x) || sanctioning(s, owner, x)));
           if (!target) continue;
-          const mine = navalStrength({ ...s.countries[owner], ships: pt.ships, carriers: 0 });
+          const mine = navalStrength({ ...s.countries[owner], ships: pt.ships, carriers: pt.carriers ?? 0 });
           if (chance(s, clamp(mine / (mine + escortPower(s, sh) + 1), 0.1, 0.9) / sh.total * 1.6)) { stop(s, sh, owner, 'seize', where(cp)); break; }
         }
       }
@@ -574,28 +555,6 @@ function straitsTick(s) {
         flow += fee;
       }
       if (t) { t.treasury += flow; t.tollIncome = (t.tollIncome ?? 0) + flow; }
-    }
-    // Patrols: anti-ship missiles from a hostile shore, and clashes between hostile navies
-    for (const [owner, pt] of Object.entries(st.patrols ?? {})) {
-      const c = s.countries[owner];
-      if (!c || !alive(s, owner) || pt.ships <= 0) { delete st.patrols[owner]; continue; }
-      if (pt.ships > c.ships) pt.ships = c.ships;
-      for (const h of holders) {
-        if (!atWar(s, h, owner)) continue;
-        const shore = s.countries[h];
-        const hit = Math.round(pt.ships * 0.012 * (shore ? 0.5 + shore.tech.missile / 10 : 0.5) * (0.5 + rand(s)));
-        if (hit > 0) { pt.ships -= hit; c.ships = Math.max(0, c.ships - hit); alert(s, owner, `Shore missiles sank ${hit} of our warships in the ${CHOKEPOINTS[key].name}.`, 'bad'); }
-      }
-      for (const [other, op] of Object.entries(st.patrols)) {
-        if (other <= owner || !atWar(s, owner, other)) continue;
-        const a = navalStrength({ ...c, ships: pt.ships, carriers: 0 });
-        const b = navalStrength({ ...s.countries[other], ships: op.ships, carriers: 0 });
-        const lossA = Math.round(pt.ships * 0.03 * b / (a + b + 0.1));
-        const lossB = Math.round(op.ships * 0.03 * a / (a + b + 0.1));
-        pt.ships -= lossA; c.ships = Math.max(0, c.ships - lossA);
-        op.ships -= lossB; s.countries[other].ships = Math.max(0, s.countries[other].ships - lossB);
-        if (lossA + lossB > 0) news(s, `Naval battle in the ${CHOKEPOINTS[key].name}: ${nameOf(s, owner)} loses ${lossA} ships, ${nameOf(s, other)} ${lossB}.`, 'war', [owner, other]);
-      }
     }
   }
 }

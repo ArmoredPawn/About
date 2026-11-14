@@ -7,16 +7,22 @@ import { REGION_NAMES } from './names.js';
 import { clamp, news, alert, alive, nameOf, money, nextId, atWar, friendlyGround } from './core.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor } from './economy.js';
 import {
-  createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setBlockade,
+  createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike,
   setAirCampaign, settleMinor, checkOrder,
 } from './military.js';
+import { formFleet, fleetOrder, reinforceFleet, mergeFleets, disbandFleet, renameFleet, recallFleets } from './navy.js';
+import { setProvincePolicy, holdReferendum, setBorder } from './peoples.js';
+import { startAid, stopAid } from './proxy.js';
+import { setCarbonTax, makePledge } from './climate.js';
+import { launchSatellite, startProgramme, cancelProgramme, antiSatellite } from './space.js';
+import { cartelJoin, cartelLeave, cartelFound, setCut, setEmbargo, setCheat, expel, releaseReserve, setPipeline, sabotagePipeline, buildPipeline } from './energy.js';
 import {
   declareWar, propose, respond, createAlliance, leaveAlliance, setSanctions, setTariff, giveAid, shareTech, embassy,
   annex, setChokepoint, proposeResolution, vote,
 } from './diplomacy.js';
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
-import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, setPatrol } from './trade.js';
+import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy } from './trade.js';
 import { plant, recall, setCounterIntel, sweep } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
@@ -262,7 +268,14 @@ const HANDLERS = {
   },
   missile(s, c, { region, count }) { return missileStrike(s, c, region, count); },
   nuke(s, c, { region }) { return nuclearStrike(s, c, region); },
-  blockade(s, c, { target, ships }) { return setBlockade(s, c, target, ships); },
+  blockade(s, c, { target }) { return recallFleets(s, c, { target }); },
+  /* ---------- Navy ---------- */
+  fleetForm(s, c, { sea, ships, carriers, name }) { return formFleet(s, c, { sea, ships, carriers, name }); },
+  fleetOrder(s, c, { id, to, mission, mode, target }) { return fleetOrder(s, c, { id, to, mission, mode, target }); },
+  fleetReinforce(s, c, { id, ships, carriers }) { return reinforceFleet(s, c, { id, ships, carriers }); },
+  fleetMerge(s, c, { ids }) { return mergeFleets(s, c, ids); },
+  fleetDisband(s, c, { id }) { return disbandFleet(s, c, { id }); },
+  fleetRename(s, c, { id, name }) { return renameFleet(s, c, { id, name }); },
   air(s, c, { region, aircraft }) { return setAirCampaign(s, c, region, aircraft); },
 
   /* ---------- Diplomacy ---------- */
@@ -301,6 +314,31 @@ const HANDLERS = {
   warCase(s, c, { target }) { return makeWarCase(s, c, target); },
   protest(s, c, { id, action }) { return handleProtest(s, c, id, action); },
   uprising(s, c, { region, action }) { return handleUprising(s, c, region, action); },
+  provincePolicy(s, c, { region, policy }) { return setProvincePolicy(s, c, region, policy); },
+  referendum(s, c, { region }) { return holdReferendum(s, c, region); },
+  border(s, c, { closed }) { return setBorder(s, c, closed); },
+  aidStart(s, c, { to, rebels, kind, size, covert }) { return startAid(s, c, { to, rebels, kind, size, covert }); },
+  aidStop(s, c, { id }) { return stopAid(s, c, { id }); },
+  /* ---------- Oil and gas ---------- */
+  cartelJoin(s, c) { return cartelJoin(s, c); },
+  cartelLeave(s, c) { return cartelLeave(s, c); },
+  cartelFound(s, c, { name }) { return cartelFound(s, c, { name }); },
+  cartelCut(s, c, { cut }) { return setCut(s, c, { cut }); },
+  cartelEmbargo(s, c, { target, on }) { return setEmbargo(s, c, { target, on }); },
+  cartelCheat(s, c, { on }) { return setCheat(s, c, { on }); },
+  cartelExpel(s, c, { target }) { return expel(s, c, { target }); },
+  releaseReserve(s, c, { res, share }) { return releaseReserve(s, c, { res, share }); },
+  pipeline(s, c, { id, shut }) { return setPipeline(s, c, { id, shut }); },
+  pipelineSabotage(s, c, { id }) { return sabotagePipeline(s, c, { id }); },
+  pipelineBuild(s, c, { id }) { return buildPipeline(s, c, { id }); },
+  /* ---------- Climate ---------- */
+  carbonTax(s, c, { level }) { return setCarbonTax(s, c, level); },
+  pledge(s, c, { cut, year }) { return makePledge(s, c, { cut, year }); },
+  /* ---------- Space ---------- */
+  satellite(s, c, { kind }) { return launchSatellite(s, c, { kind }); },
+  spaceProgramme(s, c, { kind }) { return startProgramme(s, c, { kind }); },
+  spaceCancel(s, c, { kind }) { return cancelProgramme(s, c, { kind }); },
+  asat(s, c, { target, kind }) { return antiSatellite(s, c, { target, kind }); },
 
   /* ---------- Market and shipping ---------- */
   marketBuy(s, c, { res, qty, from, covert }) { return buy(s, c, { res, qty, from, covert: Boolean(covert) }); },
@@ -309,7 +347,8 @@ const HANDLERS = {
   intercept(s, c, { id, how }) { return orderIntercept(s, c, { id, how }); },
   toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
   straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
-  patrol(s, c, { key, ships, mode }) { return setPatrol(s, c, key, ships, mode); },
+  // Patrols and blockades are fleets now; these call them off
+  patrol(s, c, { key }) { return recallFleets(s, c, { key }); },
 
   /* ---------- Spies ---------- */
   spyPlant(s, c, { target, agents }) { return plant(s, c, target, agents); },

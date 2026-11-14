@@ -103,7 +103,7 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 input[type="range"] { padding: 0; min-height: 0; background: none; border: 0; accent-color: var(--accent); }
-input[type="checkbox"] { width: auto; min-height: 0; accent-color: var(--accent); }
+input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; padding: 0; accent-color: var(--accent); }
 .field { display: block; }
 .field > span { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
 .field + .field { margin-top: 10px; }
@@ -282,7 +282,21 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .battle { pointer-events: none; }
 .map .res-icon circle { stroke: rgb(0 0 0 / 0.5); stroke-width: 0.4; }
 .map .res-icon text { fill: #0b0d14; font-weight: 800; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
-.map .chokepoint { pointer-events: none; }
+.map .chokepoint { cursor: pointer; }
+.whatsnew .item-head { align-items: center; }
+.modal-head #whatsnew-btn { margin-left: auto; margin-right: 8px; }
+.whatsnew-icon { font-size: 18px; width: 26px; text-align: center; }
+.map .fleet { cursor: pointer; }
+.map .fleet rect { stroke: #d8f1ff; stroke-width: 0.9; vector-effect: non-scaling-stroke; }
+.map .fleet text { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; font-family: var(--mono); }
+.map .fleet.foe rect { stroke: rgb(0 0 0 / 0.6); }
+.map .fleet.sel rect { stroke: #fff; stroke-width: 2; }
+.map .fleet.fighting rect { stroke: #ff3b3b; stroke-width: 2; }
+.map .fleet-more rect { fill: rgb(20 26 40 / 0.92); stroke: rgb(150 190 230 / 0.6); stroke-width: 0.8; vector-effect: non-scaling-stroke; }
+.map .fleet-more text { fill: rgb(200 220 240); font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.map .sea-name { fill: rgb(150 190 230 / 0.42); font-style: italic; font-weight: 600; letter-spacing: 0.08em; text-anchor: middle; paint-order: stroke; stroke: rgb(5 8 14 / 0.4); stroke-linejoin: round; cursor: pointer; }
+.map .sea-name:hover { fill: rgb(170 210 250 / 0.85); }
+.map .pipeline { fill: none; stroke-linecap: round; pointer-events: stroke; }
 .map .front-line { fill: none; stroke: #ffffff; stroke-width: 2; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
 .map .front-shadow { fill: none; stroke: rgb(5 8 14 / 0.85); stroke-width: 4.5; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
 .map .front-label { fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: rgb(5 8 14 / 0.85); stroke-linejoin: round; pointer-events: none; }

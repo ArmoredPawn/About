@@ -1,12 +1,17 @@
-// The world at a glance: power rankings. (Prices and trade are under Market, the news under News.)
+// The world at a glance: power rankings, and the climate. (Prices and trade are under Market, the news under
+// News.)
 
 import { h, flag, money, pct, nationName } from '../dom.js';
+import { climate } from './climate.js';
 
 export function world(ctx) {
+  const tab = ctx.sub('world', 'rankings');
+  const tabs = [['rankings', 'Rankings'], ['climate', 'Climate']];
   return h('div',
     h('div.panel-title', h('h2', 'The world'), ctx.state.winter ? h('span.chip.bad', 'Nuclear winter') : null),
-    rankings(ctx),
-    h('div.row.gap', { style: { marginTop: '12px' } },
+    h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('world', id) }, label))),
+    tab === 'climate' ? climate(ctx) : rankings(ctx),
+    tab === 'climate' ? null : h('div.row.gap', { style: { marginTop: '12px' } },
       h('button.btn.small', { onclick: () => ctx.go('market', 'prices') }, 'World prices'),
       h('button.btn.small', { onclick: () => ctx.go('news') }, 'World news')));
 }

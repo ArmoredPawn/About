@@ -246,7 +246,8 @@ function revoltsTick(s, gar) {
   for (const reg of Object.values(s.regions)) {
     const holder = reg.ctrl;
     // Long, bitter occupations breed insurgencies
-    if (!reg.revolt && reg.unrest >= 72 && s.countries[holder] && chance(s, 0.015 * (reg.unrest - 70) / 10)) {
+    // A crackdown keeps a lid on it, for now
+    if (!reg.revolt && reg.unrest >= 72 && s.countries[holder] && chance(s, 0.015 * (reg.unrest - 70) / 10 * (reg.policy === 'crackdown' ? 0.35 : 1))) {
       startRevolt(s, reg, reg.owner !== holder ? 'partisans rise against the occupation' : 'armed rebels rise against the government');
     }
     const rv = reg.revolt;
@@ -257,7 +258,8 @@ function revoltsTick(s, gar) {
     for (const a of Object.values(s.armies)) if (a.region === reg.id && a.owner === holder && !a.sea) army += a.troops * (a.op.kind === 'hold' ? 1 : 0.5);
     const quality = c ? 0.6 + 0.08 * c.tech.army : 0.6;
     const growth = rv.rebels * 0.035 * (reg.unrest / 80) + reg.pop * 0.05;
-    const suppress = (g * 0.012 + army * 0.06) * quality;
+    // Rebels armed from abroad are much harder to put down
+    const suppress = (g * 0.012 + army * 0.06) * quality / (1 + (rv.armed ?? 0) / 400);
     rv.rebels = Math.max(0, rv.rebels + growth - suppress);
     // Fighting rebels costs soldiers too
     if (army > 0) for (const a of Object.values(s.armies)) if (a.region === reg.id && a.owner === holder) a.troops = Math.max(1, a.troops - Math.min(a.troops * 0.01, rv.rebels * 0.01));

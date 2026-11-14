@@ -74,6 +74,27 @@ function warnings(ctx) {
   }
   const lost = Object.values(s.regions).filter((r) => r[0] === s.me && r[1] !== s.me);
   if (lost.length) add('bad', `${lost.length} of our provinces are under enemy occupation.`);
+  // The navy
+  const blockaded = s.countries[s.me]?.blockaded ?? 0;
+  if (blockaded >= 10) add('bad', `Enemy fleets are blockading us: ${blockaded}% of our sea trade is cut. Send our fleets to break it.`, () => ctx.go('military', 'navy'));
+  const foes = new Set(enemies.map((w) => (w.a === s.me ? w.b : w.a)));
+  const raiders = (s.fleets ?? []).filter((f) => foes.has(f.owner) && f.mission === 'blockade' && f.target === s.me);
+  if (raiders.length && blockaded < 10) add('', `${raiders.length} enemy fleet${raiders.length > 1 ? 's are' : ' is'} sailing to blockade us.`, () => ctx.go('military', 'navy'));
+  if ((me.refitUntil ?? -1) > s.week) add('', `Ships back from a lost sea battle are refitting in port for ${me.refitUntil - s.week} more weeks.`, () => ctx.go('military', 'navy'));
+  // Peoples
+  const restless = Object.entries(ctx.regionIndex).filter(([, i]) => s.regions[i][1] === s.me && (s.regions[i][13] ?? 50) < 20);
+  if (restless.length) add('bad', `${restless.length} province${restless.length > 1 ? 's are' : ' is'} close to revolt (${restless.slice(0, 3).map(([id]) => regionName(id)).join(', ')}${restless.length > 3 ? '…' : ''}). Autonomy, better government or a crackdown can hold them.`, () => ctx.go('government', 'peoples'));
+  if ((me.refugees ?? 0) / Math.max(1, me.pop) > 0.004) add('', `We are sheltering ${me.refugees >= 1 ? `${me.refugees.toFixed(1)} million` : `${Math.round(me.refugees * 1000)}K`} refugees, at ${money(me.refugeeCost ?? 0)} a year.`, () => ctx.go('government', 'peoples'));
+  // Oil
+  if (s.cartel?.embargo.includes(s.me)) add('bad', `${s.cartel.name} has embargoed our oil. Ration fuel and find other sellers.`, () => ctx.go('market', 'energy'));
+  if (me.cartelCaught && me.cartelCheat) add('', `We have been caught breaking our ${s.cartel?.name ?? 'cartel'} quota. We risk being expelled.`, () => ctx.go('market', 'energy'));
+  // Climate
+  const p = me.pledgeDetail;
+  if (p && !p.done && p.by - s.week < 104 && (me.emissions ?? 0) > (p.path ?? Infinity) * 1.05) add('', `Our climate pledge (${p.cut}% by ${p.year}) is off track and due in under two years. Breaking it costs standing.`, () => ctx.go('world', 'climate'));
+  if (s.climate && s.climate.nextSummit - s.week <= 4 && s.climate.nextSummit >= s.week) add('info', 'A climate summit opens within a month: a pledge made now is noticed.', () => ctx.go('world', 'climate'));
+  // Space
+  const stalled = Object.entries(me.space?.prog ?? {}).filter(([, x]) => x.stalled);
+  if (stalled.length) add('', 'A space programme has stalled: the treasury is too low to pay for it.', () => ctx.go('research', 'space'));
   if (!out.length) add('good', 'Nothing urgent. A good week to invest, trade and build alliances.');
   return h('div.stack-sm', out);
 }

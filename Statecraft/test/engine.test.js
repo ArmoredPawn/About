@@ -321,18 +321,33 @@ test('making the case to the nation first takes the edge off the outcry over a w
   assert.ok(made.repHit < plain.repHit + 0.01 || made.repHit <= plain.repHit, `standing lost ${made.repHit} vs ${plain.repHit}`);
 });
 
-test('the war runs in real time: an army ordered off sets out within a second and crosses a country in seconds', () => {
-  const g = game(23, 'tur');
-  g.command('tur', { type: 'armyCreate', region: 'tur-se', troops: 120, tanks: 200 });
-  const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
-  assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'tur-is' }), null);
-  const second = 1 / 9; // a game week lasts 9 seconds at normal speed
-  g.step(second);
-  assert.notEqual(army.region, 'tur-se', 'moved on the first step');
-  for (let i = 0; i < 5 && army.region !== 'tur-is'; i++) g.step(second);
-  assert.equal(army.region, 'tur-is', 'across Turkey within six seconds');
+test('armies march at the speed their research, industry and tanks allow, in real time', () => {
+  // Seconds (at normal speed, 9 a week) for a Turkish army to cross from the southeast to Istanbul
+  const crossing = (tech, tanks) => {
+    const g = game(23, 'tur');
+    const c = g.s.countries.tur;
+    c.tech.army = tech;
+    c.tech.industry = tech;
+    c.tanks = Math.max(c.tanks, tanks);
+    g.command('tur', { type: 'armyCreate', region: 'tur-se', troops: 120, tanks });
+    const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
+    assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'tur-is' }), null);
+    const second = 1 / 9;
+    for (let i = 1; i <= 120; i++) {
+      g.step(second);
+      if (i % 9 === 0) g.tick();
+      if (army.region === 'tur-is') return i;
+    }
+    return Infinity;
+  };
+  const advanced = crossing(10, 400);
+  const backward = crossing(4, 0);
+  assert.ok(advanced > 6, `no more lightning marches (${advanced}s)`);
+  assert.ok(advanced <= 40, `a modern mechanised army still crosses Turkey in under a minute (${advanced}s)`);
+  assert.ok(backward > advanced * 2, `low-tech infantry is much slower (${backward}s vs ${advanced}s)`);
   // Steps never run ahead of the weekly clock
-  for (let i = 0; i < 30; i++) g.step(second);
+  const g = game(23, 'tur');
+  for (let i = 0; i < 30; i++) g.step(1 / 9);
   assert.ok(g.s.stepped <= 1 + 1e-9);
   g.tick();
   assert.equal(g.s.stepped, 0);
@@ -381,4 +396,186 @@ test('every army is on every map, and a failing attack is explained in the news'
   const report = s.countries.ind.inbox.find((m) => /being thrown back/.test(m.text));
   assert.ok(report?.front, 'a front report for the attacker');
   assert.match(report.text, /Pakistan's .* \(~\d+K\)/, 'naming the army in the way');
+});
+
+test('numbers count: a tired, hungry 3M army still beats 1M on open ground and is not pushed back by it', () => {
+  const setup = () => {
+    const g = game(7, 'rus');
+    const s = g.s;
+    s.countries.rus.troops = 3300;
+    s.countries.kaz.troops = 1100;
+    g.command('rus', { type: 'armyCreate', region: 'rus-ur', troops: 3000, tanks: 2000 });
+    g.command('kaz', { type: 'armyCreate', region: 'kaz-at', troops: 1000, tanks: 0 });
+    s.countries.rus.short = { oil: 1 };
+    return { g, s, r: Object.values(s.armies).find((x) => x.owner === 'rus'), k: Object.values(s.armies).find((x) => x.owner === 'kaz') };
+  };
+  // Worn out (organisation 15) and out of oil, the big army still takes the province
+  {
+    const { g, s, r } = setup();
+    assert.equal(g.command('rus', { type: 'armyOrder', id: r.id, kind: 'go', target: 'kaz-at', declare: true }), null);
+    for (let w = 0; w < 6 && s.regions['kaz-at'].ctrl !== 'rus'; w++) { for (let i = 0; i < 9; i++) { r.org = Math.min(r.org, 15); g.step(1 / 9); } g.tick(); }
+    assert.equal(s.regions['kaz-at'].ctrl, 'rus');
+  }
+  // And a fresh 1M attacking it gets nowhere
+  {
+    const { g, s, r, k } = setup();
+    g.command('rus', { type: 'war', target: 'kaz', goal: 'conquest' });
+    g.command('kaz', { type: 'armyOrder', id: k.id, kind: 'go', target: 'rus-ur' });
+    k.op.kind = 'attack';
+    for (let w = 0; w < 6; w++) { for (let i = 0; i < 9; i++) { r.org = 15; g.step(1 / 9); } g.tick(); }
+    assert.equal(s.regions['rus-ur'].ctrl, 'rus');
+  }
+});
+
+/* ---------- Navies ---------- */
+
+test('navies are fleets on the map: patrols, blockades and sea battles come from where they are', async () => {
+  const { declareWar } = await import('../public/js/engine/diplomacy.js');
+  const g = game(4, 'gbr');
+  const s = g.s;
+  assert.ok(Object.values(s.fleets).some((f) => f.owner === 'usa' && f.at === 'atl'), 'the US Atlantic Fleet');
+  assert.ok(!Object.values(s.fleets).some((f) => f.owner === 'che'), 'landlocked Switzerland has no navy');
+  const f = Object.values(s.fleets).find((x) => x.owner === 'gbr');
+  assert.match(g.command('gbr', { type: 'fleetOrder', id: f.id, mission: 'blockade', target: 'fra' }), /not at war/);
+  assert.equal(g.command('gbr', { type: 'fleetOrder', id: f.id, to: 'gibraltar', mission: 'patrol', mode: 'escort' }), null);
+  assert.equal(s.chokepoints.gibraltar.patrols.gbr, undefined, 'not there yet');
+  for (let i = 0; i < 40 && f.path.length; i++) g.step(1 / 9);
+  assert.equal(f.at, 'gibraltar');
+  assert.equal(s.chokepoints.gibraltar.patrols.gbr.mode, 'escort');
+  // China and Taiwan at war: the much smaller fleet in its own waters withdraws into port
+  declareWar(s, s.countries.chn, 'twn', 'conquest');
+  for (let i = 0; i < 9; i++) g.step(1 / 9);
+  assert.ok(!Object.values(s.fleets).some((x) => x.owner === 'twn' && x.at === 'eas'), "Taiwan's fleet has left the East Asian seas");
+  assert.ok(s.countries.twn.refitUntil > s.week, 'and is refitting in port');
+});
+
+test("a landing needs a fleet in the sea off the coast, at least as strong as the enemy's", async () => {
+  const { landingProblem } = await import('../public/js/engine/military.js');
+  const g = game(4, 'jpn');
+  const s = g.s;
+  g.command('jpn', { type: 'war', target: 'kor', goal: 'conquest' });
+  const from = Object.keys(s.regions).find((id) => id.startsWith('jpn-') && GEO[id].coast);
+  const target = Object.keys(s.regions).find((id) => id.startsWith('kor-') && GEO[id].coast);
+  assert.equal(landingProblem(s, { id: 'jpn' }, from, target), null, "Japan's fleet out-guns Korea's in the East Asian seas");
+  for (const f of Object.values(s.fleets)) if (f.owner === 'jpn') delete s.fleets[f.id];
+  assert.match(landingProblem(s, { id: 'jpn' }, from, target), /no fleet of ours/);
+});
+
+/* ---------- Peoples ---------- */
+
+test('conquered peoples resist, movements can vote to leave, and a winning uprising takes the province away', async () => {
+  const { peoplesTick } = await import('../public/js/engine/peoples.js');
+  const g = game(13, 'esp');
+  const s = g.s;
+  const R = s.regions;
+  assert.ok(R['ind-jk'].loyalty < R['ind-dl'].loyalty, 'Kashmir is less loyal than Delhi');
+  // Occupation: loyalty collapses and unrest follows
+  R['kaz-ek'].ctrl = 'rus';
+  for (let w = 0; w < 20; w++) peoplesTick(s);
+  assert.ok(R['kaz-ek'].loyalty < 15 && R['kaz-ek'].unrest > 40);
+  // A referendum lost: Catalonia leaves in peace
+  R['esp-ct'].loyalty = 20;
+  assert.equal(g.command('esp', { type: 'referendum', region: 'esp-ct' }), null);
+  assert.equal(R['esp-ct'].owner, 'm-x-esp-ct');
+  assert.equal(s.minors['m-x-esp-ct'].name, 'Catalonia');
+  assert.ok(!s.wars.some((w) => [w.a, w.b].includes('m-x-esp-ct')), 'no war after a referendum');
+  // An uprising that outlasts the army: Kurdistan breaks away and Turkey goes to war to get it back
+  s.week = 30;
+  R['tur-se'].loyalty = 10;
+  R['tur-se'].revolt = { rebels: 120, since: 5, why: 'test' };
+  peoplesTick(s);
+  assert.equal(R['tur-se'].owner, 'm-x-tur-se');
+  assert.ok(s.wars.some((w) => [w.a, w.b].includes('tur') && [w.a, w.b].includes('m-x-tur-se')));
+  assert.ok(g.view('usa').minors['m-x-tur-se'], "the new nation is on everyone's map");
+});
+
+/* ---------- Proxy wars ---------- */
+
+test('arming a country at war moves weapons, and covert programmes stay hidden from others', async () => {
+  const { declareWar } = await import('../public/js/engine/diplomacy.js');
+  const g = game(21, 'usa');
+  g.setLeader('fra', 'Other');
+  const s = g.s;
+  declareWar(s, s.countries.rus, 'pol', 'conquest');
+  const tanks = s.countries.pol.tanks;
+  assert.equal(g.command('usa', { type: 'aidStart', to: 'pol', kind: 'weapons', size: 1, covert: true }), null);
+  g.tick();
+  assert.ok(s.countries.pol.tanks > tanks, 'Poland received tanks');
+  const mine = s.aid.find((p) => p.from === 'usa');
+  assert.ok(mine && (mine.covert || mine.exposed));
+  if (mine.covert) assert.ok(!g.view('fra').aid.some((p) => p.from === 'usa'), "France can't see a covert programme");
+  assert.match(g.command('usa', { type: 'aidStart', to: 'pol', kind: 'weapons', size: 0 }), /already send/);
+});
+
+/* ---------- Oil ---------- */
+
+test("the cartel's cut and embargo bite, and pipelines get fuel past them", async () => {
+  const { cartelOutput, embargoCut, pipelineShare, bypassShare } = await import('../public/js/engine/energy.js');
+  const g = game(5, 'sau');
+  const s = g.s;
+  assert.equal(s.cartel.name, 'OPEC+');
+  assert.equal(s.cartel.chair, 'sau');
+  for (let w = 0; w < 4; w++) g.tick();
+  const before = s.market.price.oil;
+  assert.equal(g.command('sau', { type: 'cartelCut', cut: 30 }), null);
+  assert.equal(cartelOutput(s, 'irq'), 0.7);
+  for (let w = 0; w < 20; w++) g.tick();
+  assert.ok(s.market.price.oil > before * 1.1, `oil up from ${before.toFixed(2)} to ${s.market.price.oil.toFixed(2)}`);
+  assert.equal(g.command('sau', { type: 'cartelEmbargo', target: 'jpn', on: true }), null);
+  assert.ok(embargoCut(s, 'jpn') > 0.2);
+  assert.ok(pipelineShare(s, 'chn', 'gas') > 0, 'Power of Siberia flows to China');
+  assert.ok(bypassShare(s, 'sau', 'hormuz') > 0.5, 'Petroline gets Saudi oil round Hormuz');
+  assert.equal(bypassShare(s, 'irq', 'hormuz'), 0, 'Kirkuk–Ceyhan is shut');
+});
+
+/* ---------- Climate ---------- */
+
+test('emissions warm the world, and a carbon tax cuts them over time', () => {
+  const g = game(8, 'deu');
+  const s = g.s;
+  for (let w = 0; w < 2; w++) g.tick();
+  assert.ok(s.climate.world > 30 && s.climate.world < 45, `about 37 billion tonnes a year (${s.climate.world.toFixed(1)})`);
+  const t0 = s.climate.temp;
+  const e0 = s.countries.deu.emissions;
+  assert.equal(g.command('deu', { type: 'carbonTax', level: 3 }), null);
+  assert.equal(g.command('deu', { type: 'pledge', cut: 30, year: 2040 }), null);
+  for (let w = 0; w < 104; w++) g.tick();
+  assert.ok(s.climate.temp > t0 + 0.02, 'warmer after two years');
+  assert.ok(s.countries.deu.emissions < e0 * 0.95, `German emissions down (${e0.toFixed(2)} → ${s.countries.deu.emissions.toFixed(2)})`);
+  assert.ok(s.countries.deu.carbonRevenue > 0);
+});
+
+/* ---------- Space ---------- */
+
+test('spy satellites count every army, and a launch takes twelve weeks', async () => {
+  const { satSees } = await import('../public/js/engine/space.js');
+  const g = game(30, 'ind');
+  const s = g.s;
+  g.command('pak', { type: 'armyCreate', region: 'pak-kr', troops: 123, tanks: 0 });
+  assert.ok(satSees(s, 'usa') && !satSees(s, 'bra'));
+  const pak = g.view('usa').armies.find((a) => a.owner === 'pak');
+  assert.equal(pak.seen, true);
+  assert.equal(pak.troops, 123, 'exact from orbit');
+  assert.equal(pak.path, undefined, 'but not its orders');
+  assert.equal(g.command('ind', { type: 'satellite', kind: 'comms' }), null);
+  assert.equal(s.countries.ind.space.building.length, 1);
+  for (let w = 0; w < 12; w++) g.tick();
+  assert.equal(s.countries.ind.space.building.length, 0, 'launched after twelve weeks');
+});
+
+/* ---------- Old saved games ---------- */
+
+test('a game saved before navies, peoples, oil, climate and space carries on under the new rules', () => {
+  const g = game(2, 'usa');
+  for (let i = 0; i < 3; i++) g.tick();
+  const old = JSON.parse(JSON.stringify(g.s));
+  delete old.fleets; delete old.aid; delete old.pipelines; delete old.cartel; delete old.climate; delete old.space;
+  for (const r of Object.values(old.regions)) { delete r.people; delete r.loyalty; delete r.policy; }
+  for (const c of Object.values(old.countries)) delete c.space;
+  const back = new Game(old);
+  for (let i = 0; i < 3; i++) { for (let j = 0; j < 3; j++) back.step(1 / 3); back.tick(); }
+  assert.ok(Object.keys(back.s.fleets).length > 20);
+  assert.ok(back.s.cartel && back.s.climate && back.s.space && back.s.pipelines.length);
+  assert.ok(Object.values(back.s.regions).every((r) => r.people && r.loyalty != null));
+  assert.ok(back.view('usa').fleets.length > 20);
 });

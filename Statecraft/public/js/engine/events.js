@@ -4,6 +4,7 @@ import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, rand, chance, pick, news, alert, nameOf, alive, addRel, nextId, enemiesOf } from './core.js';
 import { plant } from './spies.js';
+import { extremeFactor } from './climate.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 
@@ -92,6 +93,26 @@ export function covertOp(s, c, op, target, regionId) {
 const QUAKES = ['jpn-kn', 'jpn-ks', 'jpn-th', 'tur-is', 'tur-ea', 'irn-th', 'chl-sa', 'idn-jk', 'idn-sm', 'mex-mx', 'usa-ca', 'phl-mn', 'twn-tc', 'ita-ca', 'per-li', 'pak-kp', 'chn-sc', 'col-bo'];
 const STORMS = ['usa-se', 'usa-tx', 'mex-yu', 'phl-vi', 'jpn-ky', 'chn-gd', 'bgd-kh', 'ind-ap', 'vnm-ct', 'twn-ts'];
 
+function storm(s) {
+  const id = pick(s, STORMS);
+  const reg = s.regions[id];
+  if (!reg) return;
+  // Good infrastructure (sea walls, drainage, building codes) limits the damage
+  reg.dmg = Math.min(0.9, reg.dmg + 0.05 * (1 - 0.04 * reg.infra));
+  news(s, `A powerful storm batters ${regionName(id)} (${nameOf(s, reg.owner)}).`, 'disaster', [reg.owner]);
+  alert(s, reg.owner, `A storm hit ${regionName(id)}.`, 'bad', { region: id });
+}
+
+function drought(s) {
+  const dry = pick(s, ['usa-pl', 'ind-up', 'chn-bj', 'arg-pa', 'aus-ns', 'bra-mt', 'rus-so', 'can-pr', 'm-ukraine']);
+  const reg = s.regions[dry];
+  if (!reg?.res.food) return;
+  const before = reg.res.food[0];
+  reg.res.food[0] = Math.round(before * 0.7);
+  s.modifiers.push({ id: nextId(s, 'm'), cid: '__restore', kind: 'drought', region: dry, value: before, until: s.week + 26 });
+  news(s, `Drought withers the harvest in ${regionName(dry)}. Grain prices are climbing.`, 'disaster', [reg.owner]);
+}
+
 export function eventsTick(s) {
   const countries = Object.values(s.countries).filter((c) => alive(s, c.id));
   if (!countries.length) return;
@@ -113,13 +134,7 @@ export function eventsTick(s) {
       alert(s, reg.owner, `Earthquake in ${regionName(id)}: damage ${Math.round(reg.dmg * 100)}%. Infrastructure spending will speed recovery.`, 'bad', { region: id });
     }
   } else if (roll < 0.0255) {
-    const id = pick(s, STORMS);
-    const reg = s.regions[id];
-    if (reg) {
-      reg.dmg = Math.min(0.9, reg.dmg + 0.05);
-      news(s, `A powerful storm batters ${regionName(id)} (${nameOf(s, reg.owner)}).`, 'disaster', [reg.owner]);
-      alert(s, reg.owner, `A storm hit ${regionName(id)}.`, 'bad', { region: id });
-    }
+    storm(s);
   } else if (roll < 0.0325) {
     const options = Object.values(s.regions).filter((r) => r.res.oil || r.res.gas || r.res.metal || r.res.rare);
     const reg = pick(s, options);
@@ -141,32 +156,25 @@ export function eventsTick(s) {
       alert(s, c.id, 'A general strike has broken out. Higher welfare spending or lower taxes would calm things.', 'bad');
     }
   } else if (roll < 0.052) {
-    const dry = pick(s, ['usa-pl', 'ind-up', 'chn-bj', 'arg-pa', 'aus-ns', 'bra-mt', 'rus-so', 'can-pr', 'm-ukraine']);
-    const reg = s.regions[dry];
-    if (reg?.res.food) {
-      const before = reg.res.food[0];
-      reg.res.food[0] = Math.round(before * 0.7);
-      s.modifiers.push({ id: nextId(s, 'm'), cid: '__restore', kind: 'drought', region: dry, value: before, until: s.week + 26 });
-      news(s, `Drought withers the harvest in ${regionName(dry)}. Grain prices are climbing.`, 'disaster', [reg.owner]);
-    }
+    drought(s);
+  }
+  // A warmer world: more storms and droughts on top of the usual ones
+  const extra = extremeFactor(s) - 1;
+  if (extra > 0) {
+    if (chance(s, 0.012 * extra)) storm(s);
+    if (chance(s, 0.005 * extra)) drought(s);
   }
   // Droughts end
   for (const m of s.modifiers) {
     if (m.kind === 'drought' && m.until <= s.week + 1 && s.regions[m.region]?.res.food) s.regions[m.region].res.food[0] = Math.max(s.regions[m.region].res.food[0], m.value);
   }
-  // Wars push people out
-  for (const c of countries) {
-    if (enemiesOf(s, c.id).size && chance(s, 0.004)) news(s, `Refugees stream out of the war zones of ${c.name}.`, 'war', [c.id]);
-  }
-  // Damage slowly mends; occupation breeds resistance
+  // Damage slowly mends (unrest and refugees follow each province's loyalty: see peoples.js)
   for (const reg of Object.values(s.regions)) {
     if (reg.dmg > 0 && !reg.battle) {
       const owner = s.countries[reg.ctrl];
       const fix = 0.002 + (owner ? owner.spend.infra * 0.0006 : 0.001);
       reg.dmg = Math.max(0, reg.dmg - fix);
     }
-    if (reg.ctrl !== reg.owner) reg.unrest = Math.min(90, reg.unrest + 0.3);
-    else reg.unrest = Math.max(0, reg.unrest - 0.8);
   }
 }
 

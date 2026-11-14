@@ -11,7 +11,8 @@ import {
   clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
   onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted,
 } from './core.js';
-import { navalPower } from './economy.js';
+import { navyStep, navyTick, landingControl, crossingOdds } from './navy.js';
+import { gpsCoverage, commsReady } from './space.js';
 import { PROVINCES } from './data/regions.js';
 import { COUNTRIES } from './data/countries.js';
 import { surpriseFeature } from './terrain.js';
@@ -45,6 +46,8 @@ export const regionName = (id) => REGION_NAMES[id] ?? id;
 const quality = (s, id) => (s.countries[id] ? 0.6 + 0.08 * s.countries[id].tech.army : MINOR_QUALITY[id] ?? 0.5);
 // Big provinces take longer to overrun: there is more ground to cross and hold
 const depth = (id) => clamp(Math.sqrt((GEO[id]?.area ?? 1500) / 1500), 0.7, 2.2);
+// How big a province is next to an ordinary one (1), up to about 3 for Siberia or the Sahara
+const size = (id) => depth(id) / 0.7;
 const airQuality = (c) => 0.6 + 0.08 * c.tech.air;
 
 export function distanceKm(a, b) {
@@ -85,8 +88,10 @@ export function garrisons(s) {
   return out;
 }
 
+// Fighting strength. Numbers count most: an exhausted army still fights at 60% and one cut off from supply at
+// 55%, so three million tired, hungry men are still worth more than a million fresh ones on open ground.
 function power(troops, tanks, qual, org, supply, terrain) {
-  return (troops + tanks * 0.05 * terrain.armor) * qual * (0.35 + 0.65 * org / 100) * supply;
+  return (troops + tanks * 0.05 * terrain.armor) * qual * (0.6 + 0.4 * org / 100) * (0.55 + 0.45 * supply);
 }
 
 function genBonus(gen, role) {
@@ -136,7 +141,7 @@ export function route(s, owner, from, to, { offensive = true, maneuver = false }
       const holder = reg.ctrl;
       const terrain = terrainOf(next);
       let cost;
-      if (friendlyGround(s, owner, holder) || onSameSide(s, owner, holder) && !atWar(s, owner, holder)) cost = 0.5 * terrain.move;
+      if (friendlyGround(s, owner, holder) || onSameSide(s, owner, holder) && !atWar(s, owner, holder)) cost = 0.5 * moveCost(s, id, next) / 600;
       else if (offensive && atWar(s, owner, holder)) cost = 2 * terrain.move * terrain.defend + 1;
       else continue;
       if (maneuver) cost *= 0.8;
@@ -270,16 +275,13 @@ export function hypotheticalWar(s, me, foe) {
   return { ...s, alliances, wars: [...s.wars, { a: me, b: foe }] };
 }
 
-export const seaReach = (c) => (c.carriers > 0 ? 20000 : 1500 + c.ships * 25);
-
-// Why a landing from `from` on `target` can't go ahead, or null if it can. `c` needs id, ships and carriers.
+// Why a landing from `from` on `target` can't go ahead, or null if it can. `c` needs an id. A landing needs a
+// fleet of ours (or an ally's) in the sea off the target's coast, at least as strong as the enemy's there.
 export function landingProblem(s, c, from, target) {
   if (!GEO[from].coast || s.regions[from].ctrl !== c.id) return 'The army isn\'t in a coastal province you hold, so it has no port to sail from.';
   if (!GEO[target].coast) return `${regionName(target)} is landlocked: there is no water to land from.`;
-  if (c.ships < 3) return 'You need at least 3 warships to escort a landing.';
-  const km = distanceKm(from, target);
-  const reach = seaReach(c);
-  if (km > reach) return `${regionName(target)} is ${Math.round(km)} km away, beyond your navy's reach (${Math.round(reach)} km). Aircraft carriers extend it.`;
+  const sea = landingControl(s, c.id, target);
+  if (sea) return `No landing at ${regionName(target)}: ${sea}.`;
   return null;
 }
 
@@ -398,7 +400,8 @@ export function missileStrike(s, c, target, count) {
   const intercept = def ? clamp(0.055 * def.tech.missile - 0.02 * (c.tech.missile - 6), 0, 0.75) : 0.05;
   const hits = Math.round(count * (1 - intercept) * (0.85 + rand(s) * 0.3));
   c.missiles -= count;
-  const dmg = Math.min(0.35, hits * 0.0016 * (c.tech.missile / 8));
+  // Satellite navigation guides the missiles in
+  const dmg = Math.min(0.35, hits * 0.0016 * (c.tech.missile / 8) * (1 + 0.3 * gpsCoverage(s, c.id)));
   reg.dmg = clamp(reg.dmg + dmg, 0, 0.95);
   for (const a of Object.values(s.armies)) if (a.region === target && a.owner === reg.ctrl) a.troops = Math.max(1, a.troops - hits * 0.04);
   const n = nation(s, reg.ctrl);
@@ -462,18 +465,6 @@ function answerNuclearStrike(s, attacker, victim) {
   }
 }
 
-export function setBlockade(s, c, target, ships) {
-  ships = Math.floor(Number(ships) || 0);
-  if (ships <= 0) { delete c.blockades[target]; return null; }
-  if (!atWar(s, c.id, target)) return `You are not at war with ${nameOf(s, target)}.`;
-  const committed = Object.entries(c.blockades).reduce((t, [k, v]) => t + (k === target ? 0 : v), 0);
-  if (ships + committed > c.ships) return `You have ${c.ships - committed} warships free.`;
-  c.blockades[target] = ships;
-  news(s, `${c.name}'s navy blockades ${nameOf(s, target)}.`, 'war', [c.id, target]);
-  alert(s, target, `${c.name} has blockaded our ports with ${ships} warships. Trade by sea is being cut.`, 'bad');
-  return null;
-}
-
 export function setAirCampaign(s, c, target, aircraft) {
   aircraft = Math.floor(Number(aircraft) || 0);
   c.airOps = c.airOps.filter((o) => o.region !== target);
@@ -495,8 +486,23 @@ export function setAirCampaign(s, c, target, aircraft) {
 // so an order is carried out within a second and fronts move smoothly. Supply, logistics, recovery and the air
 // and sea campaigns are settled once a week (militaryTick).
 
-// How far an army marches in a week, in provinces of open plains
-export const MARCH = 8;
+// How far an army marches in a week over open plains, in km. It comes from land-warfare research and industry
+// (trucks, rail, fuel depots), how mechanised the army is (tanks per thousand men), oil, and whether the factories
+// keep up with the war. Low-tech infantry manages about 300 km; the most advanced, fully mechanised army about
+// 1,100 km (some 160 km a day by road and rail). Hills, forests and mountains slow it; good roads speed it up.
+export function marchSpeed(s, a) {
+  const c = s.countries[a.owner];
+  if (!c) return 300;
+  const base = 40 + 55 * c.tech.army + 35 * c.tech.industry;
+  const mech = 0.8 + 0.4 * Math.min(1, a.tanks / Math.max(1, a.troops) / 3);
+  const fuel = 1 - 0.5 * (c.short?.oil ?? 0);
+  const factories = 0.7 + 0.3 * (c.logistics?.factories ?? 1);
+  return base * mech * fuel * factories * (a.gen.trait === 'maneuver' ? 1.3 : 1);
+}
+
+// The cost of marching from one province into the next, in km of open road: the distance between them, made
+// longer by rough terrain and shorter by good infrastructure
+const moveCost = (s, from, to) => distanceKm(from, to) * terrainOf(to).move * (1 - 0.04 * s.regions[to].infra);
 
 export function militaryStep(s, dt) {
   if (!(dt > 0)) return;
@@ -510,6 +516,7 @@ export function militaryStep(s, dt) {
     if (a.sea) sail(s, a, c, dt, fights);
     else march(s, a, c, dt, gar, fights);
   }
+  navyStep(s, dt);
   const battled = new Set();
   for (const [regionId, attackers] of fights) {
     battle(s, regionId, attackers, gar, dt);
@@ -526,13 +533,12 @@ export function militaryStep(s, dt) {
 
 function sail(s, a, c, dt, fights) {
   a.sea.left -= dt;
-  const enemyNavy = navalPower(nation(s, s.regions[a.sea.to].ctrl) ?? { ships: 0, carriers: 0, tech: {} });
-  const mine = navalPower(c);
-  if (enemyNavy > 0 && a.sea.left > 0) {
-    const lost = 0.06 * dt * enemyNavy / (enemyNavy + mine + 1);
+  // Enemy fleets in the waters off the landing pick off the transports; our fleets there shield them
+  const { mine, theirs } = crossingOdds(s, c.id, a.sea.to);
+  if (theirs > 0 && a.sea.left > 0) {
+    const lost = 0.06 * dt * theirs / (theirs + mine + 1);
     a.troops *= 1 - lost;
     a.tanks *= 1 - lost;
-    c.ships = Math.max(0, c.ships - c.ships * 0.01 * dt * enemyNavy / (enemyNavy + mine + 1));
   }
   if (a.sea.left > 0) return;
   if (a.landing && (a.org < 12 || a.troops < 3)) {
@@ -569,12 +575,13 @@ function march(s, a, c, dt, gar, fights) {
   if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
     a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver }) ?? [];
   }
-  a.mv = a.path.length ? Math.min(2.5, (a.mv ?? 0) + MARCH * dt * (maneuver ? 1.3 : 1)) : 0;
+  // Movement saved up never runs past what the next province costs, so a waiting army doesn't then leap ahead
+  a.mv = a.path.length ? Math.min(Math.max(100, moveCost(s, a.region, a.path[0])), (a.mv ?? 0) + marchSpeed(s, a) * dt) : 0;
   while (a.path.length) {
     const next = a.path[0];
     const holder = s.regions[next].ctrl;
     if (friendlyGround(s, a.owner, holder)) {
-      const cost = terrainOf(next).move * (1 - 0.04 * s.regions[next].infra);
+      const cost = moveCost(s, a.region, next);
       if (a.mv < cost) { a.status = `On the march to ${regionName(a.op.target)}`; break; }
       a.region = next;
       a.path.shift();
@@ -616,6 +623,7 @@ function march(s, a, c, dt, gar, fights) {
 
 // Once a week: supply, the cost of the war, recovery, and the air and sea campaigns
 export function militaryTick(s) {
+  navyTick(s);
   supplyAll(s);
   logistics(s);
   for (const a of Object.values(s.armies)) {
@@ -623,7 +631,7 @@ export function militaryTick(s) {
     if (!c || !alive(s, a.owner)) { delete s.armies[a.id]; continue; }
     if (a.sea) continue;
     const recover = a.gen.trait === 'logistician' ? 12 : 8;
-    a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply * (a.attacking ? 0.4 : 1));
+    a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply * (a.attacking ? 0.4 : 1) * (commsReady(s, c.id) ? 1.25 : 1));
     if (a.supply < 0.5) {
       a.troops *= 0.99;
       a.org = Math.max(0, a.org - 5);
@@ -659,7 +667,7 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   let attack = 0;
   let attackTroops = 0;
   for (const a of attackers) {
-    let p = armyAttackEstimate(s, a, regionId);
+    let p = armyAttackEstimate(s, a, regionId) * (1 + 0.05 * gpsCoverage(s, a.owner));
     if (a.landing) p *= 0.5;
     attack += p;
     attackTroops += a.troops;
@@ -697,7 +705,13 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   const ratio = attack / defence;
   reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders });
   // The front moves fast: an even fight takes a province in under two weeks, a strong attack in days
-  const step = (ratio >= 1 ? Math.min(200, 60 + 100 * (ratio - 1)) : ratio >= 0.8 ? 20 * (ratio - 0.8) / 0.2 : -60 * (0.8 - ratio) / 0.8) / depth(regionId);
+  // A winning attack moves as fast as the attackers can: mechanised, well-supplied armies break through in days,
+  // low-tech infantry grinds forward
+  const main = attackers.reduce((m, a) => (a.troops > m.troops ? a : m));
+  const tempo = clamp(marchSpeed(s, main) / 700, 0.5, 1.4);
+  // Percent of the province taken a week: an even fight takes about a month, a 3:1 attack about a week, and big
+  // provinces (up to three times the usual size) take longer
+  const step = (ratio >= 1 ? Math.min(95, 25 + 35 * (ratio - 1)) * tempo : ratio >= 0.8 ? 10 * (ratio - 0.8) / 0.2 : -40 * (0.8 - ratio) / 0.8) / size(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step * dt, 0, 100);
   // Beaten back with nothing gained, the defenders counter-attack into the ground the attack came from
   if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / (terrain.defend * (1 + 0.15 * reg.fort)), gar, dt);
@@ -785,7 +799,7 @@ function counterAttack(s, backId, by, from, strength, gar, dt = 1) {
   if (!back || !atWar(s, by, back.ctrl)) return;
   const odds = (strength * 0.6) / Math.max(1, defenceEstimate(s, backId, gar));
   if (odds < 1) return;
-  const push = (Math.min(120, 30 + 60 * (odds - 1)) / depth(backId)) * dt;
+  const push = (Math.min(60, 15 + 30 * (odds - 1)) / size(backId)) * dt;
   if (!(back.battle && back.battle.by === by)) {
     back.battle = { by, prog: 0, weeks: 0, from };
     news(s, `${nameOf(s, by)} counter-attacks into ${regionName(backId)}.`, 'war', [by, back.ctrl]);
@@ -985,6 +999,8 @@ function supplyAll(s) {
       if (hops == null) supply = GEO[a.region].coast && c.ships > 5 ? 0.6 : 0.25;
       else supply = clamp(1.05 - 0.1 * hops, 0.35, 1);
     }
+    // Partisans: a hostile people ambushes convoys and blows up rail lines
+    if (reg.people !== a.owner && reg.ctrl === a.owner && (reg.loyalty ?? 50) < 30) supply *= 0.75 + 0.25 * (reg.loyalty / 30);
     if (a.gen.trait === 'logistician') supply = Math.min(1, supply + 0.15);
     a.supply = supply * (1 - 0.6 * (c.short?.oil ?? 0));
   }
@@ -1025,7 +1041,7 @@ function airAndSea(s) {
       const defAir = def ? def.aircraft * airQuality(def) * 0.3 : 5;
       const adf = def ? def.tech.missile * 15 : 10;
       const mine = op.aircraft * airQuality(c);
-      const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0));
+      const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0)) * (1 + 0.2 * gpsCoverage(s, c.id));
       reg.dmg = Math.min(0.9, reg.dmg + 0.012 * eff * Math.min(1, op.aircraft / 80));
       const lost = Math.max(0, Math.round(op.aircraft * 0.006 * (1.2 - eff)));
       op.aircraft -= lost;
@@ -1033,18 +1049,6 @@ function airAndSea(s) {
       if (def && defAir > 0) def.aircraft = Math.max(0, def.aircraft - Math.round(def.aircraft * 0.002 * eff));
       return op.aircraft > 0;
     });
-    for (const [target, ships] of Object.entries(c.blockades)) {
-      if (!atWar(s, c.id, target)) { delete c.blockades[target]; continue; }
-      const t = s.countries[target];
-      if (!t) continue;
-      const mine = navalPower(c, ships, 0) + 1;
-      const theirs = navalPower(t) + 0.1;
-      const myLoss = Math.round(ships * 0.004 * theirs / (mine + theirs) * 2);
-      const theirLoss = Math.round(t.ships * 0.004 * mine / (mine + theirs) * 2);
-      c.ships = Math.max(0, c.ships - myLoss);
-      c.blockades[target] = Math.max(0, ships - myLoss);
-      t.ships = Math.max(0, t.ships - theirLoss);
-    }
   }
 }
 

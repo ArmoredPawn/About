@@ -15,8 +15,26 @@ every few seconds, armies glide across the map and front lines creep through con
   provinces of their own with little worth taking.
 - **Market:** buy from the country you choose, or around sanctions through intermediaries; sell surplus or list it
   for other leaders. Every cargo sails through the real straits or goes overland, and can be seized or sunk on the
-  way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes;
-  patrol one with your navy to escort friends or stop everyone else.
+  way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes.
+- **Navies:** fleets sail the world's eight seas and seven straits on the map. Hold a sea, blockade an enemy's coast
+  or patrol a strait to escort friends or stop everyone else. Enemy fleets in the same waters fight; a beaten fleet
+  runs for home or into port to refit. Landing an army overseas needs a fleet in the sea off that coast, at least as
+  strong as the enemy's there.
+- **Peoples:** every province has a people and a loyalty to whoever rules it. Conquered peoples resist with partisans
+  and uprisings that can hand a province back; real independence movements (Catalonia, Scotland, Quebec, Kashmir,
+  Tibet, Kurdistan, Balochistan…) can be granted autonomy, cracked down on or offered a referendum. Wars drive
+  refugees across borders, which neighbours take in or turn away.
+- **Oil and gas:** OPEC+ sets a production cut and can embargo a country, as in 1973; members can cheat on their
+  quota and get caught. Real pipelines (Druzhba, Power of Siberia, Petroline round Hormuz…) deliver whatever happens
+  at sea, can be shut as leverage or sabotaged, and planned ones (Power of Siberia 2, EastMed, TAPI…) can be built.
+  Strategic reserves can be released in a price shock.
+- **Climate:** CO2 from every country's oil, gas and coal warms the world (0.45 °C per thousand billion tonnes).
+  Warming brings heatwaves, floods, wildfires, storms and failing harvests in hot, dry lands. Carbon taxes and
+  pledges made at five-yearly climate summits, kept or broken.
+- **Space:** real 2027 satellite fleets (GPS, BeiDou, GLONASS, Galileo, spy and communications satellites) that let
+  a country see every army on Earth, guide its missiles and keep its forces organised; anti-satellite strikes and
+  debris; and the race to crewed flight, a space station, the Moon and Mars.
+- **Proxy wars:** arm and fund another country's war, or rebels in someone else's, openly or covertly.
 - **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then click it and
   click anywhere on the map: it goes at once, fighting through enemy ground or landing from the sea. Fronts move both
   ways. Make the case for war to the nation first and the public takes it far better. If an order can't go ahead, a

@@ -6,16 +6,18 @@ import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { CHOKEPOINTS } from '../../engine/data/world.js';
 import { fmtQty, TOLLS, STRAIT_POLICIES, PATROL_MODES } from '../../engine/trade.js';
 import { modal, numberField, confirmBox } from '../dialogs.js';
+import { myFleets, patrolDialog } from './navy.js';
+import { energy } from './energy.js';
 
 export function market(ctx) {
   const tab = ctx.sub('market', 'buy');
   const s = ctx.state;
   const mine = (s.shipments ?? []).filter((x) => x.buyer === s.me || x.seller === s.me).length;
-  const tabs = [['buy', 'Buy'], ['sell', 'Sell'], ['ships', `Shipping${mine ? ` (${mine})` : ''}`], ['straits', 'Straits'], ['prices', 'Prices']];
+  const tabs = [['buy', 'Buy'], ['sell', 'Sell'], ['ships', `Shipping${mine ? ` (${mine})` : ''}`], ['straits', 'Straits'], ['energy', 'Oil & pipelines'], ['prices', 'Prices']];
   return h('div',
     h('div.panel-title', h('h2', 'Market'), h('span.muted.small', `${money(s.you.treasury)} in reserves`)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('market', id) }, label))),
-    { buy, sell, ships, straits, prices }[tab](ctx));
+    { buy, sell, ships, straits, energy, prices }[tab](ctx));
 }
 
 const resDot = (r) => h('span.res-dot', { style: { background: RES_COLORS[r], display: 'inline-grid', width: '16px', height: '16px', marginRight: '6px', verticalAlign: 'middle' } }, RES_LETTERS[r]);
@@ -180,14 +182,13 @@ async function stop(ctx, x, how) {
 function straits(ctx) {
   const s = ctx.state;
   const me = s.you;
-  const busy = Object.values(me.blockades).reduce((t, v) => t + v, 0) + Object.values(s.chokepoints).reduce((t, st) => t + (st.patrols?.[s.me]?.ships ?? 0), 0);
   return h('div',
-    h('p.muted.small', 'Most of the world\'s trade squeezes through a few straits. Hold a shore and you can close it, charge a toll, or attack enemy cargoes; any navy that can reach one can patrol it, to escort friendly ships or stop others. A toll or a closure lasts until its holder lifts it or loses the shore.'),
-    h('p.small', { style: { marginTop: '6px' } }, `Our warships: ${num(me.ships)} (${num(Math.max(0, me.ships - busy))} free). Tolls collected: ${money(me.tollIncome ?? 0)}; paid: ${money(me.tollsPaid ?? 0)}.`),
-    h('div.list', { style: { marginTop: '10px' } }, Object.entries(CHOKEPOINTS).map(([key, cp]) => straitCard(ctx, key, cp, Math.max(0, me.ships - busy)))));
+    h('p.muted.small', 'Most of the world\'s trade squeezes through a few straits. Hold a shore and you can close it, charge a toll, or attack enemy cargoes. Any fleet can sail to one and patrol it, to escort friendly ships or stop others. A toll or a closure lasts until its holder lifts it or loses the shore.'),
+    h('p.small', { style: { marginTop: '6px' } }, `Our fleets: ${myFleets(s).length}. Tolls collected: ${money(me.tollIncome ?? 0)}; paid: ${money(me.tollsPaid ?? 0)}.`),
+    h('div.list', { style: { marginTop: '10px' } }, Object.entries(CHOKEPOINTS).map(([key, cp]) => straitCard(ctx, key, cp))));
 }
 
-function straitCard(ctx, key, cp, freeShips) {
+function straitCard(ctx, key, cp) {
   const s = ctx.state;
   const st = s.chokepoints[key] ?? {};
   const holders = [...new Set(cp.regions.map((r) => s.regions[ctx.regionIndex[r]]?.[1]).filter(Boolean))];
@@ -201,7 +202,7 @@ function straitCard(ctx, key, cp, freeShips) {
     h('div.item-head', h('span.name', cp.name), status),
     h('div.meta', cp.note),
     h('div.meta', `Shores held by ${holders.map((x) => nationName(s, x)).join(', ')}${st.toll ? ` · ${nationName(s, st.toll.by)} charges ${st.toll.rate}%` : ''}${st.policy ? ` · ${nationName(s, st.policy.by)}: ${STRAIT_POLICIES[st.policy.kind].toLowerCase()}` : ''}`),
-    patrols.length ? h('div.meta', 'Navies on patrol: ', patrols.map(([o, p]) => `${nationName(s, o)} ${p.ships} ships (${PATROL_MODES[p.mode].toLowerCase()})`).join('; ')) : null,
+    patrols.length ? h('div.meta', 'Navies on patrol: ', patrols.map(([o, p]) => `${nationName(s, o)} ${num(p.ships)} ships${p.carriers ? ` and ${num(p.carriers)} carriers` : ''} (${PATROL_MODES[p.mode].toLowerCase()})`).join('; ')) : null,
     mine ? h('div', { style: { marginTop: '8px' } },
       h('div.row.gap.small', h('span', 'Toll'), h('div.seg.grow', TOLLS.map((t) => h('button', { 'aria-pressed': String((st.toll?.by === s.me ? st.toll.rate : 0) === t), onclick: () => ctx.send({ type: 'toll', key, rate: t }) }, `${t}%`)))),
       h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span', 'Enemy ships'), h('div.seg.grow', Object.entries(STRAIT_POLICIES).map(([k, label]) => h('button', { 'aria-pressed': String((st.policy?.by === s.me ? st.policy.kind : 'pass') === k), onclick: () => ctx.send({ type: 'straitPolicy', key, policy: k }) }, label.split(' ')[0])))),
@@ -209,23 +210,8 @@ function straitCard(ctx, key, cp, freeShips) {
         ? h('button.btn.small', { onclick: () => ctx.send({ type: 'strait', key, close: false }) }, 'Reopen')
         : st.closedBy ? null : h('button.btn.small.danger', { onclick: async () => { if (await confirmBox(`Close the ${cp.name}?`, `${cp.note} Prices will spike worldwide, trading partners will be furious and standing will fall.`, { ok: 'Close it', danger: true })) ctx.send({ type: 'strait', key, close: true }); } }, 'Close it'))) : null,
     h('div.actions',
-      myPatrol ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'patrol', key, ships: 0 }) }, `Recall our ${myPatrol.ships} ships`) : null,
-      h('button.btn.small', { disabled: freeShips < 1 && !myPatrol, onclick: () => patrolDialog(ctx, key, cp, freeShips + (myPatrol?.ships ?? 0), myPatrol) }, myPatrol ? 'Change patrol…' : 'Send a patrol…')));
-}
-
-function patrolDialog(ctx, key, cp, free, current) {
-  let mode = current?.mode ?? 'escort';
-  const f = numberField('Warships', { value: current?.ships ?? Math.min(free, 10), min: 1, max: free, step: 1 });
-  const segEl = h('div.seg', Object.entries(PATROL_MODES).map(([k, label]) => {
-    const b = h('button', { type: 'button', 'aria-pressed': String(k === mode), onclick: () => { mode = k; for (const x of segEl.children) x.setAttribute('aria-pressed', String(x === b)); } }, label);
-    return b;
-  }));
-  modal({
-    title: `Patrol the ${cp.name}`,
-    body: h('div.stack', f.el, h('div.field', h('span', 'Orders'), segEl),
-      h('p.muted.small', 'Escorts make friendly cargoes far harder to stop. Stopping enemies\' cargoes hurts their supply; stopping all traffic chokes the world\'s trade and makes enemies everywhere. A hostile shore will fire missiles at your ships.')),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send them', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'patrol', key, ships: Number(f.input.value), mode })) || false }],
-  });
+      myPatrol ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'patrol', key }) }, `End our patrol (${num(myPatrol.ships)} ships)`) : null,
+      h('button.btn.small', { disabled: !myFleets(s).length, onclick: () => patrolDialog(ctx, key) }, myPatrol ? 'Send another fleet…' : 'Send a fleet to patrol…')));
 }
 
 /* ---------- Prices ---------- */

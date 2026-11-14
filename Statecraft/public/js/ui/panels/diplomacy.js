@@ -7,6 +7,7 @@ import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { proposalCard } from './overview.js';
 import { describeProposal } from '../describe.js';
 import { warNotice } from '../attack.js';
+import { armAndFund, aidDialog as armDialog } from './proxy.js';
 
 const TARIFFS = [0, 10, 25, 50, 100];
 
@@ -14,13 +15,13 @@ export function diplomacy(ctx) {
   const dossierId = ctx.ui.dossier;
   if (dossierId) return dossier(ctx, dossierId);
   const tab = ctx.sub('diplomacy', 'countries');
-  const tabs = [['countries', 'Countries'], ['proposals', 'Proposals'], ['alliances', 'Alliances'], ['un', 'UN'], ['world', 'Straits & more']];
+  const tabs = [['countries', 'Countries'], ['proposals', 'Proposals'], ['alliances', 'Alliances'], ['aid', 'Arm & fund'], ['un', 'UN'], ['world', 'Straits & more']];
   return h('div',
     h('div.panel-title', h('h2', 'Diplomacy'), h('span.muted.small', `Standing ${Math.round(ctx.state.you.rep)}`)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('diplomacy', id) }, label,
       id === 'proposals' && ctx.state.proposals.some((p) => p.to === ctx.state.me) ? ' •' : '',
       id === 'un' && ctx.state.un.some((r) => !r.done && !r.votes[ctx.state.me]) ? ' •' : ''))),
-    { countries, proposals, alliances, un, world }[tab](ctx));
+    { countries, proposals, alliances, aid: armAndFund, un, world }[tab](ctx));
 }
 
 /* ---------- Relationship helpers ---------- */
@@ -108,7 +109,8 @@ export function dossier(ctx, id) {
     c.exile || atWar ? null : h('div.section', h('h3', 'Give'),
       h('div.row.wrap.gap',
         h('button.btn.small', { onclick: () => aidDialog(ctx, id) }, 'Send aid…'),
-        h('button.btn.small', { onclick: () => techDialog(ctx, id) }, 'Share technology…'))),
+        h('button.btn.small', { onclick: () => techDialog(ctx, id) }, 'Share technology…'),
+        s.wars.some((w) => w.a === id || w.b === id) ? h('button.btn.small', { onclick: () => armDialog(ctx, { to: id }) }, 'Arm & fund their war…') : null)),
     c.exile ? null : h('div.section', h('h3', 'Pressure'),
       h('div.row.wrap.gap',
         h('button.btn.small', { disabled: !embassyReady, onclick: () => ctx.send({ type: 'embassy', target: id, action: 'improve' }) }, 'Improve relations'),
@@ -147,7 +149,8 @@ function minorDossier(ctx, id, back) {
       h('div.row.gap', h('button.btn.primary', { onclick: () => ctx.send({ type: 'settle', minor: id, how: 'puppet' }) }, 'Install a friendly government'), h('button.btn.danger', { onclick: () => ctx.send({ type: 'settle', minor: id, how: 'annex' }) }, 'Annex it')),
       h('p.muted.small', { style: { marginTop: '6px' } }, 'A puppet pays tribute and keeps its own forces; annexation adds it to your country but costs more standing and brings unrest.')) : null,
     h('div.section', h('h3', 'War'),
-      atWar ? h('p.muted.small', 'At war. Take its land to force a surrender.') : m.annexed || m.puppetOf === s.me ? null : h('button.btn.danger', { onclick: () => declareWar(ctx, id) }, `Invade ${m.name}…`)),
+      atWar ? h('p.muted.small', 'At war. Take its land to force a surrender.') : m.annexed || m.puppetOf === s.me ? null : h('button.btn.danger', { onclick: () => declareWar(ctx, id) }, `Invade ${m.name}…`),
+      !atWar && s.wars.some((w) => w.a === id || w.b === id) ? h('button.btn.small', { style: { marginLeft: '8px' }, onclick: () => armDialog(ctx, { to: id }) }, 'Arm & fund their war…') : null),
   );
 }
 

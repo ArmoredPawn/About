@@ -172,12 +172,59 @@ export function attackDialog(ctx, { army, target }) {
     return accessDialog(ctx, best, target) || ctx.hint(goBlocker(ctx, best, target) ?? `None of our army groups can reach ${regionName(target)}.`, 'bad');
   }
   if (candidates.length === 1) return sendArmy(ctx, candidates[0], target);
-  const sel = h('select', candidates.map((a) => h('option', { value: a.id }, `${a.name} · ${troops(a.troops)} · ${regionName(a.region)}`)));
-  modal({
-    title: `Send an army to ${regionName(target)}`,
-    body: h('label.field', h('span', 'Army group'), sel),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, {
-      label: 'Send', kind: 'primary', onClick: () => { const a = candidates.find((x) => x.id === sel.value); setTimeout(() => sendArmy(ctx, a, target)); return true; },
-    }],
+  return multiAttack(ctx, candidates, target);
+}
+
+// Several armies can go: tick the ones to send. Armies attacking the same province at the same time fight as
+// one force, so the dialog adds up their troops against the defenders.
+function multiAttack(ctx, candidates, target) {
+  const s = ctx.state;
+  const holder = holderOf(ctx, target);
+  const garrison = row(ctx, target)?.[8] ?? 0;
+  const defenders = garrison + s.armies.filter((a) => a.region === target && !a.sea && a.owner === holder).reduce((t, a) => t + a.troops, 0);
+  const sorted = [...candidates].sort((a, b) => b.troops - a.troops);
+  const picked = new Set([sorted[0].id]);
+  const total = h('b');
+  const odds = h('span.muted.small');
+  const sendBtn = h('button.btn.primary', { type: 'button' });
+  const refresh = () => {
+    const sum = sorted.filter((a) => picked.has(a.id)).reduce((t, a) => t + a.troops, 0);
+    total.textContent = troops(sum);
+    odds.textContent = ` against about ${troops(defenders)} defenders in ${regionName(target)}${defenders ? ` (${(sum / Math.max(1, defenders)).toFixed(1)} to 1 in numbers; ground, forts, tanks and supply also count)` : ''}.`;
+    sendBtn.textContent = picked.size > 1 ? `Send ${picked.size} armies` : 'Send 1 army';
+    sendBtn.disabled = !picked.size;
+  };
+  const rows = sorted.map((a) => {
+    const box = h('input', { type: 'checkbox', checked: picked.has(a.id), onchange: () => { if (box.checked) picked.add(a.id); else picked.delete(a.id); refresh(); } });
+    return h('label.item.clickable', { style: { display: 'block' } },
+      h('div.item-head', box, h('span.name', a.name), h('span.mono.small', { style: { marginLeft: 'auto' } }, troops(a.troops))),
+      h('div.meta', `${regionName(a.region)} · ${a.tanks} tanks · organisation ${a.org}%`));
   });
+  refresh();
+  const o = goOptions(ctx, sorted[0], target);
+  const notice = o.declare ? warNotice(ctx, o.foe, o.shared) : null;
+  const dlg = modal({
+    title: `Attack ${regionName(target)}`,
+    body: h('div.stack',
+      h('p.small', 'Armies that attack the same province together fight as one force.'),
+      h('div.list', rows),
+      h('p.small', 'Together: ', total, odds),
+      notice ? h('p.muted.small', `Once war is declared, ${nationName(s, holder)} moves its home garrison to the threatened border, so expect more defenders than this.`) : null,
+      notice?.el ?? null),
+    actions: [{ label: 'Cancel', kind: 'ghost' }],
+  });
+  // Our own send button, so its label can follow the choice
+  sendBtn.addEventListener('click', async () => {
+    const ids = sorted.filter((a) => picked.has(a.id)).map((a) => a.id);
+    if (!ids.length) return;
+    sendBtn.disabled = true;
+    if (notice && !(await notice.justify())) { sendBtn.disabled = false; return; }
+    const err = await ctx.send({ type: 'armyOrder', ids, kind: 'go', target, declare: true });
+    sendBtn.disabled = false;
+    if (err) return;
+    dlg.close();
+    ctx.hint(`${ids.length > 1 ? `${ids.length} armies` : '1 army'} on the way to ${regionName(target)}.`, 'good', 3500);
+  });
+  document.querySelector('#modal .modal-foot')?.append(sendBtn);
+
 }

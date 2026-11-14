@@ -40,6 +40,7 @@ export function createState({ seed = Date.now() % 2147483647 } = {}) {
     un: [],
     chokepoints: Object.fromEntries(Object.keys(CHOKEPOINTS).map((k) => [k, { closedBy: null, toll: null, policy: null, patrols: {} }])),
     shipments: [],
+    aid: [],
     modifiers: [],
     news: [],
     fresh: [],

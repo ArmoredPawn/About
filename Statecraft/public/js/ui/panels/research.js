@@ -5,6 +5,7 @@ import { h, flag, money, nationName, bar } from '../dom.js';
 import { TECH_FIELDS } from '../../engine/data/world.js';
 import { projectCost, projectWeeks, projectNeeds, researchSpeed, maxResearch, MAX_TECH } from '../../engine/science.js';
 import { confirmBox, modal, selectField } from '../dialogs.js';
+import { space } from './space.js';
 
 const NEED_NAMES = { chip: 'semiconductors', uran: 'uranium' };
 
@@ -14,8 +15,15 @@ export function research(ctx) {
   const running = me.research ?? [];
   const slots = maxResearch(me);
   const speed = researchSpeed(me);
-  return h('div',
+  const tab = ctx.sub('research', 'fields');
+  const tabs = [['fields', 'Research'], ['space', 'Space']];
+  const head = [
     h('div.panel-title', h('h2', 'Research'), h('span.muted.small', `${running.length}/${slots} projects`)),
+    h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('research', id) }, label))),
+  ];
+  if (tab === 'space') return h('div', ...head, space(ctx));
+  return h('div',
+    ...head,
     h('p.muted.small', `Fund a project to raise a field one level: you pay up front, then scientists need months. Research and education spending (Economy) set how fast they work: now ×${speed.toFixed(2)}. The research budget also adds slow progress across every field.`),
     running.length ? h('div.section', h('h3', 'Under way'), h('div.list', running.map((p) => h('div.item',
       h('div.item-head', h('span.name', `${TECH_FIELDS[p.field].name} level ${p.level}`), p.how === 'licence' ? h('span.chip.accent', `licence from ${nationName(s, p.from)}`) : null, h('span.muted.small', { style: { marginLeft: 'auto' } }, p.blocked ? 'stalled' : `${Math.ceil(p.left / (p.how === 'own' ? speed : 1))} wk`)),

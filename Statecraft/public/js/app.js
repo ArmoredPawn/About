@@ -6,7 +6,9 @@ import { WorldMap, INDEX, CAPITALS } from './ui/map.js';
 import { renderHud, liveDate } from './ui/hud.js';
 import { Chat } from './ui/chat.js';
 import { toast, confirmBox, closeModal } from './ui/dialogs.js';
-import { showRegion, showArmy, closeInspector, airStrike, missile } from './ui/inspector.js';
+import { showRegion, showArmy, showFleet, closeInspector, airStrike, missile } from './ui/inspector.js';
+import { orderDialog, seaForRegion } from './ui/panels/navy.js';
+import { whatsNew } from './ui/whatsnew.js';
 import { overview } from './ui/panels/overview.js';
 import { economy } from './ui/panels/economy.js';
 import { military } from './ui/panels/military.js';
@@ -38,7 +40,7 @@ const TABS = [
   ['news', 'News', '<path d="M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M7 9h7M7 13h7M7 16h4"/>', news],
   ['world', 'World', '<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>', world],
 ];
-const MODES = [['political', 'Political'], ['alliances', 'Blocs'], ['resources', 'Resources'], ['economy', 'Economy'], ['relations', 'Relations']];
+const MODES = [['political', 'Political'], ['alliances', 'Blocs'], ['resources', 'Resources'], ['economy', 'Economy'], ['relations', 'Relations'], ['loyalty', 'Loyalty'], ['climate', 'Climate']];
 
 const app = {
   net: null,
@@ -104,10 +106,49 @@ const ctx = {
     ctx.endTarget();
     app.selection = { army: id };
     map.selectArmy(id);
+    map.selectFleet(null);
     map.select(null);
     showArmy(ctx, id);
     if (focus) map.focus([a.sea?.to ?? a.region]);
     if (a.owner === app.state.me && !a.sea) ctx.orderArmy(a, { keep: true });
+  },
+  // Selecting one of our fleets: click a sea, a strait or a coast and it sails there
+  selectFleet(id, focus) {
+    const f = app.state.fleets?.find((x) => x.id === id);
+    if (!f) return;
+    ctx.endTarget();
+    app.selection = { fleet: id };
+    map.selectFleet(id);
+    map.selectArmy(null);
+    map.select(null);
+    showFleet(ctx, id);
+    if (focus) map.focusPoint(f.at);
+    if (f.owner === app.state.me) ctx.orderFleet(f);
+  },
+  orderFleet(fleet) {
+    const live = () => app.state.fleets.find((x) => x.id === fleet.id) ?? fleet;
+    const enemyAt = (rid) => {
+      const ctrl = app.state.regions[INDEX[rid]]?.[1];
+      return app.state.wars.some((w) => (w.a === app.state.me && w.b === ctrl) || (w.b === app.state.me && w.a === ctrl)) ? ctrl : null;
+    };
+    ctx.target({
+      keep: true,
+      text: `Click a sea, a strait (◆) or a coast to send ${fleet.name} there`,
+      filter: (rid) => Boolean(GEO[rid]?.coast && seaForRegion(app.state, live(), rid)),
+      reason: (rid) => (GEO[rid]?.coast ? 'No sea route to that coast.' : `${regionName(rid)} has no coast.`),
+      onReject: (rid) => hint(GEO[rid]?.coast ? 'No sea route to that coast.' : `${regionName(rid)} is inland: pick a coast, a sea or a strait.`, 'bad', 5000),
+      onNode: (node) => { ctx.endTarget(); orderDialog(ctx, live(), node); return true; },
+      onFleet: (fid) => {
+        const x = app.state.fleets.find((y) => y.id === fid);
+        if (!x) return false;
+        if (x.owner === app.state.me) { if (fid !== fleet.id) ctx.selectFleet(fid); return true; }
+        ctx.endTarget();
+        orderDialog(ctx, live(), x.next && x.prog > 0 ? x.next : x.at);
+        return true;
+      },
+      onArmy: () => true,
+      onPick: (rid) => { ctx.endTarget(); orderDialog(ctx, live(), seaForRegion(app.state, live(), rid), { prefer: enemyAt(rid) }); },
+    });
   },
   closeSelection,
   orderArmy(army, { keep = false } = {}) {
@@ -179,6 +220,7 @@ const ctx = {
 const map = new WorldMap($('map'), {
   onRegion: (id) => (id ? selectRegion(id) : closeSelection()),
   onArmy: (id) => ctx.selectArmy(id),
+  onFleet: (id) => ctx.selectFleet(id),
   onContext: (id) => quickOrder(id),
   onTargetHint: (text) => hint(text, 'bad', 0),
 });
@@ -318,6 +360,7 @@ function onState(s) {
     app.focused = true;
     mapReady.then(() => ctx.focusCountry(s.me));
     if (first && s.week <= 1) toast(`You lead ${s.countries[s.me].name}. Open the Cabinet for your briefing.`, 'info');
+    if (first) setTimeout(() => { if (app.screen === 'game' && !$('modal').open) whatsNew(ctx); }, 1200);
   }
 }
 
@@ -326,6 +369,24 @@ function onLive(m) {
   const s = app.state;
   if (!s || app.screen !== 'game' || m.week !== s.week) return;
   s.armies = m.armies;
+  // Moving and fighting fleets; the rest stay as the last weekly update left them
+  if (m.fleetMoves && s.fleets) {
+    const moves = new Map(m.fleetMoves.map((x) => [x[0], x]));
+    for (const f of s.fleets) {
+      const x = moves.get(f.id);
+      if (x) {
+        [, f.at, f.next, f.prog, f.len, f.ships] = x;
+        f.battle = Boolean(x[6]);
+        if (f.path?.length && f.path[0] === f.at) f.path = f.path.slice(1);
+      } else if (f.next || f.battle) {
+        // It stopped since the last update: a fleet sails at most one leg between updates, so it is where it
+        // was heading
+        if (f.next) f.at = f.next;
+        if (f.path?.length && f.path[0] === f.at) f.path = f.path.slice(1);
+        f.next = null; f.prog = 0; f.len = 0; f.battle = false;
+      }
+    }
+  }
   const battles = new Map(m.battles.map((b) => [b[0], b]));
   s.regions.forEach((row, i) => {
     const b = battles.get(i);
@@ -336,6 +397,11 @@ function onLive(m) {
     const sel = app.selection?.army;
     if (sel) {
       if (s.armies.some((a) => a.id === sel)) showArmy(ctx, sel);
+      else closeSelection();
+    }
+    const fsel = app.selection?.fleet;
+    if (fsel && !$('modal').open) {
+      if (s.fleets?.some((f) => f.id === fsel)) showFleet(ctx, fsel);
       else closeSelection();
     }
   });
@@ -393,6 +459,9 @@ function renderGame() {
     if (app.selection?.region) showRegion(ctx, app.selection.region);
     else if (app.selection?.army) {
       if (app.state.armies.some((a) => a.id === app.selection.army)) showArmy(ctx, app.selection.army);
+      else closeSelection();
+    } else if (app.selection?.fleet) {
+      if (app.state.fleets?.some((f) => f.id === app.selection.fleet)) showFleet(ctx, app.selection.fleet);
       else closeSelection();
     }
   });
@@ -461,7 +530,14 @@ function renderMapTools() {
   const sel = mode === 'resources'
     ? h('select', { 'aria-label': 'Resource', onchange: (e) => ctx.mapMode('resources', e.target.value) }, RESOURCES.map((r) => h('option', { value: r, selected: r === res }, RESOURCE_INFO[r].name)))
     : null;
-  $('map-tools').replaceChildren(seg, sel ?? '');
+  // What the map shows on top of the land
+  app.ui.layers ??= { armies: true, fleets: true, pipelines: true };
+  const layers = h('div.seg', { title: 'Show or hide on the map' }, [['armies', 'Armies'], ['fleets', 'Fleets'], ['pipelines', 'Pipelines']].map(([k, label]) => h('button', {
+    'aria-pressed': String(app.ui.layers[k]),
+    onclick: () => { app.ui.layers[k] = !app.ui.layers[k]; map.setLayers(app.ui.layers); renderMapTools(); },
+  }, label)));
+  map.setLayers(app.ui.layers);
+  $('map-tools').replaceChildren(seg, sel ?? '', layers);
   const legend = [];
   const item = (color, text, hatch) => h('div.row', h('span.swatch', { style: { background: hatch ? `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` : color } }), text);
   if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#2a3142', 'Minor nations (computer-run)'));
@@ -469,6 +545,8 @@ function renderMapTools() {
   if (mode === 'resources') legend.push(h('div.row', h('span.res-dot', { style: { background: RES_COLORS[res], width: '14px', height: '14px', fontSize: '7px' } }, RES_LETTERS[res]), `${RESOURCE_INFO[res].name} (${RESOURCE_INFO[res].unit}). Brighter = more`), h('div.faint', 'Hollow circles: untapped reserves to develop'));
   if (mode === 'economy') legend.push(item('#7fb6ff', 'Economic output per area'));
   if (mode === 'relations') legend.push(item('#4cc38a', 'Friendly toward you'), item('#e5484d', 'Hostile toward you'));
+  if (mode === 'climate') legend.push(item('#e0662f', 'Most exposed to heat, drought, floods and wildfires'), item('#2b3a4a', 'Least exposed'), h('div.faint', 'Damage grows as the world warms (World → Climate)'));
+  if (mode === 'loyalty') legend.push(item('#3fae6e', 'Loyal to whoever rules it'), item('#c9a227', 'Restless'), item('#c23b3b', 'Hostile: uprisings and partisans likely'), item('#5a3b3b', 'Darker: a conquered people under foreign rule'));
   $('legend').replaceChildren(...legend);
 }
 
@@ -476,14 +554,16 @@ function selectRegion(id) {
   app.selection = { region: id };
   map.select(id);
   map.selectArmy(null);
+  map.selectFleet(null);
   showRegion(ctx, id);
 }
 
 function closeSelection() {
-  if (app.selection?.army) ctx.endTarget();
+  if (app.selection?.army || app.selection?.fleet) ctx.endTarget();
   app.selection = null;
   map.select(null);
   map.selectArmy(null);
+  map.selectFleet(null);
   closeInspector();
 }
 
@@ -577,6 +657,11 @@ $('solo-continue').addEventListener('click', () => {
   toast('Game loaded. The world carries on from where you left it.', 'info');
 });
 $('help-btn').addEventListener('click', () => $('help').showModal());
+$('whatsnew-btn').addEventListener('click', () => {
+  $('help').close();
+  if (app.screen === 'game' && app.state?.you) whatsNew(ctx, { force: true });
+  else toast('Start or join a game to try the new features.', 'info');
+});
 $('help').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === $('help')) $('help').close(); });
 
 $('lobby-leave').addEventListener('click', leave);

@@ -1,4 +1,4 @@
-// The card that opens over the map for a province or an army.
+// The card that opens over the map for a province, an army or a fleet.
 
 import { $, h, flag, money, nationName, regionName, troops, num, people, RES_COLORS, RES_LETTERS, fill } from './dom.js';
 import { RESOURCE_INFO, TERRAIN, PROVINCES } from '../engine/data/regions.js';
@@ -10,6 +10,10 @@ import { modal, numberField, selectField, confirmBox } from './dialogs.js';
 import { armyCard, myArmies, formArmy } from './panels/military.js';
 import { declareWar } from './panels/diplomacy.js';
 import { attackDialog, attackable } from './attack.js';
+import { fleetCard } from './panels/navy.js';
+import { provincePeople } from './panels/peoples.js';
+import { aidDialog as armDialog } from './panels/proxy.js';
+import { nodeName } from '../engine/navy.js';
 import { subregions, GOING } from '../engine/terrain.js';
 
 const TERRAIN_OF = Object.fromEntries(PROVINCES.map((p) => [p.id, p.terrain]));
@@ -76,13 +80,15 @@ export function showRegion(ctx, id) {
       ctrl === me ? h('div.actions',
         h('button.btn.small', { onclick: () => pickArmy(ctx, id) }, 'Send an army'),
         h('button.btn.small', { onclick: () => ctx.send({ type: 'uprising', region: id, action: 'crush' }) }, 'Crack down'),
-        h('button.btn.small', { onclick: () => ctx.send({ type: 'uprising', region: id, action: 'amnesty' }) }, 'Offer amnesty')) : null) : null,
+        h('button.btn.small', { onclick: () => ctx.send({ type: 'uprising', region: id, action: 'amnesty' }) }, 'Offer amnesty'))
+        : h('div.actions', h('button.btn.small', { onclick: () => armDialog(ctx, { rebels: id }) }, 'Arm & fund the rebels…'))) : null,
     h('div.facts',
       fact('Population', people(pop)), fact('Output', money(gdp)),
       h('div', h('span', 'Terrain'), h('b', `${terrain.name} (×${terrain.defend} defence)`), h('button.btn.small.ghost', { style: { marginTop: '2px', padding: '2px 6px' }, onclick: () => ground(ctx, id) }, 'Ground & passes…')), fact('Garrison', mineHeld || ctrl === me ? troops(gar) : `~${troops(Math.round(gar / 10) * 10)}`),
       fact('Infrastructure', `${infra}/10`), fact('Fortifications', `${fort}/5`),
       fact('War damage', `${dmg}%`), fact('Unrest', `${unrest}%`)),
-    Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '4px 0 6px' } }, 'RESOURCES'), Object.entries(res).map(([r, [cur, pot]]) => {
+    provincePeople(ctx, id),
+    Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'RESOURCES'), Object.entries(res).map(([r, [cur, pot]]) => {
       const info = RESOURCE_INFO[r];
       const developing = projects.some((p) => p.res === r);
       return h('div.res-row',
@@ -112,6 +118,20 @@ export function showArmy(ctx, id) {
   $('inspector').hidden = false;
 }
 
+export function showFleet(ctx, id) {
+  const s = ctx.state;
+  const f = (s.fleets ?? []).find((x) => x.id === id);
+  if (!f) return closeInspector();
+  fill($('inspector'),
+    h('button.icon-btn.close', { onclick: () => ctx.closeSelection(), 'aria-label': 'Close' }, '✕'),
+    h('h2', f.name),
+    h('div.row.gap.sub', flag(f.owner), h('span', nationName(s, f.owner)), h('span.faint', f.next && f.prog > 0 ? `at sea, bound for the ${nodeName(f.next)}` : `in the ${nodeName(f.at)}`)),
+    h('div', { style: { marginTop: '10px' } }, fleetCard(ctx, f, true)),
+    f.owner === s.me ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Click a sea name, a strait (◆) or any coast to send this fleet there, then choose what it does.') : null,
+  );
+  $('inspector').hidden = false;
+}
+
 // The ground inside a province, and whether infantry and tanks can get through it
 function ground(ctx, id) {
   const list = subregions(id);
@@ -132,10 +152,10 @@ function ground(ctx, id) {
 function foreignArmy(ctx, a) {
   const s = ctx.state;
   return h('div.item',
-    h('div.item-head', flag(a.owner), h('span.name', a.name), h('span.mono.small', `${a.exact ? '' : '~'}${troops(a.troops)}`)),
-    h('div.meta', `${a.gen?.name ?? 'Unknown general'} · ${a.exact ? '' : 'about '}${num(a.tanks)} tanks`),
+    h('div.item-head', flag(a.owner), h('span.name', a.name), h('span.mono.small', `${a.exact || a.seen ? '' : '~'}${troops(a.troops)}`)),
+    h('div.meta', `${a.gen?.name ?? 'Unknown general'} · ${a.exact || a.seen ? '' : 'about '}${num(a.tanks)} tanks`),
     a.status ? h('div.meta', a.status) : a.attacking ? h('div.meta.bad', `Attacking ${regionName(a.attacking)}`) : null,
-    a.exact ? null : h('div.meta.faint', 'Spy on them for exact figures and plans.'),
+    a.exact ? null : h('div.meta.faint', a.seen ? 'Our spy satellites count them exactly; agents inside their government would reveal their plans.' : 'Spy satellites (Research → Space) would count them exactly; agents inside their government would reveal their plans.'),
     s.countries[a.owner] ? h('div.actions', h('button.btn.small.ghost', { onclick: () => ctx.openCountry(a.owner) }, 'Dossier')) : null);
 }
 

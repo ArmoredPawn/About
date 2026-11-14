@@ -5,7 +5,7 @@ import { RESOURCES } from './data/regions.js';
 import { createState } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news } from './core.js';
 import { marketTick, economyTick, debtRatio, upkeep, blockadeEffect } from './economy.js';
-import { militaryTick, militaryStep, garrisons } from './military.js';
+import { militaryTick, militaryStep, garrisons, marchSpeed } from './military.js';
 import { diplomacyTick } from './diplomacy.js';
 import { aiTick, militaryPower, lostShare } from './ai.js';
 import { eventsTick } from './events.js';
@@ -14,16 +14,29 @@ import { governmentTick, initGovernment } from './government.js';
 import { tradeTick, marketView } from './trade.js';
 import { spiesTick, initSpies } from './spies.js';
 import { initRange } from './science.js';
+import { initFleets, fleetsFor, applyFleets } from './navy.js';
+import { initPeoples, peoplesTick, loyaltyTarget } from './peoples.js';
+import { aidTick, aidFor } from './proxy.js';
+import { initEnergy, energyTick, energyView } from './energy.js';
+import { initClimate, climateTick, climateView, pledgePath } from './climate.js';
+import { initSpace, spaceTick, spaceOf, satSees } from './space.js';
 
 export class Game {
   constructor(state) {
     this.s = state;
     this.cache = null;
+    upgrade(state);
   }
 
   static create({ seed } = {}) {
     const s = createState({ seed });
     Object.values(s.countries).forEach((c, i) => { c.ai.next = i % 4; initGovernment(c); initSpies(c); initRange(c); });
+    initFleets(s);
+    applyFleets(s);
+    initPeoples(s);
+    initEnergy(s);
+    initClimate(s);
+    initSpace(s);
     news(s, `${dateLabel(0)}: a new year begins in a tense, divided world.`, 'info');
     return new Game(s);
   }
@@ -52,14 +65,19 @@ export class Game {
     s.week++;
     aiTick(s);
     diplomacyTick(s);
+    energyTick(s);
     const world = marketTick(s);
     economyTick(s, world);
     tradeTick(s);
+    climateTick(s);
+    spaceTick(s);
     // Whatever part of the week the real-time steps didn't cover (all of it, without a running clock)
     militaryStep(s, Math.max(0, 1 - (s.stepped ?? 0)));
     s.stepped = 0;
     militaryTick(s);
     governmentTick(s, garrisons(s));
+    peoplesTick(s);
+    aidTick(s);
     spiesTick(s);
     eventsTick(s);
     // There is no time limit: the game ends only when one country rules every province in the world
@@ -106,22 +124,40 @@ export class Game {
       const b = s.regions[id].battle;
       if (b) battles.push([i, b.by, r0(b.prog), b.from ?? 0]);
     });
-    return { type: 'live', week: s.week, armies: armiesFor(s, cid), battles };
+    // Only the fleets that are moving or fighting change between weekly updates: [id, at, next, prog, len,
+    // ships, battle]. (A fleet that forms, sinks or withdraws makes news, which sends everyone the full state.)
+    const changed = new Set(Object.values(s.fleets ?? {}).filter((f) => f.path.length || f.reachedStep === s.stepNo).map((f) => f.id));
+    const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.at, f.next, f.prog, f.len, f.ships, f.battle ? 1 : 0]);
+    return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles };
   }
 }
 
-// Every army is on everyone's map: their own and their allies' in full, everyone else's (unless spies
-// have the details) in rough figures
+// Every army is on everyone's map: their own and their allies' in full, everyone else's in rough figures
+// (exact figures with four spy satellites, everything with spies inside their government)
 function armiesFor(s, cid) {
   const me = s.countries[cid] ?? null;
   const knows = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
   const friend = (id) => id === cid || (me && allied(s, cid, id));
+  // Spy satellites count every army on Earth, though they can't read its orders
+  const seen = satSees(s, cid);
   return Object.values(s.armies).map((a) => {
     const own = friend(a.owner) || knows(a.owner);
     return own
-      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true }
-      : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: approx(a.troops, 5), tanks: approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false };
+      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true }
+      : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: seen ? r0(a.troops) : approx(a.troops, 5), tanks: seen ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen };
   });
+}
+
+/* ---------- Saved games from before a system existed ---------- */
+
+// Adds whatever an older saved game is missing, so it carries on under the current rules
+function upgrade(s) {
+  if (!s.fleets) { initFleets(s); applyFleets(s); }
+  if (Object.values(s.regions).some((r) => r.people == null)) initPeoples(s);
+  s.aid ??= [];
+  if (!s.pipelines) initEnergy(s);
+  initClimate(s);
+  initSpace(s);
 }
 
 /* ---------- Rankings ---------- */
@@ -188,17 +224,19 @@ export function view(s, cid, { gar, ranks }) {
       power: r0(militaryPower(s, c.id)),
       lost: r1(lostShare(s, c.id) * 100),
       blockaded: r0(blockadeEffect(s, c.id) * 100),
+      space: spaceOf(c),
+      emissions: r1(c.emissions ?? 0), carbonTax: c.carbonTax ?? 0, pledge: c.pledge ? { cut: c.pledge.cut, year: c.pledge.year, done: c.pledge.done, onTrack: c.pledge.done ? null : (c.emissions ?? 0) <= (pledgePath(s, c) ?? Infinity) * 1.05 } : null,
     };
   }
   const minors = {};
   for (const m of Object.values(s.minors)) {
-    minors[m.id] = { name: m.name, troops: r0(m.troops), gdp: r0(m.gdp), pop: r1(m.pop), puppetOf: m.puppetOf, capitulated: m.capitulated, annexed: m.annexed, guarantor: m.guarantor, nukes: m.nukes, settle: m.pendingSettle?.by === cid };
+    minors[m.id] = { name: m.name, troops: r0(m.troops), gdp: r0(m.gdp), pop: r1(m.pop), puppetOf: m.puppetOf, capitulated: m.capitulated, annexed: m.annexed, guarantor: m.guarantor, nukes: m.nukes, settle: m.pendingSettle?.by === cid, home: m.home ?? null, breakaway: m.breakaway ?? null };
   }
 
   const regions = ORDER.map((id) => {
     const r = s.regions[id];
     const g = gar.get(id);
-    return [r.owner, r.ctrl, r0(r.dmg * 100), r.infra, r.fort, r.battle?.by ?? 0, r0(r.battle?.prog ?? 0), r0(r.unrest), g ? r0(g.troops) : 0, r1(r.gdp), r1(r.pop), r.revolt ? r1(r.revolt.rebels) : 0, r.battle?.from ?? 0];
+    return [r.owner, r.ctrl, r0(r.dmg * 100), r.infra, r.fort, r.battle?.by ?? 0, r0(r.battle?.prog ?? 0), r0(r.unrest), g ? r0(g.troops) : 0, r1(r.gdp), r1(r.pop), r.revolt ? r1(r.revolt.rebels) : 0, r.battle?.from ?? 0, r0(r.loyalty ?? 50), r.policy ?? 'integrate', r.people ?? r.owner];
   });
   const resources = {};
   for (const id of ORDER) {
@@ -207,6 +245,7 @@ export function view(s, cid, { gar, ranks }) {
   }
 
   const armies = armiesFor(s, cid);
+  const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) });
 
   const mine = (t) => t.a === cid || t.b === cid;
   return {
@@ -214,7 +253,7 @@ export function view(s, cid, { gar, ranks }) {
     week: s.week, date: dateLabel(s.week), provinces: ORDER.length, over: s.over, winner: s.winner ?? null, final: s.final,
     me: cid,
     you: me ? own(s, me) : null,
-    countries, minors, regions, resources, armies, ranks,
+    countries, minors, regions, resources, armies, fleets, ranks, aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
     wars: s.wars.map((w) => ({ id: w.id, a: w.a, b: w.b, since: w.since, goal: w.goal, lossA: r1(w.lossA), lossB: r1(w.lossB) })),
     alliances: Object.values(s.alliances).filter((al) => !al.secret || !me || al.members.includes(cid) || al.members.some((m) => knows(m))),
     treaties: s.treaties.filter((t) => ['fta', 'nap', 'access', 'armistice'].includes(t.kind) || mine(t)),
@@ -242,11 +281,21 @@ function own(s, c) {
     'queue', 'projects', 'nukeProgram', 'intel', 'cooldown', 'claims', 'electionWeek', 'exile', 'blockades', 'airOps', 'history',
     'deficit', 'revenue', 'spending', 'interest', 'upkeep', 'ration', 'martial', 'stimulus', 'readiness', 'rally', 'windfall',
     'conscription', 'conscripts', 'security', 'press', 'protests', 'threat', 'draftDrag', 'protestDrag', 'strike', 'civilWar', 'rebels',
-    'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost', 'warCases',
+    'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost', 'warCases', 'blockadeCarriers',
+    'refugees', 'refugeeCost', 'refugeesFrom', 'borderClosed', 'refitUntil', 'cartelCheat', 'cartelCaught', 'releasing', 'carbonTax', 'carbonEffect', 'carbonRevenue', 'emissions',
   ]);
   out.spies = Object.fromEntries(Object.entries(c.spies ?? {}).map(([k, n]) => [k, { agents: n.agents, since: n.since }]));
   out.reports = (c.reports ?? []).slice(-120).map(({ turned, ...r }) => r);
   out.inbox = c.inbox.slice(-80);
+  // Why each of our provinces is as loyal as it is, and its referendum history
+  out.provinces = {};
+  for (const reg of Object.values(s.regions)) {
+    if (reg.ctrl !== c.id) continue;
+    const t = loyaltyTarget(s, reg);
+    out.provinces[reg.id] = { target: r0(t.value), why: t.why.filter(([d]) => Math.abs(d) >= 1).map(([d, text]) => [r0(d), text]), referendumAt: reg.referendumAt ?? null, placatedUntil: reg.placatedUntil ?? null };
+  }
+  out.space = c.space ? { ...spaceOf(c), building: c.space.building.map((b) => ({ ...b })) } : null;
+  out.pledgeDetail = c.pledge ? { ...c.pledge, path: pledgePath(s, c) } : null;
   out.debtRatio = r0(debtRatio(c));
   out.weeklyUpkeep = upkeep(s, c);
   return out;
