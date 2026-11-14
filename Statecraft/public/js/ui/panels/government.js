@@ -6,6 +6,7 @@ import { CONSCRIPTION, SECURITY, PRESS, CAUSES } from '../../engine/government.j
 import { confirmBox, modal, selectField } from '../dialogs.js';
 import { myArmies } from './military.js';
 import { peoples } from './peoples.js';
+import { power } from './power.js';
 
 const GOV = {
   democracy: ['Democracy', 'Free elections every four years. People vote you out if they are unhappy, and protest freely.'],
@@ -23,12 +24,13 @@ export function government(ctx) {
   const rebels = Object.entries(ctx.regionIndex).filter(([, i]) => s.regions[i][1] === s.me && s.regions[i][11] > 0).map(([id, i]) => ({ id, rebels: s.regions[i][11] }));
   const atWar = s.wars.some((w) => w.a === s.me || w.b === s.me);
   const tab = ctx.sub('government', 'state');
-  const tabs = [['state', 'Home front'], ['peoples', 'Peoples']];
+  const tabs = [['state', 'Home front'], ['peoples', 'Peoples'], ['power', me.power?.plot ? 'Power ⚠' : 'Power']];
   const head = [
     h('div.panel-title', h('h2', 'Government'), h('span.chip.accent', govName)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('government', id) }, label))),
   ];
   if (tab === 'peoples') return h('div', ...head, peoples(ctx));
+  if (tab === 'power') return h('div', ...head, power(ctx));
 
   return h('div',
     ...head,

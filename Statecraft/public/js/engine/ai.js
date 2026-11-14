@@ -10,7 +10,7 @@ import {
   clamp, rand, chance, pick, alive, atWar, allied, enemiesOf, rel, nameOf, nation, alliancesOf, treaty, addRel, news,
   sanctioning, warBetween, friendlyGround,
 } from './core.js';
-import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower } from './economy.js';
+import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower, upkeep } from './economy.js';
 import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor } from './military.js';
 import { aiNavy } from './navy.js';
 import { aiPeoples } from './peoples.js';
@@ -24,6 +24,8 @@ import { plant, initSpies } from './spies.js';
 import { startResearch, projectCost, maxResearch } from './science.js';
 import { setStraitPolicy } from './trade.js';
 import { CHOKEPOINTS } from './data/world.js';
+import { aiFinance } from './finance.js';
+import { aiCoups } from './coups.js';
 
 export function militaryPower(s, id) {
   const c = s.countries[id];
@@ -53,6 +55,7 @@ export function aiTick(s) {
     answerProposals(s, c);
     if ((s.week + c.ai.next) % 4 === 0) { economy(s, c); homeFront(s, c); aiPeoples(s, c); }
     if ((s.week + c.ai.next) % 4 === 1) aiEnergy(s, c);
+    if ((s.week + c.ai.next) % 4 === 3) { aiFinance(s, c); aiCoups(s, c); }
     if ((s.week + c.ai.next) % 26 === 7) aiClimate(s, c);
     if ((s.week + c.ai.next) % 8 === 6) aiSpace(s, c);
     if (enemiesOf(s, c.id).size) war(s, c, gar);
@@ -74,17 +77,55 @@ export function aiTick(s) {
 
 function economy(s, c) {
   const b = c.base;
-  if ((c.deficit ?? 0) > 6 && debtRatio(c) > debtLimit(c) * 0.7 && c.tax < b.tax + 6) c.tax = Math.round((c.tax + 0.5) * 10) / 10;
-  if ((c.deficit ?? 0) < 0 && c.tax > b.tax - 3) c.tax = Math.round((c.tax - 0.3) * 10) / 10;
+  // Keep the deficit near where it started, and tighter as debt nears what the markets will bear: raise taxes a
+  // little and trim civil spending. In good times, give some back.
+  const ratio = debtRatio(c) / debtLimit(c);
+  const target = Math.min(Math.max(1.5, b.deficit ?? 3), ratio > 0.8 ? 1.5 : ratio > 0.6 ? 3 : 4);
+  const over = (c.deficit ?? 0) - target;
+  const atWarNow = enemiesOf(s, c.id).size > 0;
+  if (over > 0.5 && !(atWarNow && ratio < 0.9)) {
+    if (c.tax < b.tax + 6) c.tax = Math.round((c.tax + Math.min(0.6, over * 0.15)) * 10) / 10;
+    if (over > 1.5) for (const k of ['infra', 'edu', 'health', 'research', 'welfare']) c.spend[k] = Math.round(c.spend[k] * 0.985 * 100) / 100;
+  } else if (over < -1.5 && ratio < 0.5) {
+    if (c.tax > b.tax - 3) c.tax = Math.round((c.tax - 0.3) * 10) / 10;
+    for (const k of ['infra', 'edu', 'health', 'research', 'welfare']) if (c.spend[k] < b.spend[k]) c.spend[k] = Math.round(Math.min(b.spend[k], c.spend[k] * 1.01) * 100) / 100;
+  }
   if (c.infl > b.infl + 3) c.rate = Math.round((c.rate + 0.5) * 100) / 100;
   else if (c.infl < b.infl + 0.5 && c.growth < c.trend - 1 && c.rate > 0.25) c.rate = Math.round((c.rate - 0.25) * 100) / 100;
   const atWar_ = enemiesOf(s, c.id).size > 0;
-  const wantDefence = atWar_ ? Math.min(b.spend.defence * 2 + 2, 12) : b.spend.defence;
+  // Pay for the forces we have; in peacetime, send home what the economy can't carry
+  const upkeepShare = upkeep(s, c) * 52 / Math.max(0.1, c.gdp) * 100;
+  const wantDefence = atWar_ ? Math.min(Math.max(b.spend.defence * 2 + 2, upkeepShare * 1.05), 12) : Math.max(b.spend.defence, Math.min(upkeepShare * 1.05, b.spend.defence + 2));
   c.spend.defence = Math.round((c.spend.defence + clamp(wantDefence - c.spend.defence, -0.3, 0.6)) * 10) / 10;
+  if (!atWar_ && upkeepShare > c.spend.defence * 1.1 && c.mob === 0) {
+    // After a war, a country that can't pay for its army ends the draft and sends the conscripts home
+    if (CONSCRIPTION[c.conscription]?.level > CONSCRIPTION[b.conscription]?.level) setConscription(s, c, b.conscription);
+    const cut = Math.min(upkeepShare > c.spend.defence * 2 ? 0.08 : 0.03, 1 - c.spend.defence * 1.05 / upkeepShare);
+    const free = freeForces(s, c);
+    let go = c.troops * cut;
+    const fromFree = Math.min(free.troops, go);
+    go -= fromFree;
+    // Army groups at home in peacetime are thinned out too
+    let fromArmies = 0;
+    if (go > 0) {
+      const mine = Object.values(s.armies).filter((a) => a.owner === c.id && !a.sea);
+      const inArmies = mine.reduce((t, a) => t + a.troops, 0);
+      for (const a of mine) {
+        const before = a.troops;
+        a.troops = Math.max(1, a.troops * (1 - Math.min(0.5, go / Math.max(1, inArmies))));
+        fromArmies += before - a.troops;
+      }
+    }
+    const sent = fromFree + fromArmies;
+    if (sent > 0) { c.troops -= sent; c.reserves += sent * 0.5; }
+  }
 
   // Buy equipment with spare defence money
-  if (c.milFunds > c.gdp * 0.004 && c.queue.length < maxOrders(c)) {
-    const options = atWar_ ? ['tanks', 'tanks', 'troops', 'aircraft', 'missiles'] : ['tanks', 'aircraft', 'missiles', 'ships', 'troops'];
+  // Only what the defence budget can also keep up afterwards (a microstate doesn't buy a 10,000-man brigade)
+  const roomToGrow = upkeepShare < c.spend.defence * 0.8;
+  if (c.milFunds > c.gdp * 0.004 && c.queue.length < maxOrders(c) && (roomToGrow || atWar_)) {
+    const options = (atWar_ ? ['tanks', 'tanks', 'troops', 'aircraft', 'missiles'] : ['tanks', 'aircraft', 'missiles', 'ships', 'troops'])
+      .filter((k) => k !== 'troops' || BUILD.troops.batch <= Math.max(5, c.troops * 0.2));
     const kind = pick(s, options);
     const cost = BUILD[kind].cost * costFactor(c);
     if (c.milFunds >= cost) {
@@ -176,6 +217,11 @@ function judgePeace(s, c, p) {
   const paying = t.reparations?.from === c.id ? Number(t.reparations.amount) : 0;
   // Letting the enemy's troops through is a concession only the losing side makes
   if (t.access && !(lostShare(s, c.id) >= 0.08 || ratio < 0.7)) return false;
+  // A new government imposed from outside: only when beaten
+  if (t.regime === c.id) {
+    if (!(iLost >= 0.35 || ratio < 0.3 || c.civilWar)) return false;
+    if (!giving.length && !paying) return true;
+  }
   if (!giving.length && !paying) {
     if (getting.length || t.reparations?.from === p.from) return true;
     if (t.armistice) return age >= 8 && (ratio < 1.6 || iLost > theyLost);
@@ -421,6 +467,8 @@ function ambition(s, c, gar) {
 // How tempting (and safe) a war on this neighbour looks: 0 means no
 function targetScore(s, c, t) {
   if (!alive(s, t) || allied(s, c.id, t) || atWar(s, c.id, t)) return 0;
+  // A government doesn't turn on the power that installed it, nor that power on its client
+  if (c.regime?.patron === t || s.countries[t]?.regime?.patron === c.id) return 0;
   const minor = s.minors[t];
   if (minor && (minor.puppetOf || minor.capitulated || minor.guarantor === c.id)) return 0;
   if (s.treaties.some((x) => ['nap', 'access', 'armistice'].includes(x.kind) && ((x.a === c.id && x.b === t) || (x.b === c.id && x.a === t)))) return 0;

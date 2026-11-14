@@ -118,13 +118,9 @@ export function eventsTick(s) {
   if (!countries.length) return;
   const roll = rand(s);
 
-  if (roll < 0.0025) {
-    s.modifiers.push({ id: nextId(s, 'm'), cid: 'all', kind: 'growth', value: -1.8, until: s.week + 30 });
-    news(s, 'Global recession: a banking crisis spreads from market to market. Growth is slowing everywhere.', 'economy');
-  } else if (roll < 0.0035) {
-    s.modifiers.push({ id: nextId(s, 'm'), cid: 'all', kind: 'growth', value: -3, until: s.week + 26 });
-    s.modifiers.push({ id: nextId(s, 'm'), cid: 'all', kind: 'approval', value: -4, until: s.week + 26 });
-    news(s, 'A new pandemic is spreading worldwide. Borders tighten and economies stall.', 'disaster');
+  // (Recessions and pandemics are full crises now: see crises.js)
+  if (roll < 0.0035) {
+    // nothing
   } else if (roll < 0.0135) {
     const id = pick(s, QUAKES);
     const reg = s.regions[id];

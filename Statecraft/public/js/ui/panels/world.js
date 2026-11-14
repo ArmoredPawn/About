@@ -3,15 +3,17 @@
 
 import { h, flag, money, pct, nationName } from '../dom.js';
 import { climate } from './climate.js';
+import { crisesPanel } from './crises.js';
 
 export function world(ctx) {
   const tab = ctx.sub('world', 'rankings');
-  const tabs = [['rankings', 'Rankings'], ['climate', 'Climate']];
+  const live = ctx.state.crises?.active?.length ?? 0;
+  const tabs = [['rankings', 'Rankings'], ['crises', live ? `Crises (${live})` : 'Crises'], ['climate', 'Climate']];
   return h('div',
     h('div.panel-title', h('h2', 'The world'), ctx.state.winter ? h('span.chip.bad', 'Nuclear winter') : null),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('world', id) }, label))),
-    tab === 'climate' ? climate(ctx) : rankings(ctx),
-    tab === 'climate' ? null : h('div.row.gap', { style: { marginTop: '12px' } },
+    tab === 'climate' ? climate(ctx) : tab === 'crises' ? crisesPanel(ctx) : rankings(ctx),
+    tab !== 'rankings' ? null : h('div.row.gap', { style: { marginTop: '12px' } },
       h('button.btn.small', { onclick: () => ctx.go('market', 'prices') }, 'World prices'),
       h('button.btn.small', { onclick: () => ctx.go('news') }, 'World news')));
 }

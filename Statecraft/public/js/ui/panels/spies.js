@@ -1,6 +1,7 @@
 // The spy network: agents planted abroad, what they relay home, covert operations, and catching the agents
 // other countries plant on us.
 
+import { backCoupDialog } from './power.js';
 import { h, flag, money, nationName } from '../dom.js';
 import { INTEL } from '../../engine/events.js';
 import { COUNTER_INTEL, MAX_AGENTS } from '../../engine/spies.js';
@@ -47,6 +48,7 @@ function networks(ctx) {
           h('button.btn.small', { onclick: () => { ctx.ui.spyFilter = id; ctx.setSub('spies', 'reports'); } }, 'Reports'),
           sees ? h('button.btn.small', { onclick: () => ctx.focusCountry(id) }, 'See their armies') : null,
           h('button.btn.small', { disabled: n.agents >= MAX_AGENTS, onclick: () => plantDialog(ctx, id) }, 'Add agents…'),
+          age >= 4 && n.agents >= 2 ? h('button.btn.small', { onclick: () => backCoupDialog(ctx, id) }, 'Back a coup…') : null,
           h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'spyRecall', target: id }) }, 'Recall')));
     }) : [h('div.empty', 'No agents abroad.')]));
 }

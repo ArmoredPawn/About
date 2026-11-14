@@ -87,3 +87,22 @@ test('a dropped leader can resume their country with their token', () => {
   again.send({ type: 'resume', code, token });
   assert.equal(again.last('state').me, me);
 });
+
+test('weekly updates carry only what changed in other countries since the last one', async () => {
+  const { Game } = await import('../public/js/engine/game.js');
+  const { countryChanges } = await import('../public/js/engine/room.js');
+  const g = Game.create({ seed: 9 });
+  g.setLeader('fra', 'Ana');
+  const player = { conn: {}, cid: 'fra' };
+  const first = countryChanges(player, g, g.view('fra').countries);
+  assert.equal(Object.keys(first).length, Object.keys(g.s.countries).length, 'the first update has everyone');
+  assert.equal(Object.keys(countryChanges(player, g, g.view('fra').countries)).length, 0, 'nothing changed, nothing sent');
+  for (let i = 0; i < 3; i++) g.step(1 / 3);
+  g.tick();
+  const next = countryChanges(player, g, g.view('fra').countries);
+  const fields = Object.values(next).reduce((t, c) => t + Object.keys(c).length, 0);
+  const all = Object.values(first).reduce((t, c) => t + Object.keys(c).length, 0);
+  assert.ok(fields < all / 5, `a week later only a few fields moved (${fields} of ${all})`);
+  player.conn = {};
+  assert.equal(Object.keys(countryChanges(player, g, g.view('fra').countries)).length, Object.keys(g.s.countries).length, 'a reconnect gets everyone again');
+});

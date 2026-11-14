@@ -26,6 +26,10 @@ import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy } 
 import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
+import { decide } from './decisions.js';
+import { intervene, capitalControls, requestImf } from './finance.js';
+import { setPandemicPolicy, fundVaccine, sendFamineAid } from './crises.js';
+import { payGenerals, purge, civilianRule, backCoup } from './coups.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 export const SPEND_KEYS = ['defence', 'infra', 'edu', 'health', 'research', 'welfare'];
@@ -362,6 +366,19 @@ const HANDLERS = {
   cancelResearch(s, c, { id }) { return cancelResearch(s, c, id); },
   licence(s, c, { from, field }) { return buyLicence(s, c, from, field); },
   range(s, c, { kind }) { return extendRange(s, c, kind); },
+
+  /* ---------- Decisions, markets, crises and the army ---------- */
+  decide(s, c, { id, option }) { return decide(s, c, id, option); },
+  fxIntervene(s, c, { amount }) { return intervene(s, c, amount); },
+  capitalControls(s, c, { on }) { return capitalControls(s, c, on); },
+  imf(s, c) { return requestImf(s, c); },
+  pandemicPolicy(s, c, { policy, borders }) { return setPandemicPolicy(s, c, { policy, borders }); },
+  vaccineFund(s, c, { amount }) { return fundVaccine(s, c, amount); },
+  famineAid(s, c, { crisis, size }) { return sendFamineAid(s, c, crisis, ['small', 'large'].includes(size) ? size : 'small'); },
+  payGenerals(s, c) { return payGenerals(s, c); },
+  purge(s, c) { return purge(s, c); },
+  civilianRule(s, c) { return civilianRule(s, c); },
+  backCoup(s, c, { target, amount }) { return backCoup(s, c, target, amount); },
 };
 
 function pay(c, cost) {

@@ -2,9 +2,9 @@
 
 import { ORDER } from './data/geo.js';
 import { RESOURCES } from './data/regions.js';
-import { createState, promoteMinors } from './setup.js';
+import { createState, promoteMinors, calibrateUpkeep } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news } from './core.js';
-import { marketTick, economyTick, debtRatio, upkeep, blockadeEffect } from './economy.js';
+import { marketTick, economyTick, debtRatio, debtLimit, upkeep, blockadeEffect } from './economy.js';
 import { militaryTick, militaryStep, garrisons, marchSpeed } from './military.js';
 import { diplomacyTick } from './diplomacy.js';
 import { aiTick, militaryPower, lostShare } from './ai.js';
@@ -20,6 +20,10 @@ import { aidTick, aidFor } from './proxy.js';
 import { initEnergy, energyTick, energyView } from './energy.js';
 import { initClimate, climateTick, climateView, pledgePath } from './climate.js';
 import { initSpace, spaceTick, spaceOf, satSees } from './space.js';
+import { initFinance, financeTick, financeView, financeOwn } from './finance.js';
+import { initCrises, crisesTick, crisesView } from './crises.js';
+import { initCoups, coupsTick, coupView, coupOwn } from './coups.js';
+import { decisionsTick } from './decisions.js';
 
 export class Game {
   constructor(state) {
@@ -30,7 +34,9 @@ export class Game {
 
   static create({ seed } = {}) {
     const s = createState({ seed });
-    Object.values(s.countries).forEach((c, i) => { c.ai.next = i % 4; initGovernment(c); initSpies(c); initRange(c); });
+    Object.values(s.countries).forEach((c, i) => { c.ai.next = i % 4; initGovernment(c); initSpies(c); initRange(c); initCoups(c); });
+    initFinance(s);
+    initCrises(s);
     initFleets(s);
     applyFleets(s);
     initPeoples(s);
@@ -69,6 +75,8 @@ export class Game {
     energyTick(s);
     const world = marketTick(s);
     economyTick(s, world);
+    financeTick(s);
+    crisesTick(s);
     tradeTick(s);
     climateTick(s);
     spaceTick(s);
@@ -80,7 +88,11 @@ export class Game {
     peoplesTick(s);
     aidTick(s);
     spiesTick(s);
+    coupsTick(s);
     eventsTick(s);
+    decisionsTick(s);
+    // Whatever the week's bills left unpaid is borrowed
+    for (const c of Object.values(s.countries)) if (c.treasury < 0) { c.debt += -c.treasury; c.treasury = 0; }
     // There is no time limit: the game ends only when one country rules every province in the world
     const conqueror = worldConqueror(s);
     if (conqueror) this.finish(conqueror);
@@ -153,7 +165,9 @@ function armiesFor(s, cid) {
 // Adds whatever an older saved game is missing, so it carries on under the current rules
 function upgrade(s) {
   promoteMinors(s);
-  for (const c of Object.values(s.countries)) { initGovernment(c); initSpies(c); initRange(c); }
+  for (const c of Object.values(s.countries)) { initGovernment(c); initSpies(c); initRange(c); initCoups(c); if (!c.minor) calibrateUpkeep(s, c); }
+  initFinance(s);
+  initCrises(s);
   if (!s.fleets) { initFleets(s); applyFleets(s); }
   else if (Object.values(s.countries).some((c) => c.minor && c.ships >= 3 && !Object.values(s.fleets).some((f) => f.owner === c.id))) initFleets(s);
   placeFleets(s);
@@ -233,6 +247,7 @@ export function view(s, cid, { gar, ranks }) {
       lost: r1(lostShare(s, c.id) * 100),
       blockaded: r0(blockadeEffect(s, c.id) * 100),
       space: spaceOf(c),
+      fin: financeView(c), ...coupView(c, open),
       emissions: r1(c.emissions ?? 0), carbonTax: c.carbonTax ?? 0, pledge: c.pledge ? { cut: c.pledge.cut, year: c.pledge.year, done: c.pledge.done, onTrack: c.pledge.done ? null : (c.emissions ?? 0) <= (pledgePath(s, c) ?? Infinity) * 1.05 } : null,
     };
   }
@@ -261,7 +276,7 @@ export function view(s, cid, { gar, ranks }) {
     week: s.week, date: dateLabel(s.week), provinces: ORDER.length, over: s.over, winner: s.winner ?? null, final: s.final,
     me: cid,
     you: me ? own(s, me) : null,
-    countries, minors, regions, resources, armies, fleets, ranks, aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
+    countries, minors, regions, resources, armies, fleets, ranks, crises: crisesView(s, cid), aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
     wars: s.wars.map((w) => ({ id: w.id, a: w.a, b: w.b, since: w.since, goal: w.goal, lossA: r1(w.lossA), lossB: r1(w.lossB) })),
     alliances: Object.values(s.alliances).filter((al) => !al.secret || !me || al.members.includes(cid) || al.members.some((m) => knows(m))),
     treaties: s.treaties.filter((t) => ['fta', 'nap', 'access', 'armistice'].includes(t.kind) || mine(t)),
@@ -305,6 +320,11 @@ function own(s, c) {
   out.space = c.space ? { ...spaceOf(c), building: c.space.building.map((b) => ({ ...b })) } : null;
   out.pledgeDetail = c.pledge ? { ...c.pledge, path: pledgePath(s, c) } : null;
   out.debtRatio = r0(debtRatio(c));
+  out.debtLimit = debtLimit(c);
+  out.finance = financeOwn(s, c);
+  out.power = coupOwn(s, c);
+  out.decisions = c.decisions ?? [];
+  out.pandemic = c.pandemic ?? null;
   out.weeklyUpkeep = upkeep(s, c);
   return out;
 }

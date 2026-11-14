@@ -1,5 +1,6 @@
 // Builds a new game's state from the data files.
 
+import { upkeep } from './economy.js';
 import { COUNTRIES, COUNTRY_IDS, TECH_OVERRIDES, CLAIMS, NUCLEAR_PROGRAMMES } from './data/countries.js';
 import { PROVINCES, RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { MINORS } from './data/minors.js';
@@ -69,6 +70,11 @@ export function createState({ seed = Date.now() % 2147483647 } = {}) {
   // Old protectors (the United States and Kuwait) start on warm terms, though no one is bound to anyone
   for (const m of Object.values(minors)) if (m.guarantor && s.countries[m.guarantor]) setRel(s, m.id, m.guarantor, 45);
 
+  // The smaller nations' forces come from their head counts; their budgets are set to pay for them, as their
+  // governments do, without running a bigger deficit (civil spending makes room). Forces beyond what a tenth of
+  // the economy can pay for are sent home.
+  for (const c of Object.values(s.countries)) if (c.minor) balanceDefence(s, c); else calibrateUpkeep(s, c);
+
   /* ---------- Diplomacy ---------- */
   // No alliances exist at the start; leaders found their own during the game.
   for (const [pair, value] of Object.entries(START_RELATIONS)) {
@@ -131,6 +137,31 @@ export function promoteMinors(s) {
   }
   if (!changed) return;
   for (const [a, b, v] of NPC_RELATIONS) if (s.countries[a] && s.countries[b] && !rel(s, a, b)) setRel(s, a, b, v);
+}
+
+export function calibrateUpkeep(s, c) {
+  if (c.upkeepScale != null) return;
+  const share = upkeep(s, c) * 52 / Math.max(0.1, c.gdp) * 100;
+  c.upkeepScale = Math.min(1, c.base.spend.defence / Math.max(0.01, share * 1.05));
+}
+
+function balanceDefence(s, c) {
+  const cost = () => upkeep(s, c) * 52 / Math.max(0.1, c.gdp) * 100; // % of GDP
+  const cap = 10;
+  if (cost() > cap) {
+    const k = cap / cost();
+    c.troops *= k; c.reserves *= k; c.tanks *= k; c.aircraft = Math.round(c.aircraft * k);
+  }
+  const need = Math.round(cost() * 1.1 * 10) / 10;
+  if (need <= c.spend.defence) return;
+  const extra = need - c.spend.defence;
+  const civil = ['infra', 'edu', 'health', 'research', 'welfare'];
+  const total = civil.reduce((t, k) => t + c.spend[k], 0);
+  const keep = Math.max(0.4, (total - extra) / total);
+  for (const k of civil) c.spend[k] = Math.round(c.spend[k] * keep * 10) / 10;
+  c.spend.defence = need;
+  c.base.spend = { ...c.spend };
+  c.milFunds = c.gdp * need / 100 / 12;
 }
 
 function region(id, owner, gdp, pop, resources) {

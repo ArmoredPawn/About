@@ -37,6 +37,18 @@ every few seconds, armies glide across the map and front lines creep through con
 - **Space:** real 2027 satellite fleets (GPS, BeiDou, GLONASS, Galileo, spy and communications satellites) that let
   a country see every army on Earth, guide its missiles and keep its forces organised; anti-satellite strikes and
   debris; and the race to crewed flight, a space station, the Moon and Mars.
+- **Money and markets:** every country's currency, stock market and credit rating, moved by interest rates,
+  inflation, debt, stability, war, sanctions and the world's mood, and feeding back into inflation, growth, approval
+  and borrowing costs. Central-bank intervention and capital controls. Debt crises end in an IMF programme (with
+  conditions that are checked every quarter), austerity, printing money or default.
+- **Global crises:** pandemics that spread along borders and trade routes (lockdowns, border closures, a vaccine
+  race the funders win, and the choice to share it or hoard it); financial crashes (bank rescues, an emergency
+  summit and a coordinated stimulus that rewards joiners and tempts free-riders); famines and food aid; terror
+  attacks and how to answer them. Leaders face each choice as a decision with a deadline.
+- **Coups and regime change:** army loyalty and coup risk (instability, poverty, unpaid or beaten armies, unpopular
+  governments, foreign money), plots to pay off or purge, military juntas (including the Sahel's and Myanmar's in
+  2027), revolutions against hated dictatorships, coups backed through spy networks, and regime change as a peace
+  term.
 - **Proxy wars:** arm and fund another country's war, or rebels in someone else's, openly or covertly.
 - **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then click it and
   click anywhere on the map: it goes at once, fighting through enemy ground or landing from the sea. Fronts move both
@@ -53,7 +65,7 @@ every few seconds, armies glide across the map and front lines creep through con
   weak neighbours. The smaller nations found regional trade blocs (the East African Community, the Caribbean
   Community…), ask friendly great powers for protection against a threatening rival, and fight old feuds (Armenia and
   Azerbaijan, Serbia and Kosovo, Venezuela and Guyana…). Invaded, they mobilise, conscript, draft every reservist and call on their friends.
-- **Diplomacy:** open or secret alliances, trade blocs, free trade, non-aggression pacts, military access, resource
+- **Diplomacy:** public or secret alliances and trade blocs, free trade, non-aggression pacts, military access, resource
   deals, loans, aid, sanctions, tariffs, UN resolutions with P5 vetoes.
 - **Spies:** plant agents abroad; once settled in they relay armies on the move, weapons being built, secret pacts and
   war plans, and show the target's armies on your map, until counter-intelligence catches (or turns) them.
@@ -83,6 +95,9 @@ npm run dev   # http://localhost:3001 (multiplayer and solo)
 ```
 
 `npm test` runs the tests.
+
+Multiplayer updates are kept small: each weekly update carries only the fields of other countries that changed since
+that connection's last update.
 
 ## Changing the world
 

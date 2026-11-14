@@ -383,7 +383,8 @@ export class Room {
 
   #sendState(player) {
     if (!this.game || !player.conn) return;
-    player.conn.send({ ...this.game.view(player.cid), paused: this.paused, speed: this.settings.speed, stepMs: stepMs(this.settings.speed), phase: this.phase });
+    const view = this.game.view(player.cid);
+    player.conn.send({ ...view, countries: countryChanges(player, this.game, view.countries), countriesDelta: true, paused: this.paused, speed: this.settings.speed, stepMs: stepMs(this.settings.speed), phase: this.phase });
   }
 
   stopClock() {
@@ -408,3 +409,28 @@ function shuffleWith(list, random) {
 }
 
 export { alliancesOf, alive };
+
+// Each weekly update carries only what changed in other countries since this connection last heard: a new
+// connection (or a new game) gets everything once. Most weeks only a field or two moves for a country, if any.
+export function countryChanges(player, game, countries) {
+  if (player.sentConn !== player.conn || player.sentGame !== game || player.sentCid !== player.cid) {
+    player.sent = new Map();
+    player.sentConn = player.conn;
+    player.sentGame = game;
+    player.sentCid = player.cid;
+  }
+  const out = {};
+  for (const [id, c] of Object.entries(countries)) {
+    let last = player.sent.get(id);
+    if (!last) { player.sent.set(id, last = {}); }
+    let diff = null;
+    for (const [k, v] of Object.entries(c)) {
+      const json = JSON.stringify(v ?? null);
+      if (last[k] === json) continue;
+      last[k] = json;
+      (diff ??= {})[k] = v ?? null;
+    }
+    if (diff) out[id] = diff;
+  }
+  return out;
+}

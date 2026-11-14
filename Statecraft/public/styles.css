@@ -442,3 +442,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .map-hint { font-size: 12px; }
   .toasts { bottom: 72px; left: 16px; }
 }
+
+/* Decisions (crises, markets, the generals) */
+.item.decision { border-color: rgb(229 160 72 / 0.55); background: rgb(229 160 72 / 0.06); }
+.pick-card.warn { border-color: rgb(229 160 72 / 0.45); }
+.pick-card.bad { border-color: rgb(229 72 77 / 0.5); }
+.pick-card.warn:hover { border-color: rgb(229 160 72 / 0.9); }
+.pick-card.bad:hover { border-color: rgb(229 72 77 / 0.9); }
+.item.decision .item-head { flex-wrap: wrap; }
+.item.decision .name { min-width: 0; flex: 1 1 60%; white-space: normal; }
+.item.decision .meta { overflow-wrap: anywhere; }

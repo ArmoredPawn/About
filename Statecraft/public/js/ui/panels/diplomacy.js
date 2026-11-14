@@ -89,7 +89,11 @@ export function dossier(ctx, id) {
       stat('Troops', troops(c.mil.troops)), stat('Tanks', num(c.mil.tanks)), stat('Aircraft', num(c.mil.aircraft)),
       stat('Warships', num(c.mil.ships)), c.mil.carriers ? stat('Carriers', num(c.mil.carriers)) : null, stat('Missiles', num(c.mil.missiles)), stat('Warheads', c.mil.nukes ? num(c.mil.nukes) : c.nukeProgram ? (typeof c.nukeProgram === 'number' ? `programme ${c.nukeProgram}%` : 'programme!') : 'none'),
       intel ? stat('Reserves', money(c.treasury)) : null, stat('Debt', `${c.debt}%`), stat('Inflation', pct(c.infl)),
-      stat('Conscription', { volunteer: 'Volunteers', selective: 'Selective', national: 'National service', total: 'Total draft' }[c.conscription] ?? '—')),
+      stat('Conscription', { volunteer: 'Volunteers', selective: 'Selective', national: 'National service', total: 'Total draft' }[c.conscription] ?? '—'),
+      c.fin ? stat('Credit rating', c.fin.rating ?? '—') : null, c.fin ? stat('Currency', String(c.fin.fx)) : null, c.fin ? stat('Stock market', String(c.fin.stocks)) : null,
+      c.coupRisk != null ? stat('Coup risk', `${c.coupRisk}%`) : null),
+    c.regime ? h('div.warning', { class: c.regime.kind === 'junta' ? 'warn' : 'info', style: { marginTop: '10px' } }, `${{ junta: 'Ruled by its army', revolution: 'A revolutionary government', installed: 'A government installed after a war', civilian: 'Civilian rule restored' }[c.regime.kind]} since week ${Math.max(0, c.regime.since)}${c.regime.patron ? `, close to ${nationName(s, c.regime.patron)}` : ''}.`) : null,
+    c.fin?.crisis || c.fin?.defaulted || c.fin?.imf ? h('div.warning.bad', { style: { marginTop: '10px' } }, c.fin.defaulted ? `${c.name} is in default.` : c.fin.crisis ? `${c.name} is in a debt crisis.` : `${c.name} is in an IMF programme.`) : null,
     c.civilWar ? h('div.warning.bad', { style: { marginTop: '10px' } }, `${c.name} is in civil war.`) : null,
     c.protests?.length ? h('div.warning', { style: { marginTop: '10px' } }, `Protests: ${c.protests.map((p) => `${({ schools: 'school cuts', hospitals: 'hospital cuts', pensions: 'pension cuts', taxes: 'taxes', prices: 'cost of living', shortages: 'shortages', jobs: 'jobs', war: 'the war', draft: 'the draft', rights: 'repression', opposition: 'opposition rallies', occupation: 'occupation' })[p.cause] ?? p.cause} (${p.size}%)`).join(', ')}.`) : null,
     c.exile ? null : h('div.section', h('h3', 'Talk'),
@@ -247,12 +251,14 @@ export function peaceDialog(ctx, foe) {
   const boxes = disputed.map(([id, to]) => [id, to, h('input', { type: 'checkbox', checked: to === s.me })]);
   const payer = selectField('Reparations paid by', [['', 'No reparations'], [foe, nationName(s, foe)], [s.me, 'Us']], '');
   const accessBox = h('input', { type: 'checkbox' });
+  const regimeBox = h('input', { type: 'checkbox' });
   const amount = numberField('Reparations a year', { value: 0, min: 0, suffix: '$ billions' });
   const terms = h('div.stack',
     disputed.length ? h('div.field', h('span', 'Provinces that change hands (ticked) — the rest return to their owner'),
       h('div.choice-grid', boxes.map(([id, to, box]) => h('label.choice', box, h('span', `${regionName(id)} → ${to === s.me ? 'us' : nationName(s, foe)}`))))) : h('p.muted.small', 'Neither side occupies the other\'s land.'),
     payer.el, amount.el,
-    h('label.row.gap', { style: { cursor: 'pointer' } }, accessBox, h('span', h('b', 'Military access'), h('span.muted.small', { style: { display: 'block' } }, `${nationName(s, foe)} must let our troops pass through it from now on.`))));
+    h('label.row.gap', { style: { cursor: 'pointer' } }, accessBox, h('span', h('b', 'Military access'), h('span.muted.small', { style: { display: 'block' } }, `${nationName(s, foe)} must let our troops pass through it from now on.`))),
+    h('label.row.gap', { style: { cursor: 'pointer' } }, regimeBox, h('span', h('b', 'Regime change'), h('span.muted.small', { style: { display: 'block' } }, `We install a new government in ${nationName(s, foe)}, friendly to us: it lets our troops through, leaves alliances against us and won't turn on us. Only a badly beaten enemy accepts.`))));
   const sync = () => { terms.hidden = kind.input.value !== 'terms'; };
   kind.input.addEventListener('change', sync);
   sync();
@@ -267,6 +273,7 @@ export function peaceDialog(ctx, foe) {
           t.cede = boxes.filter(([, , b]) => b.checked).map(([region, to]) => ({ region, to }));
           if (payer.input.value && Number(amount.input.value) > 0) t.reparations = { from: payer.input.value, amount: Number(amount.input.value), years: 5 };
           if (accessBox.checked) t.access = true;
+          if (regimeBox.checked) t.regime = foe;
         }
         return !(await ctx.send({ type: 'propose', to: foe, kind: 'peace', terms: t })) || false;
       },
@@ -301,7 +308,7 @@ function alliances(ctx) {
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Leave ${a.name}?`, 'Its members will think less of you, and you lose their protection.')) ctx.send({ type: 'allianceLeave', id: a.id }); } }, 'Leave')) : null);
   return h('div',
     h('button.btn.primary.block', { onclick: () => newAlliance(ctx) }, '＋ Found an alliance or trade bloc'),
-    h('p.muted.small', { style: { marginTop: '6px' } }, 'Military allies are called to fight when a member is attacked. Trade blocs give free trade between members. Every alliance gets a chat for its leaders.'),
+    h('p.muted.small', { style: { marginTop: '6px' } }, 'Military allies are called to fight when a member is attacked. Trade blocs give free trade between members. Either kind can be public (announced to the world, which deters attackers) or secret (only members, and spies inside them, know). Every alliance gets a chat for its leaders.'),
     h('div.section', h('h3', 'Ours'), mine.length ? h('div.list', mine.map((a) => card(a, true))) : h('div.empty', 'We are in no alliances.')),
     h('div.section', h('h3', 'Others'), others.length ? h('div.list', others.map((a) => card(a, false))) : h('div.empty', 'None.')));
 }
@@ -309,21 +316,53 @@ function alliances(ctx) {
 function pickCountries(ctx, exclude = []) {
   const s = ctx.state;
   return Object.entries(s.countries).filter(([id, c]) => id !== s.me && !exclude.includes(id) && !c.exile)
-    .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+    .sort(([, a], [, b]) => (Boolean(a.human) === Boolean(b.human) ? a.name.localeCompare(b.name) : a.human ? -1 : 1))
     .map(([id, c]) => [id, h('input', { type: 'checkbox', value: id }), c]);
+}
+
+// A searchable list of countries to tick: leaders first, then everyone by name
+function countryChooser(ctx, boxes) {
+  const rows = boxes.map(([id, box, c]) => h('label.choice', { 'data-name': c.name.toLowerCase() }, box, flag(id), c.name, c.human ? h('span.faint', ` ★ ${c.human}`) : null));
+  const count = h('span.muted.small', '0 invited');
+  const search = h('input', { type: 'search', placeholder: `Search ${boxes.length} countries`, oninput: () => {
+    const q = search.value.trim().toLowerCase();
+    for (const r of rows) r.hidden = Boolean(q) && !r.dataset.name.includes(q);
+  } });
+  for (const [, box] of boxes) box.addEventListener('change', () => { count.textContent = `${boxes.filter(([, b]) => b.checked).length} invited`; });
+  return h('div.field', h('span', { style: { display: 'flex', justifyContent: 'space-between' } }, h('span', 'Invite'), count), search,
+    h('div.choice-grid', { style: { maxHeight: '220px', overflowY: 'auto' } }, rows));
+}
+
+// Two or more big buttons, one picked
+function pickCards(options, initial, onPick) {
+  let current = initial;
+  const list = h('div.pick-list', { style: { gridTemplateColumns: `repeat(${options.length}, 1fr)` } }, options.map(([key, icon, title, note]) => {
+    const card = h('button.pick-card', { type: 'button', 'aria-pressed': String(key === current) },
+      h('span.pick-icon', { 'aria-hidden': 'true' }, icon), h('span.pick-text', h('b', title), h('span', note)));
+    card.addEventListener('click', () => { current = key; onPick(key); for (const c of list.children) c.setAttribute('aria-pressed', String(c === card)); });
+    return card;
+  }));
+  return list;
 }
 
 function newAlliance(ctx) {
   const name = h('input', { maxlength: 40, placeholder: 'e.g. Indo-Pacific Pact' });
-  const kind = selectField('Kind', [['military', 'Military alliance (mutual defence)'], ['economic', 'Trade bloc (free trade)']], 'military');
-  const secret = h('input', { type: 'checkbox' });
+  let kind = 'military';
+  let secret = false;
   const boxes = pickCountries(ctx);
   modal({
     title: 'Found an alliance',
-    body: h('div.stack', h('label.field', h('span', 'Name'), name), kind.el,
-      h('label.choice', secret, h('span', h('b', 'Secret pact'), h('span.muted', ': only members (and spies inside them) know. It is revealed if a member goes to war for another.'))),
-      h('div.field', h('span', 'Invite'), h('div.choice-grid', boxes.map(([id, box, c]) => h('label.choice', box, flag(id), c.name, c.human ? h('span.faint', ' ★') : null))))),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Found it', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'allianceCreate', name: name.value, kind: kind.input.value, secret: secret.checked, invite: boxes.filter(([, b]) => b.checked).map(([id]) => id) })) || false }],
+    body: h('div.stack', h('label.field', h('span', 'Name'), name),
+      h('div.field', h('span', 'Kind'), pickCards([
+        ['military', '🛡', 'Military alliance', 'Mutual defence: members are called to fight when one is attacked.'],
+        ['economic', '🤝', 'Trade bloc', 'Free trade between all members, and a bigger market for each.'],
+      ], kind, (k) => { kind = k; })),
+      h('div.field', h('span', 'Public or secret'), pickCards([
+        ['public', '📣', 'Public', 'Announced to the world. Deters attackers: they know who would fight them.'],
+        ['secret', '🤫', 'Secret', 'Only members (and spies inside them) know. Revealed the moment a member goes to war for another, or when you announce it.'],
+      ], 'public', (k) => { secret = k === 'secret'; })),
+      countryChooser(ctx, boxes)),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Found it', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'allianceCreate', name: name.value, kind, secret, invite: boxes.filter(([, b]) => b.checked).map(([id]) => id) })) || false }],
   });
 }
 
@@ -331,7 +370,7 @@ function inviteMany(ctx, a) {
   const boxes = pickCountries(ctx, a.members);
   modal({
     title: `Invite to ${a.name}`,
-    body: h('div.choice-grid', boxes.map(([id, box, c]) => h('label.choice', box, flag(id), c.name))),
+    body: countryChooser(ctx, boxes),
     actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Invite', kind: 'primary', onClick: async () => { for (const [id, b] of boxes) if (b.checked) await ctx.send({ type: 'allianceInvite', id: a.id, to: id }); } }],
   });
 }

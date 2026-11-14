@@ -1,5 +1,6 @@
 // Diplomacy: war and peace, alliances, treaties, deals, sanctions, the straits and the UN Security Council.
 
+import { regimeChange } from './coups.js';
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { CHOKEPOINTS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
@@ -168,6 +169,10 @@ export function makePeace(s, a, b, terms = {}) {
     if (home) { army.region = home.id; army.path = []; army.op = { kind: 'hold', target: home.id, aggr: 'balanced' }; army.status = `Withdrawn to ${regionName(home.id)}`; }
   }
   for (const c of [s.countries[a], s.countries[b]]) if (c) { c.blockades[a === c.id ? b : a] && delete c.blockades[a === c.id ? b : a]; c.airOps = c.airOps.filter((o) => s.regions[o.region].ctrl !== (a === c.id ? b : a)); }
+  // The loser gets a new government, friendly to the winner
+  if (terms.regime && (terms.regime === a || terms.regime === b) && s.countries[terms.regime]) {
+    regimeChange(s, s.countries[terms.regime], { kind: 'installed', patron: terms.regime === a ? b : a });
+  }
   if (terms.reparations && terms.reparations.amount > 0) {
     const { from, amount, years = 5 } = terms.reparations;
     const to = from === a ? b : a;
@@ -178,6 +183,7 @@ export function makePeace(s, a, b, terms = {}) {
   if (ceded.size) parts.push(`ceding ${[...ceded].map(regionName).join(', ')}`);
   if (terms.reparations?.amount) parts.push(`with reparations of ${money(terms.reparations.amount)} a year`);
   if (terms.armistice) parts.push('freezing the front line');
+  if (terms.regime) parts.push(`with a new government for ${nameOf(s, terms.regime)}`);
   news(s, `${nameOf(s, a)} and ${nameOf(s, b)} sign ${terms.armistice ? 'an armistice' : 'a peace treaty'}${parts.length ? `, ${parts.join(', ')}` : ''}.`, 'peace', [a, b]);
 }
 
@@ -248,6 +254,7 @@ function validate(s, from, to, kind, t) {
         if (!payer || ![from, to].includes(t.reparations.from)) return 'Reparations must be paid by one side of the war.';
         if (t.reparations.amount > payer.gdp * 0.1) return 'Reparations can be at most 10% of the payer\'s GDP a year.';
       }
+      if (t.regime != null && ![from, to].includes(t.regime)) return 'A new government can only be installed on one side of the war.';
       return null;
     }
     case 'joinWar':
@@ -279,6 +286,7 @@ export function describe(s, p) {
       else parts.push('peace');
       for (const c of t.cede ?? []) parts.push(`${regionName(c.region)} to ${nameOf(s, c.to)}`);
       if (t.reparations?.amount) parts.push(`${nameOf(s, t.reparations.from)} pays ${money(Number(t.reparations.amount))} a year for ${t.reparations.years ?? 5} years`);
+      if (t.regime) parts.push(`${nameOf(s, t.regime === p.from ? p.to : p.from)} installs a new, friendly government in ${nameOf(s, t.regime)}`);
       if (t.access) parts.push('military access for each other\'s troops');
       return parts.join('; ');
     }

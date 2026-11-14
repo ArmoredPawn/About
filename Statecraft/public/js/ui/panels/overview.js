@@ -3,6 +3,7 @@
 import { h, flag, money, pct, tone, spark, nationName, regionName, troops } from '../dom.js';
 import { RESOURCE_INFO } from '../../engine/data/regions.js';
 import { describeProposal } from '../describe.js';
+import { decisionCards } from '../decisions.js';
 
 export function overview(ctx) {
   const s = ctx.state;
@@ -28,6 +29,7 @@ export function overview(ctx) {
         kpi('World standing', `${Math.round(me.rep)}`, me.rep < 25 ? 'pariah' : me.rep > 65 ? 'respected' : 'mixed'),
         kpi('Armed forces', troops(me.troops), me.nukes ? `${me.nukes} warheads` : `${me.mob ? ['', 'partial', 'full'][me.mob] + ' mobilisation' : 'peacetime'}`),
       )),
+    decisionCards(ctx),
     h('div.section', h('h3', 'Needs your attention'), warnings(ctx)),
     inbox(ctx),
     h('div.section',
@@ -63,9 +65,23 @@ function warnings(ctx) {
     if ((me.demand[r] ?? 0) > 0 && weeks < 3 && !(me.short[r] > 0.02)) add('', `${RESOURCE_INFO[r].name} reserves are down to ${weeks.toFixed(1)} weeks.`, () => ctx.go('economy', 'resources'));
   }
   if (me.infl > Math.max(8, me.base.infl + 4)) add('', `Inflation is ${pct(me.infl)}. Raising interest rates or cutting the deficit would cool it.`, () => ctx.go('economy'));
-  if (me.debtRatio > 130 && me.deficit > 3) add('', `Debt is ${Math.round(me.debtRatio)}% of GDP and rising: borrowing costs will climb.`, () => ctx.go('economy'));
+  const lim = me.debtLimit ?? 150;
+  if (me.debtRatio > lim * 0.85 && me.deficit > 3 && !me.finance?.debtCrisis) add(me.debtRatio > lim * 1.05 ? 'bad' : '', `Debt is ${Math.round(me.debtRatio)}% of GDP, near the ${Math.round(lim * 1.15)}% the markets will lend against while we keep borrowing (deficit ${pct(me.deficit)}). Cut the deficit below 3% to stay safe.`, () => ctx.go('economy', 'markets'));
   if (me.stability < 30) add('bad', `Stability is ${Math.round(me.stability)}. Protests and government crises are likely.`);
   if (me.approval < 30 && me.electionWeek != null && me.electionWeek - s.week < 26) add('bad', `An election is ${me.electionWeek - s.week} weeks away and approval is ${Math.round(me.approval)}%.`);
+  // Markets, crises and the army
+  const f = me.finance;
+  if (f?.debtCrisis) add('bad', 'Debt crisis: the markets have stopped lending to us.', () => ctx.go('economy', 'markets'));
+  if (f?.imf) add('', `IMF programme: the deficit must come down to 3% of GDP by week ${f.imf.until} (now ${pct(me.deficit)}).`, () => ctx.go('economy', 'markets'));
+  if (f?.defaulted) add('bad', `In default until week ${f.defaulted.until}: we can't borrow.`, () => ctx.go('economy', 'markets'));
+  if (f && f.fx < f.fxRef * 0.85) add('', `Our currency has fallen ${Math.round((1 - f.fx / f.fxRef) * 100)}% below its average: imports are getting dearer.`, () => ctx.go('economy', 'markets'));
+  if (me.power?.plot) add('bad', 'Officers are plotting a coup against us.', () => ctx.go('government', 'power'));
+  else if ((me.power?.risk ?? 0) >= 40) add('', `Coup risk is ${me.power.risk}%. Keep the army on side.`, () => ctx.go('government', 'power'));
+  for (const x of s.crises?.active ?? []) {
+    if (x.kind === 'pandemic' && (x.inf[s.me] ?? 0) > 0.5) add('bad', `The ${x.name} pandemic: ${x.inf[s.me]}% of our people are infected.`, () => ctx.go('world', 'crises'));
+    if (x.kind === 'famine' && x.country === s.me) add('bad', 'Famine: our people are starving.', () => ctx.go('world', 'crises'));
+    if (x.kind === 'crash' && x.hit >= 45) add('', `${x.name[0].toUpperCase()}${x.name.slice(1)} is dragging our economy down.`, () => ctx.go('world', 'crises'));
+  }
   if (me.readiness < 1) add('', 'Defence funds ran out: military readiness is falling. Raise defence spending.', () => ctx.go('economy'));
   const enemies = s.wars.filter((w) => w.a === s.me || w.b === s.me);
   for (const w of enemies) {
@@ -124,10 +140,10 @@ export function proposalCard(ctx, p) {
 }
 
 function kindClass(kind) {
-  return { good: 'good', bad: 'bad', war: 'bad', nuclear: 'bad', warn: 'warn', proposal: 'accent', un: 'accent' }[kind] ?? '';
+  return { good: 'good', bad: 'bad', war: 'bad', nuclear: 'bad', warn: 'warn', proposal: 'accent', un: 'accent', decision: 'warn' }[kind] ?? '';
 }
 function labelOf(kind) {
-  return { good: 'Good news', bad: 'Setback', war: 'War', nuclear: 'Nuclear', warn: 'Notice', proposal: 'Proposal', un: 'UN', info: 'Report' }[kind] ?? 'Report';
+  return { good: 'Good news', bad: 'Setback', war: 'War', nuclear: 'Nuclear', warn: 'Notice', proposal: 'Proposal', un: 'UN', info: 'Report', decision: 'Decision' }[kind] ?? 'Report';
 }
 
 export { regionName };

@@ -50,7 +50,9 @@ export function upkeep(s, c) {
   const gear = 0.4 + 0.6 * Math.min(1, pc / 50);
   const yearly = c.troops * perK
     + gear * (c.tanks * 0.0012 + c.aircraft * 0.012 + c.ships * 0.07 + c.carriers * 1.2 + c.nukes * 0.005 + c.missiles * 0.0003);
-  return (yearly * 1.6 / 52) * (enemiesOf(s, c.id).size ? 1.3 : 1);
+  // upkeepScale: set at the start so each country's real defence budget pays for its real forces (conscript
+  // armies and cheap local labour cost less than the formula says)
+  return (yearly * 1.6 / 52) * (enemiesOf(s, c.id).size ? 1.3 : 1) * (c.upkeepScale ?? 1);
 }
 
 function nuclearShare(c) {
@@ -359,6 +361,8 @@ function growthRate(s, c, world, mods, drag) {
   g -= 0.12 * (c.carbonEffect ?? 0);
   g -= drag;
   for (const m of mods) if (m.kind === 'growth') g += m.value;
+  // The markets (finance.js) and the world's crises (crises.js)
+  g += (c.fin?.growth ?? 0) + (c.cx?.growth ?? 0);
   return clamp(g, -15, 15);
 }
 
@@ -388,10 +392,16 @@ function budget(s, c) {
   if (c.treasury < 0) {
     c.debt += -c.treasury;
     c.treasury = 0;
+    // A country in default can't borrow: the shortfall forces cuts to civil spending, week by week
+    if (c.defaulted) {
+      for (const k of ['infra', 'edu', 'health', 'welfare', 'research']) sp[k] = Math.round(sp[k] * 0.97 * 100) / 100;
+      c.approval = Math.max(0, c.approval - 0.4);
+    }
   }
-  const risk = Math.max(0, debtRatio(c) - debtLimit(c)) * 0.04 + (c.stability < 30 ? 1.5 : 0);
+  const risk = Math.max(0, debtRatio(c) - debtLimit(c)) * 0.04 + (c.stability < 30 ? 1.5 : 0) + (c.fin?.spread ?? 0);
   c.bond += (Math.min(25, 0.35 * c.rate + 1.5) + risk - c.bond) * 0.01;
-  c.deficit = ((civil + defence + interest - revenue) * 52 / y) * 100;
+  // Forces that cost more than the defence budget are paid for by borrowing: that is deficit too
+  c.deficit = ((civil + Math.max(defence, keep) + interest - revenue) * 52 / y) * 100;
   c.base.deficit ??= c.deficit;
   c.revenue = revenue * 52;
   c.spending = (civil + defence + interest) * 52;
@@ -416,6 +426,9 @@ function prices(s, c) {
   let target = b.infl + 0.35 * ((c.deficit ?? 0) - (b.deficit ?? 0)) - 0.5 * (c.rate - b.rate)
     + 14 * shortage + 2 * (m.oil - 1) + 1.5 * (m.food - 1) + 1.5 * c.mob;
   if (c.stimulus && c.stimulus.until > s.week) target += c.stimulus.boost * 0.8;
+  // A falling currency makes imports dearer; printing money does the rest
+  target += (c.fin?.infl ?? 0) + (c.cx?.infl ?? 0);
+  for (const m of s.modifiers) if (m.kind === 'infl' && m.cid === c.id) target += m.value;
   c.infl += (Math.max(-3, target) - c.infl) * 0.06;
 }
 
@@ -460,6 +473,7 @@ function opinion(s, c, mods) {
   if (c.ration) target -= 6;
   if (c.martial) target -= 15;
   for (const m of mods) if (m.kind === 'approval') target += m.value;
+  target += (c.fin?.approval ?? 0) + (c.cx?.approval ?? 0);
   c.approval = clamp(c.approval + (clamp(target, 2, 95) - c.approval) * 0.06, 0, 100);
   c.rally *= 0.97;
   c.boost *= 0.94;
@@ -468,6 +482,7 @@ function opinion(s, c, mods) {
   let stab = 0.6 * c.approval + (autocracy ? 32 : c.gov === 'hybrid' ? 26 : 22) + (c.martial ? 15 : 0) - occupied * 20 - 20 * (c.short.food ?? 0)
     - (c.protestDrag ?? 0) * 0.8 - (c.civilWar ? 15 : 0);
   for (const m of mods) if (m.kind === 'stability') stab += m.value;
+  stab += c.cx?.stability ?? 0;
   c.stability = clamp(c.stability + (clamp(stab, 0, 100) - c.stability) * 0.05, 0, 100);
   c.rep += (b.rep - c.rep) * 0.004;
 

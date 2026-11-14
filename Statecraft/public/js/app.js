@@ -1,5 +1,6 @@
 // Statecraft's interface: menus, the lobby, the situation room and the final verdict.
 
+import { openDecision } from './ui/decisions.js';
 import { $, h, flag, money, pct, nationName, regionName, colorOf, RES_COLORS, RES_LETTERS } from './ui/dom.js';
 import { RemoteLink, LocalLink, hasSavedRoom, loadSolo, clearSolo, serverBase } from './net.js';
 import { WorldMap, INDEX, CAPITALS } from './ui/map.js';
@@ -250,7 +251,7 @@ function quickOrder(id) {
 ctx.chat = new Chat(ctx);
 const mapReady = map.load();
 // A handle for automated tests and the curious; the server still checks every command
-window.statecraft = { ctx, map };
+window.statecraft = { ctx, map, app };
 
 /* ---------- Screens ---------- */
 
@@ -342,6 +343,13 @@ function onMessage(msg) {
 }
 
 function onState(s) {
+  // Other countries arrive as changes since the last update: fold them into what we already know
+  if (s.countriesDelta) {
+    const known = app.state?.countries ?? {};
+    const merged = {};
+    for (const id of new Set([...Object.keys(known), ...Object.keys(s.countries ?? {})])) merged[id] = { ...known[id], ...s.countries[id] };
+    s.countries = merged;
+  }
   const first = !app.state;
   const ticked = app.state && s.week !== app.state.week;
   if (ticked || first) app.lastTick = performance.now();
@@ -413,7 +421,7 @@ function frontNews(m, me) {
 function onAlert(item) {
   if (app.state) frontNews(item, app.state.me);
   const kind = item.kind === 'war' ? 'war' : item.kind;
-  const go = item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
+  const go = item.decision ? () => openDecision(ctx, item.decision) : item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
   toast(item.text, kind, go);
 }
 
@@ -467,7 +475,7 @@ function renderGame() {
 function renderRail() {
   const s = app.state;
   const badges = {
-    overview: s ? s.proposals.filter((p) => p.to === s.me).length : 0,
+    overview: s ? s.proposals.filter((p) => p.to === s.me).length + (s.you?.decisions?.length ?? 0) : 0,
     diplomacy: s ? s.un.filter((r) => !r.done && !r.votes[s.me]).length : 0,
     government: s?.you ? (s.you.protests ?? []).filter((p) => p.size >= 30).length + (s.you.civilWar ? 1 : 0) : 0,
     spies: s?.you ? (s.you.reports ?? []).filter((r) => (r.act === 'plan' && !r.used && r.w >= s.week - 8) || r.w >= s.week - 1).length : 0,
