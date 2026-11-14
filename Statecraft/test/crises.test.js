@@ -226,3 +226,25 @@ test('well-run countries rarely hit a debt crisis: two years of peace and no cou
   assert.ok(!s.countries.deu.debtCrisis, 'a leader who keeps the starting budget is safe');
   assert.ok(Object.values(s.countries).filter((c) => !c.exile).every((c) => c.deficit < 12 || fought.has(c.id)), 'no runaway deficits in peacetime');
 });
+
+test('a purge stops plots for six months and can\'t be repeated in that time', () => {
+  const g = Game.create({ seed: 4 });
+  g.setLeader('egy', 'Tester');
+  const c = g.s.countries.egy;
+  g.tick();
+  c.coup.plot = { since: g.s.week, known: true };
+  (c.decisions ??= []).push({ id: 'dx', key: 'plot', title: 'Officers are plotting', options: [{ id: 'watch' }], since: g.s.week, until: g.s.week + 2 });
+  assert.equal(g.command('egy', { type: 'purge' }), null);
+  assert.equal(c.coup.plot, null);
+  assert.ok(!c.decisions.some((d) => d.key === 'plot'), 'the plot decision goes with the plot');
+  assert.match(g.command('egy', { type: 'purge' }), /purged recently/);
+  const until = c.army.purgedUntil;
+  for (let w = 0; w < 20; w++) {
+    c.stability = 10; c.approval = 5; c.army.loyalty = 10;
+    g.tick();
+    assert.equal(c.coup.plot, null, `no plot in week ${g.s.week}`);
+    assert.ok(!c.regime || c.regime.kind !== 'junta', 'no coup');
+  }
+  assert.ok(g.s.week < until);
+  assert.ok(c.coup.why.some(([, t]) => /purged/.test(t)), 'the purge shows among the reasons');
+});

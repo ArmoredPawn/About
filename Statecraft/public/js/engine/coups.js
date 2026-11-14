@@ -76,12 +76,23 @@ function risk(s, c) {
   if (c.regime && s.week - c.regime.since < 52) r += add(10, 'a recent change of government');
   if (c.backing && c.backing.until > s.week) r += add(c.backing.power, 'foreign money for the plotters');
   if (c.regime?.kind === 'junta') r += add(-6, 'the generals already rule (but rivals among them may strike)');
+  if (purged(s, c)) r += add(-30, `the officer corps was purged (quiet until week ${c.army.purgedUntil})`);
   c.coup.risk = Math.round(clamp(r, 0, 100));
   c.coup.why = why.sort((a, b) => Math.abs(b[0]) - Math.abs(a[0]));
 }
 
+const purged = (s, c) => (c.army.purgedUntil ?? -1) > s.week;
+
+// Drops a plot and the decision about it that is waiting for the leader
+function endPlot(c) {
+  c.coup.plot = null;
+  if (c.decisions) c.decisions = c.decisions.filter((d) => d.key !== 'plot');
+}
+
 function plots(s, c) {
   const k = c.coup;
+  // After a purge no officer dares to plot
+  if (purged(s, c)) { if (k.plot) endPlot(c); return; }
   if (!k.plot) {
     if (k.risk >= 40 && chance(s, 0.05 + (k.risk - 40) / 300)) {
       k.plot = { since: s.week, known: chance(s, SPOTS_PLOTS[c.security] ?? 0.5) };
@@ -121,15 +132,17 @@ export function payGenerals(s, c) {
   c.treasury -= cost - fromMil;
   c.army.paidUntil = s.week + 26;
   c.army.loyalty = Math.min(100, c.army.loyalty + 8);
-  if (c.coup.plot && chance(s, 0.6)) c.coup.plot = null;
+  if (c.coup.plot && chance(s, 0.6)) endPlot(c);
   return null;
 }
 
 export function purge(s, c) {
   initCoups(c);
+  if (purged(s, c)) return `The officer corps was purged recently. No one will move against us until week ${c.army.purgedUntil}.`;
   c.army.purgedUntil = s.week + 26;
   c.army.loyalty = Math.min(100, c.army.loyalty + 15);
-  c.coup.plot = null;
+  endPlot(c);
+  risk(s, c);
   for (const a of Object.values(s.armies)) if (a.owner === c.id) a.org = Math.max(10, a.org - 25);
   if (c.gov === 'democracy') c.approval = Math.max(0, c.approval - 3);
   news(s, `${c.name} arrests dozens of senior officers accused of plotting a coup.`, 'unrest', [c.id]);

@@ -35,7 +35,7 @@ export function power(ctx) {
       h('h3', 'Keep the army on side'),
       h('div.actions',
         h('button.btn.small.primary', { disabled: (p.paidUntil ?? -1) > s.week, onclick: () => pay(ctx) }, (p.paidUntil ?? -1) > s.week ? `Paid until week ${p.paidUntil}` : `Pay the generals (${money(me.gdp * 0.004)})…`),
-        h('button.btn.small.warn', { onclick: () => purge(ctx) }, 'Purge the officer corps…'),
+        h('button.btn.small.warn', { disabled: (p.purgedUntil ?? -1) > s.week, onclick: () => purge(ctx) }, (p.purgedUntil ?? -1) > s.week ? `Purged: quiet until week ${p.purgedUntil}` : 'Purge the officer corps…'),
         p.regime?.kind === 'junta' ? h('button.btn.small', { onclick: () => civilian(ctx) }, 'Hand power back to civilians…') : null)),
     p.backing.length ? h('div.section', h('h3', 'Plotters we are funding'),
       h('div.list', p.backing.map((b) => h('div.item', h('div.item-head', flag(b.target), h('span.name', nationName(s, b.target)), h('span.muted.small', { style: { marginLeft: 'auto' } }, `until week ${b.until}`)),
@@ -49,7 +49,9 @@ async function pay(ctx) {
 }
 
 async function purge(ctx) {
-  if (await confirmBox('Purge the officer corps?', 'Arrest suspect officers and promote loyalists. No one will dare move for six months, but our armies lose a quarter of their organisation, and in a democracy it is unpopular.', { danger: true, ok: 'Purge' })) ctx.send({ type: 'purge' });
+  if (await confirmBox('Purge the officer corps?', 'Arrest suspect officers and promote loyalists. No one will dare move for six months, but our armies lose a quarter of their organisation, and in a democracy it is unpopular.', { danger: true, ok: 'Purge' })) {
+    if (!(await ctx.send({ type: 'purge' }))) ctx.hint('The officer corps has been purged. No plots for six months.', 'good', 4000);
+  }
 }
 
 async function civilian(ctx) {

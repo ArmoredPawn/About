@@ -44,6 +44,7 @@ function budget(ctx) {
       ...lines.flatMap(([label, v]) => [h('span.muted', label), h('span.num', `−${money(v)}`)]),
       h('span.muted', 'Interest on debt'), h('span.num', `−${money(interest)}`),
       h('span.total', deficit > 0 ? 'Deficit (borrowed)' : 'Surplus'), h('span.num.total', { class: deficit > y * 0.06 ? 'bad' : deficit < 0 ? 'good' : '' }, `${money(Math.abs(deficit))} · ${pct(Math.abs(deficit / y) * 100)} of GDP`),
+      runway(me, { weekly: deficit / 52, spendShare: (spending / y) * 100, tax: draft.tax }),
     );
   };
   let timer = null;
@@ -84,6 +85,32 @@ function budget(ctx) {
       ),
       h('p.muted.small', { style: { marginTop: '8px' } }, 'Cutting schools, hospitals or pensions below their 2025 level brings the people affected onto the streets. Martial law, campaigns and elections are under Government.')),
   );
+}
+
+// What the budget means week to week: how long the reserves last before every shortfall goes on the debt.
+// Worked out from the sliders as they move, so the leader sees the effect before letting go.
+function runway(me, { weekly, spendShare, tax }) {
+  const weeksText = (w) => (w >= 104 ? `${Math.floor(w / 52)} years` : `${w} week${w === 1 ? '' : 's'}`);
+  if (weekly <= 0) {
+    return h('div.runway.good',
+      h('div.runway-head', h('span', 'Reserves'), h('b', `+${money(-weekly)} a week`)),
+      bar(1, 1, 'good'),
+      h('p', `The budget pays for itself: ${money(me.treasury)} in reserves and growing.`));
+  }
+  const empty = me.treasury <= 0;
+  const weeks = empty ? 0 : Math.max(1, Math.round(me.treasury / weekly));
+  const tone = weeks < 13 ? 'bad' : weeks < 52 ? 'warn' : 'good';
+  const headline = empty ? 'Empty' : weeks > 520 ? 'Lasts 10+ years' : `${weeksText(weeks)} left`;
+  return h('div.runway', { class: tone },
+    h('div.runway-head', h('span', 'Reserves'), h('b', headline)),
+    // Full bar: a year of shortfalls covered
+    bar(empty ? 0 : weeks, 52, tone),
+    h('p', empty
+      ? `All ${money(weekly)} a week is borrowed, on top of ${money(me.debt)} of debt.`
+      : `−${money(weekly)} a week from ${money(me.treasury)}. After that, every week's shortfall is borrowed and adds to the ${money(me.debt)} debt.`),
+    tone === 'bad' && spendShare > tax + 6
+      ? h('p.runway-tip', `Spending is ${Math.round(spendShare)}% of GDP against ${Math.round(tax)}% in tax. Bring the sliders down toward the tax line to stop the drain.`)
+      : null);
 }
 
 function action(title, text, label, onClick, disabledNote) {
