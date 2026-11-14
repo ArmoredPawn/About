@@ -449,3 +449,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .item.decision .item-head { flex-wrap: wrap; }
 .item.decision .name { min-width: 0; flex: 1 1 60%; white-space: normal; }
 .item.decision .meta { overflow-wrap: anywhere; }
+
+/* Trade at sea: each cargo's route, and its ship */
+.map .trade-lane { fill: none; stroke-linecap: round; opacity: 0.6; pointer-events: stroke; }
+.map .trade-lane.ours { opacity: 0.85; }
+.map .trade-lane.deal { opacity: 0.25; }
+.map .trade-ship { opacity: 0.7; cursor: default; }
+.map .trade-ship.ours { opacity: 1; }
+.map .trade-flow { fill: none; stroke-linecap: butt; opacity: 0.55; pointer-events: stroke; animation: trade-flow 1.6s linear infinite; }
+.map .trade-flow.ours { opacity: 0.85; }
+.map .trade-flow:hover { opacity: 0.9; }
+@keyframes trade-flow { to { stroke-dashoffset: calc(var(--dash) * -1); } }
+@media (prefers-reduced-motion: reduce) { .map .trade-flow { animation: none; } }

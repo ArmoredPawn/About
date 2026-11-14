@@ -534,8 +534,9 @@ function renderMapTools() {
     ? h('select', { 'aria-label': 'Resource', onchange: (e) => ctx.mapMode('resources', e.target.value) }, RESOURCES.map((r) => h('option', { value: r, selected: r === res }, RESOURCE_INFO[r].name)))
     : null;
   // What the map shows on top of the land
-  app.ui.layers ??= { armies: true, fleets: true, pipelines: true };
-  const layers = h('div.seg', { title: 'Show or hide on the map' }, [['armies', 'Armies'], ['fleets', 'Fleets'], ['pipelines', 'Pipelines']].map(([k, label]) => h('button', {
+  app.ui.layers ??= { armies: true, fleets: true, pipelines: true, trade: true };
+  app.ui.layers.trade ??= true;
+  const layers = h('div.seg', { title: 'Show or hide on the map' }, [['armies', 'Armies'], ['fleets', 'Fleets'], ['trade', 'Trade'], ['pipelines', 'Pipelines']].map(([k, label]) => h('button', {
     'aria-pressed': String(app.ui.layers[k]),
     onclick: () => { app.ui.layers[k] = !app.ui.layers[k]; map.setLayers(app.ui.layers); renderMapTools(); },
   }, label)));
@@ -544,6 +545,7 @@ function renderMapTools() {
   const legend = [];
   const item = (color, text, hatch) => h('div.row', h('span.swatch', { style: { background: hatch ? `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` : color } }), text);
   if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#6f5a6e', 'Muted colours: the 150 smaller nations, always run by the computer'));
+  if (mode === 'political' && app.ui.layers.trade) legend.push(h('div.row', h('span.swatch', { style: { background: 'repeating-linear-gradient(90deg, #d89a3a 0 4px, transparent 4px 7px)' } }), 'Sea lanes: the world’s main trade, coloured by what it carries (thicker = more). Dots are cargoes at sea'));
   if (mode === 'alliances') legend.push(item('#8f95ff', 'You'), item('#4f8fe0', 'Military allies'), item('#3f9e7a', 'Trade partners / friendly'), item('#e5484d', 'At war with you'), item('#b0444a', 'Hostile'));
   if (mode === 'resources') legend.push(h('div.row', h('span.res-dot', { style: { background: RES_COLORS[res], width: '14px', height: '14px', fontSize: '7px' } }, RES_LETTERS[res]), `${RESOURCE_INFO[res].name} (${RESOURCE_INFO[res].unit}). Brighter = more`), h('div.faint', 'Hollow circles: untapped reserves to develop'));
   if (mode === 'economy') legend.push(item('#7fb6ff', 'Economic output per area'));

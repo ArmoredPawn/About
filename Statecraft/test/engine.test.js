@@ -689,3 +689,18 @@ test('every other nation is a country the computer runs: blocs, protectors and w
   assert.ok(Object.values(s.alliances).some((al) => al.kind === 'military' && al.members.some((m) => s.countries[m]?.minor) && al.members.some((m) => !s.countries[m]?.minor)), 'a smaller nation found a protector');
   assert.ok(!s.news.some((n) => /goes to the polls|Election upset/.test(n.text) && n.about.every((id) => s.countries[id]?.minor)), 'their routine elections stay out of the news');
 });
+
+test('the world\'s main sea trade is estimated from who exports and imports what, and wars cut it', () => {
+  const g = game(15, 'usa');
+  for (let i = 0; i < 4; i++) g.tick();
+  const flows = g.s.tradeFlows;
+  assert.ok(flows.length >= 20, 'dozens of flows');
+  assert.ok(flows.some(([a, , r]) => r === 'oil' && ['sau', 'rus', 'irq', 'are', 'irn'].includes(a)), 'oil from the big exporters');
+  for (const [a, b, , v] of flows) assert.ok(a !== b && v > 0 && g.s.countries[a] && g.s.countries[b]);
+  const [a, b] = flows[0];
+  g.setLeader(a, 'X');
+  assert.equal(g.command(a, { type: 'war', target: b }), null);
+  g.tick();
+  assert.ok(!g.s.tradeFlows.some(([x, y]) => (x === a && y === b) || (x === b && y === a)), 'no trade between countries at war');
+  assert.equal(g.view('usa').trade.length, g.s.tradeFlows.length);
+});

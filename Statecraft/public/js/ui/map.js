@@ -4,10 +4,10 @@
 // plays out continuously rather than in jumps.
 
 import { GEO, ORDER, MAP_SIZE } from '../engine/data/geo.js';
-import { PROVINCES } from '../engine/data/regions.js';
+import { PROVINCES, RESOURCE_INFO } from '../engine/data/regions.js';
 import { CHOKEPOINTS } from '../engine/data/world.js';
 import { route } from '../engine/military.js';
-import { NODES } from '../engine/navy.js';
+import { NODES, PORTS, seaRoute, mapDistance } from '../engine/navy.js';
 import { PIPELINES, PIPELINE_PROJECTS } from '../engine/data/energy.js';
 import { riskOf } from '../engine/climate.js';
 
@@ -35,7 +35,8 @@ export class WorldMap {
     this.fleetNodes = new Map();
     this.selectedFleet = null;
     // What the map shows on top of the land: switched in the map tools
-    this.layers = { armies: true, fleets: true, pipelines: true };
+    this.layers = { armies: true, fleets: true, pipelines: true, trade: true };
+    this.tradeShips = new Map();
     this.fronts = new Map();
     this.samples = new Map();
     this.enemyKey = '';
@@ -72,9 +73,10 @@ export class WorldMap {
     this.gArmies = svg('g');
     this.gSeas = svg('g', { class: 'seas' });
     this.gLines = svg('g', { class: 'pipelines' });
+    this.gTrade = svg('g', { class: 'trade' });
     this.gFleets = svg('g');
     this.gPreview = svg('g', { 'pointer-events': 'none' });
-    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gLines, this.gRes, this.gSeas, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview);
+    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gLines, this.gTrade, this.gRes, this.gSeas, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview);
     for (const id of ORDER) {
       const u = svg('path', { d: this.d[id], class: 'region', 'data-id': id, fill: NEUTRAL });
       this.uses.set(id, u);
@@ -97,6 +99,7 @@ export class WorldMap {
     this.#drawArmies();
     this.#drawFleets();
     this.#drawPipelines();
+    if (!live) this.#drawTrade();
     this.#drawBattles();
     this.#drawOverlays();
     this.#animate();
@@ -122,12 +125,120 @@ export class WorldMap {
     this.gLines.replaceChildren(...out);
   }
 
+  // Cargoes at sea: each shipment's real route between the seller's and the buyer's ports (round the land and
+  // through the straits), coloured by what it carries, with the ship where it is now. Our own trade stands out;
+  // our standing resource deals show as faint lanes.
+  #drawTrade() {
+    const s = this.state;
+    if (!s?.shipments) return;
+    const unit = this.#unit();
+    const portsOf = new Map();
+    const ports = (cid) => {
+      if (!portsOf.has(cid)) {
+        const list = [];
+        for (const id of ORDER) {
+          if (!PORTS[id]) continue;
+          const r = this.#region(id);
+          if (r?.ctrl === cid) list.push([id, r.gdp]);
+        }
+        portsOf.set(cid, list.sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id]) => id));
+      }
+      return portsOf.get(cid);
+    };
+    // The pair of ports closest to each other, and the sea route between them (remembered: it doesn't change)
+    this.tradeRoutes ??= new Map();
+    const lane = (a, b) => {
+      let best = null;
+      for (const pa of ports(a)) for (const pb of ports(b)) {
+        const d = mapDistance(PORTS[pa][0], PORTS[pa][1], PORTS[pb][0], PORTS[pb][1]);
+        if (!best || d < best[2]) best = [pa, pb, d];
+      }
+      if (!best) return null;
+      const key = `${best[0]}>${best[1]}`;
+      if (!this.tradeRoutes.has(key)) {
+        const from = PORTS[best[0]];
+        const way = seaRoute(from, PORTS[best[1]]);
+        if (!way) { this.tradeRoutes.set(key, null); return null; }
+        const pts = [from, ...way];
+        const cum = [0];
+        for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        this.tradeRoutes.set(key, { pts, cum });
+      }
+      return this.tradeRoutes.get(key);
+    };
+    const at = (r, t) => {
+      const want = r.cum[r.cum.length - 1] * Math.max(0, Math.min(1, t));
+      let i = 1;
+      while (i < r.cum.length - 1 && r.cum[i] < want) i++;
+      const seg = r.cum[i] - r.cum[i - 1] || 1;
+      const k = (want - r.cum[i - 1]) / seg;
+      const [x0, y0] = r.pts[i - 1];
+      const [x1, y1] = r.pts[i];
+      return [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k];
+    };
+    const wrap = (x) => ((x % W) + W) % W;
+    const path = (r) => [0, -W, W].map((shift) => r.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
+    const lines = [];
+    // The world's main trade: a lane per big flow, thicker for more, its dashes flowing toward the buyer
+    const money = (v) => (v >= 1 ? `$${Math.round(v)}B` : `$${Math.round(v * 1000)}M`);
+    for (const [from, to, res, value] of s.trade ?? []) {
+      const r = lane(from, to);
+      if (!r) continue;
+      const ours = from === s.me || to === s.me;
+      const w = Math.max(1.4, Math.min(6, Math.sqrt(value) * 0.5));
+      lines.push(svg('path', {
+        class: `trade-flow${ours ? ' ours' : ''}`, d: path(r), stroke: RES_COLORS[res] ?? '#9aa4b8', 'stroke-width': w / unit,
+        'stroke-dasharray': `${6 / unit} ${6 / unit}`, style: `--dash:${12 / unit}px`,
+      }, svg('title', {}, `${s.countries[from]?.name ?? from} → ${s.countries[to]?.name ?? to}: ${RESOURCE_INFO[res]?.name ?? res}, about ${money(value)} a year`)));
+    }
+    const seen = new Set();
+    for (const sh of s.shipments) {
+      if (sh.mode !== 'sea') continue;
+      const r = lane(sh.seller, sh.buyer);
+      if (!r) continue;
+      const ours = sh.buyer === s.me || sh.seller === s.me;
+      const color = RES_COLORS[sh.res] ?? '#9aa4b8';
+      const info = RESOURCE_INFO[sh.res];
+      const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.covert ? ' (covert)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
+      lines.push(svg('path', {
+        class: `trade-lane${ours ? ' ours' : ''}`, d: path(r), stroke: color, 'stroke-width': (ours ? 1.8 : 1.1) / unit,
+        'stroke-dasharray': sh.covert ? `${2 / unit} ${3 / unit}` : `${5 / unit} ${4 / unit}`,
+      }, svg('title', {}, title)));
+      // The ship, gliding along the route over the week
+      seen.add(sh.id);
+      const p = at(r, (sh.total - sh.left) / Math.max(1, sh.total));
+      let n = this.tradeShips.get(sh.id);
+      if (!n) {
+        n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}` });
+        this.tradeShips.set(sh.id, n);
+      }
+      const jump = n.dataset.x != null && Math.abs(Number(n.dataset.x) - wrap(p[0])) > W / 2;
+      n.style.transition = jump || n.dataset.x == null ? 'none' : `transform ${Math.round((this.tickMs ?? 9000) * 0.9)}ms linear`;
+      n.style.transform = `translate(${wrap(p[0])}px, ${p[1]}px)`;
+      n.dataset.x = wrap(p[0]);
+      n.replaceChildren(
+        svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
+        svg('title', {}, title));
+    }
+    for (const [id, n] of this.tradeShips) if (!seen.has(id)) { n.remove(); this.tradeShips.delete(id); }
+    // Our standing resource deals: the lanes their cargoes use
+    for (const t of s.treaties ?? []) {
+      if (t.kind !== 'deal' || !(t.a === s.me || t.b === s.me)) continue;
+      const r = lane(t.a, t.b);
+      if (!r) continue;
+      lines.push(svg('path', { class: 'trade-lane deal', d: path(r), stroke: RES_COLORS[t.res] ?? '#9aa4b8', 'stroke-width': 1.2 / unit },
+        svg('title', {}, `Standing deal: ${s.countries[t.a]?.name} sells ${s.countries[t.b]?.name} ${RESOURCE_INFO[t.res]?.name ?? t.res} until week ${t.until}`)));
+    }
+    this.gTrade.replaceChildren(...lines, ...this.tradeShips.values());
+  }
+
   setLayers(layers) {
     this.layers = { ...this.layers, ...layers };
     this.gArmies.style.display = this.layers.armies ? '' : 'none';
     this.gArrows.style.display = this.layers.armies ? '' : 'none';
     this.gFleets.style.display = this.layers.fleets ? '' : 'none';
     this.gLines.style.display = this.layers.pipelines ? '' : 'none';
+    this.gTrade.style.display = this.layers.trade ? '' : 'none';
   }
 
   setMode(mode, resource) {
@@ -708,7 +819,7 @@ export class WorldMap {
     this.el.classList.toggle('zoomed', this.#unit() >= 2.4);
     if (this.state) {
       cancelAnimationFrame(this.raf);
-      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawBattles(); this.#drawOverlays(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
+      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawBattles(); this.#drawOverlays(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
     }
   }
 

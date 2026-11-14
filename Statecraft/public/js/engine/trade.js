@@ -442,6 +442,7 @@ export function patrolBlocks(s, key, nationId) {
 /* ---------- The weekly tick ---------- */
 
 export function tradeTick(s) {
+  s.tradeFlows = worldFlows(s);
   s.shipments ??= [];
   for (const st of Object.values(s.chokepoints)) st.patrols ??= {};
   aiShipments(s);
@@ -580,3 +581,53 @@ function aiShipments(s) {
 }
 
 export { CHOKEPOINTS };
+
+/* ---------- The world's main trade flows (for the map) ---------- */
+
+// The world market is one pool, so who ships to whom is estimated: each exporter's sales go to the importers in
+// proportion to what they buy, more to nearer ones, never to an enemy, a country it sanctions or one under an oil
+// embargo, and not by sea to a neighbour (that trade goes overland). Returns the biggest flows by value:
+// [from, to, resource, $ billions a year].
+export function worldFlows(s, limit = 48) {
+  const live = Object.values(s.countries).filter((c) => !c.exile && c.net);
+  // Where each country is: its richest province
+  const where = new Map();
+  for (const reg of Object.values(s.regions)) {
+    const w = where.get(reg.ctrl);
+    if (!w || reg.gdp > w.gdp) where.set(reg.ctrl, { gdp: reg.gdp, g: GEO[reg.id] });
+  }
+  const neighbours = new Map();
+  for (const reg of Object.values(s.regions)) {
+    for (const id of GEO[reg.id].adj) {
+      const b = s.regions[id]?.ctrl;
+      if (b && b !== reg.ctrl) (neighbours.get(reg.ctrl) ?? neighbours.set(reg.ctrl, new Set()).get(reg.ctrl)).add(b);
+    }
+  }
+  const blocked = (a, b, r) => atWar(s, a, b) || s.sanctions[`${a}>${b}`] || s.sanctions[`${b}>${a}`] || neighbours.get(a)?.has(b)
+    || (r === 'oil' && s.cartel?.embargo?.includes(b) && s.cartel.members?.includes(a));
+  const out = [];
+  for (const r of RESOURCES) {
+    const value = RESOURCE_INFO[r].value * (s.market.price[r] ?? 1); // $B a year per unit of weekly volume
+    const sellers = live.filter((c) => (c.net[r] ?? 0) > 0);
+    const buyers = live.filter((c) => (c.net[r] ?? 0) < 0);
+    const flows = [];
+    for (const e of sellers) {
+      const pe = where.get(e.id)?.g;
+      if (!pe) continue;
+      const weights = [];
+      let total = 0;
+      for (const i of buyers) {
+        const pi = where.get(i.id)?.g;
+        if (!pi || blocked(e.id, i.id, r)) continue;
+        const km = Math.max(800, Math.hypot((pe.lon - pi.lon) * Math.cos(((pe.lat + pi.lat) / 2) * Math.PI / 180), pe.lat - pi.lat) * 111);
+        const w = -i.net[r] / Math.sqrt(km);
+        weights.push([i.id, w]);
+        total += w;
+      }
+      for (const [to, w] of weights) flows.push([e.id, to, r, e.net[r] * (w / total) * value]);
+    }
+    flows.sort((a, b) => b[3] - a[3]);
+    out.push(...flows.slice(0, 10));
+  }
+  return out.sort((a, b) => b[3] - a[3]).slice(0, limit).map(([a, b, r, v]) => [a, b, r, Math.round(v * 10) / 10]);
+}

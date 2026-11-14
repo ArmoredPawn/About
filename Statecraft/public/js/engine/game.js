@@ -276,7 +276,7 @@ export function view(s, cid, { gar, ranks }) {
     week: s.week, date: dateLabel(s.week), provinces: ORDER.length, over: s.over, winner: s.winner ?? null, final: s.final,
     me: cid,
     you: me ? own(s, me) : null,
-    countries, minors, regions, resources, armies, fleets, ranks, crises: crisesView(s, cid), aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
+    countries, minors, regions, resources, armies, fleets, ranks, crises: crisesView(s, cid), trade: s.tradeFlows ?? [], aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
     wars: s.wars.map((w) => ({ id: w.id, a: w.a, b: w.b, since: w.since, goal: w.goal, lossA: r1(w.lossA), lossB: r1(w.lossB) })),
     alliances: Object.values(s.alliances).filter((al) => !al.secret || !me || al.members.includes(cid) || al.members.some((m) => knows(m))),
     treaties: s.treaties.filter((t) => ['fta', 'nap', 'access', 'armistice'].includes(t.kind) || mine(t)),
