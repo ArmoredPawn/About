@@ -1,6 +1,6 @@
 // Small DOM and formatting helpers shared by the interface.
 
-import { COUNTRIES } from '../engine/data/countries.js';
+import { NATIONS as COUNTRIES } from '../engine/data/nations.js';
 import { REGION_NAMES } from '../engine/names.js';
 
 export const $ = (id) => document.getElementById(id);

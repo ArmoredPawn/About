@@ -23,7 +23,7 @@ import {
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
 import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy } from './trade.js';
-import { plant, recall, setCounterIntel, sweep } from './spies.js';
+import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
 
@@ -266,17 +266,17 @@ const HANDLERS = {
     a.name = clean;
     return null;
   },
-  missile(s, c, { region, count }) { return missileStrike(s, c, region, count); },
+  missile(s, c, { region, count, aim }) { return missileStrike(s, c, region, count, aim); },
   nuke(s, c, { region }) { return nuclearStrike(s, c, region); },
   blockade(s, c, { target }) { return recallFleets(s, c, { target }); },
   /* ---------- Navy ---------- */
-  fleetForm(s, c, { sea, ships, carriers, name }) { return formFleet(s, c, { sea, ships, carriers, name }); },
-  fleetOrder(s, c, { id, to, mission, mode, target }) { return fleetOrder(s, c, { id, to, mission, mode, target }); },
+  fleetForm(s, c, { region, sea, ships, carriers, name }) { return formFleet(s, c, { region, sea, ships, carriers, name }); },
+  fleetOrder(s, c, { id, x, y, to, mission, mode, target }) { return fleetOrder(s, c, { id, x, y, to, mission, mode, target }); },
   fleetReinforce(s, c, { id, ships, carriers }) { return reinforceFleet(s, c, { id, ships, carriers }); },
   fleetMerge(s, c, { ids }) { return mergeFleets(s, c, ids); },
   fleetDisband(s, c, { id }) { return disbandFleet(s, c, { id }); },
   fleetRename(s, c, { id, name }) { return renameFleet(s, c, { id, name }); },
-  air(s, c, { region, aircraft }) { return setAirCampaign(s, c, region, aircraft); },
+  air(s, c, { region, aircraft, mission }) { return setAirCampaign(s, c, region, aircraft, mission); },
 
   /* ---------- Diplomacy ---------- */
   war(s, c, { target, goal }) { return declareWar(s, c, target, goal, { leaveShared: true }); },
@@ -355,6 +355,7 @@ const HANDLERS = {
   spyRecall(s, c, { target }) { return recall(s, c, target); },
   counterIntel(s, c, { level }) { return setCounterIntel(s, c, level); },
   spySweep(s, c) { return sweep(s, c); },
+  intelAct(s, c, { id, action }) { return intelAction(s, c, { id, action }); },
 
   /* ---------- Science ---------- */
   research(s, c, { field }) { return startResearch(s, c, field); },

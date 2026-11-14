@@ -14,12 +14,14 @@ import {
 import { navyStep, navyTick, landingControl, crossingOdds } from './navy.js';
 import { gpsCoverage, commsReady } from './space.js';
 import { PROVINCES } from './data/regions.js';
-import { COUNTRIES } from './data/countries.js';
+import { NATIONS as COUNTRIES } from './data/nations.js';
 import { surpriseFeature } from './terrain.js';
 import { rangeProblem } from './science.js';
 
 // Every report from the front is marked as war news, so it also runs in the News section
 const alert = (s, cid, text, kind, extra = {}) => briefing(s, cid, text, kind, { front: true, ...extra });
+// Spies deep inside the enemy's government: our generals fight knowing its plans
+const knowsPlans = (s, who, enemy) => (s.countries[who]?.intel?.[enemy] ?? -1) > s.week;
 // Troop numbers as the other side would put them: to the nearest 5,000
 const approx = (k) => Math.max(1, Math.round(k / 5) * 5);
 
@@ -79,7 +81,7 @@ export function garrisons(s) {
     const enemies = enemiesOf(s, holder);
     const weights = regs.map((reg) => {
       const front = GEO[reg.id].adj.some((id) => enemies.has(s.regions[id]?.ctrl));
-      const capital = PROVINCES.find((p) => p.id === reg.id)?.capital;
+      const capital = PROVINCES.find((p) => p.id === reg.id)?.capital || reg.id === holder;
       return 1 + (front ? 5 : 0) + (capital ? 2 : 0) + (reg.owner === holder ? 0 : 0.5);
     });
     const total = weights.reduce((a, b) => a + b, 0) || 1;
@@ -141,7 +143,8 @@ export function route(s, owner, from, to, { offensive = true, maneuver = false }
       const holder = reg.ctrl;
       const terrain = terrainOf(next);
       let cost;
-      if (friendlyGround(s, owner, holder) || onSameSide(s, owner, holder) && !atWar(s, owner, holder)) cost = 0.5 * moveCost(s, id, next) / 600;
+      // Our land, an ally's, a puppet's, or a country that granted us access. Anyone else must be asked first.
+      if (friendlyGround(s, owner, holder)) cost = 0.5 * moveCost(s, id, next) / 600;
       else if (offensive && atWar(s, owner, holder)) cost = 2 * terrain.move * terrain.defend + 1;
       else continue;
       if (maneuver) cost *= 0.8;
@@ -388,27 +391,75 @@ export function mergeArmies(s, c, ids) {
 
 /* ---------- Strikes ---------- */
 
-export function missileStrike(s, c, target, count) {
+// What an air campaign is for
+export const AIR_MISSIONS = {
+  support: { name: 'Close air support', short: 'Support', note: 'Bomb the defenders of a province we are attacking: they lose organisation and men, and our attack there hits up to 25% harder.' },
+  interdict: { name: 'Interdiction', short: 'Interdict', note: 'Hit roads, rail and depots in and around the province: enemy armies there run short of supply, and fight and recover worse.' },
+  strategic: { name: 'Strategic bombing', short: 'Strategic', note: 'Wreck industry, oil fields, mines and power plants: the province produces less for the enemy\'s war.' },
+};
+// What a missile salvo is aimed at
+export const MISSILE_AIMS = {
+  army: { name: 'Troops', note: 'Strike armies and garrisons: real casualties, and the survivors lose organisation.' },
+  forts: { name: 'Fortifications', note: 'Knock out bunkers and defensive lines: the province loses fortification levels.' },
+  airbase: { name: 'Airbases', note: 'Destroy enemy aircraft on the ground.' },
+  industry: { name: 'Industry', note: 'Hit factories, oil fields and power plants: lasting damage to what the province produces.' },
+};
+
+export function missileStrike(s, c, target, count, aim = 'industry') {
   const reg = s.regions[target];
   if (!reg) return 'Pick a province.';
   if (!atWar(s, c.id, reg.ctrl)) return `You are not at war with ${nameOf(s, reg.ctrl)}.`;
+  if (!MISSILE_AIMS[aim]) aim = 'industry';
   const far = rangeProblem(s, c, target, 'missile');
   if (far) return far;
   count = Math.floor(Number(count));
   if (!(count > 0) || count > c.missiles) return `You have ${c.missiles} missiles.`;
   const def = s.countries[reg.ctrl];
-  const intercept = def ? clamp(0.055 * def.tech.missile - 0.02 * (c.tech.missile - 6), 0, 0.75) : 0.05;
-  const hits = Math.round(count * (1 - intercept) * (0.85 + rand(s) * 0.3));
-  c.missiles -= count;
+  const intercept = interceptRate(s, c, reg.ctrl);
   // Satellite navigation guides the missiles in
-  const dmg = Math.min(0.35, hits * 0.0016 * (c.tech.missile / 8) * (1 + 0.3 * gpsCoverage(s, c.id)));
-  reg.dmg = clamp(reg.dmg + dmg, 0, 0.95);
-  for (const a of Object.values(s.armies)) if (a.region === target && a.owner === reg.ctrl) a.troops = Math.max(1, a.troops - hits * 0.04);
-  const n = nation(s, reg.ctrl);
-  if (n) n.troops = Math.max(0, n.troops - hits * 0.02);
-  news(s, `${c.name} fires ${count} missiles at ${regionName(target)}. ${hits} get through${intercept > 0.2 ? ` air defences` : ''}.`, 'strike', [c.id, reg.ctrl]);
-  alert(s, reg.ctrl, `${count} missiles from ${c.name} struck ${regionName(target)}: damage now ${Math.round(reg.dmg * 100)}%.`, 'bad');
+  const hits = Math.round(count * (1 - intercept) * (0.85 + rand(s) * 0.3));
+  const accuracy = (c.tech.missile / 8) * (1 + 0.3 * gpsCoverage(s, c.id));
+  c.missiles -= count;
+  const holder = nation(s, reg.ctrl);
+  let result;
+  if (aim === 'army') {
+    // About 120 casualties a hit on troops in the open, and the shock of it
+    const armies = Object.values(s.armies).filter((a) => a.region === target && !a.sea && onSameSide(s, a.owner, reg.ctrl));
+    const killed = Math.min(hits * 0.12 * accuracy, 0.25 * (armies.reduce((t, a) => t + a.troops, 0) + 20));
+    const total = armies.reduce((t, a) => t + a.troops, 0);
+    for (const a of armies) {
+      const share = total ? a.troops / total : 0;
+      a.troops = Math.max(1, a.troops - killed * 0.8 * share);
+      a.org = Math.max(0, a.org - Math.min(25, hits * 0.4 * accuracy));
+    }
+    if (holder) holder.troops = Math.max(0, holder.troops - killed);
+    bury(s, reg.ctrl, killed);
+    result = `about ${troopsLabel(killed)} troops killed or wounded${armies.length ? `, and ${armies.map((a) => a.name).join(', ')} badly shaken` : ' in the garrison'}`;
+  } else if (aim === 'forts') {
+    const before = reg.fort;
+    const levels = Math.min(before, Math.floor(hits * accuracy / 40) + (hits * accuracy >= 15 ? 1 : 0));
+    reg.fort = before - levels;
+    reg.dmg = clamp(reg.dmg + hits * 0.0004, 0, 0.95);
+    result = before ? (levels ? `fortifications down from level ${before} to ${reg.fort}` : 'the fortifications held') : 'there were no fortifications to hit';
+  } else if (aim === 'airbase') {
+    const destroyed = def ? Math.min(Math.round(hits * 0.35 * accuracy), Math.round(def.aircraft * 0.1)) : 0;
+    if (def) def.aircraft = Math.max(0, def.aircraft - destroyed);
+    result = def ? `${destroyed} enemy aircraft destroyed on the ground` : 'no air force to hit';
+  } else {
+    const dmg = Math.min(0.35, hits * 0.0024 * accuracy);
+    reg.dmg = clamp(reg.dmg + dmg, 0, 0.95);
+    result = `industry and resources ${Math.round(dmg * 100)} points more damaged (now ${Math.round(reg.dmg * 100)}%)`;
+  }
+  news(s, `${c.name} fires ${count} missiles at ${MISSILE_AIMS[aim].name.toLowerCase()} in ${regionName(target)}. ${hits} get through${intercept > 0.2 ? ' its air defences' : ''}.`, 'strike', [c.id, reg.ctrl]);
+  alert(s, c.id, `Missile strike on ${regionName(target)}: ${hits} of ${count} got through (${Math.round(intercept * 100)}% intercepted). Result: ${result}.`, hits ? 'good' : 'warn', { region: target, front: true });
+  alert(s, reg.ctrl, `${count} missiles from ${c.name} struck ${regionName(target)}: ${result}.`, 'bad', { region: target });
   return null;
+}
+
+// How many of our missiles the enemy shoots down
+export function interceptRate(s, c, defender) {
+  const def = s.countries[defender];
+  return def ? clamp(0.055 * def.tech.missile - 0.02 * ((c.tech?.missile ?? 6) - 6), 0, 0.75) : 0.05;
 }
 
 export function nuclearStrike(s, c, target, retaliation = false) {
@@ -465,20 +516,35 @@ function answerNuclearStrike(s, attacker, victim) {
   }
 }
 
-export function setAirCampaign(s, c, target, aircraft) {
+export function setAirCampaign(s, c, target, aircraft, mission = 'strategic') {
   aircraft = Math.floor(Number(aircraft) || 0);
+  if (!AIR_MISSIONS[mission]) mission = 'strategic';
+  const was = c.airOps.find((o) => o.region === target);
   c.airOps = c.airOps.filter((o) => o.region !== target);
   if (aircraft <= 0) return null;
   const reg = s.regions[target];
   if (!reg || !atWar(s, c.id, reg.ctrl)) return 'Air campaigns target provinces held by an enemy.';
   const far = rangeProblem(s, c, target, 'air');
-  if (far) return far;
+  if (far) { if (was) c.airOps.push(was); return far; }
   const committed = c.airOps.reduce((t, o) => t + o.aircraft, 0);
-  if (aircraft + committed > c.aircraft) return `You have ${c.aircraft - committed} aircraft free.`;
-  c.airOps.push({ region: target, aircraft });
-  alert(s, reg.ctrl, `${c.name} has begun bombing ${regionName(target)}.`, 'bad');
+  if (aircraft + committed > c.aircraft) { if (was) c.airOps.push(was); return `You have ${c.aircraft - committed} aircraft free.`; }
+  c.airOps.push({ region: target, aircraft, mission, since: was?.since ?? s.week, last: was?.last ?? null, total: was?.total ?? { org: 0, killed: 0, dmg: 0, lost: 0, weeks: 0 } });
+  if (!was) alert(s, reg.ctrl, `${c.name} has begun ${mission === 'support' ? 'bombing our troops' : mission === 'interdict' ? 'bombing our supply lines' : 'bombing'} in ${regionName(target)}.`, 'bad', { region: target });
   return null;
 }
+
+
+// What an air campaign is worth against this defence: 0 to about 1.5
+function airPower(s, c, op, reg) {
+  const def = s.countries[reg.ctrl];
+  const defAir = def ? def.aircraft * airQuality(def) * 0.3 / Math.max(1, enemiesOf(s, reg.ctrl).size) : 5;
+  const adf = def ? def.tech.missile * 15 : 10;
+  const mine = op.aircraft * airQuality(c);
+  const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0)) * (1 + 0.2 * gpsCoverage(s, c.id));
+  return { eff, power: eff * Math.min(1.5, op.aircraft / 60), defAir };
+}
+export const airEstimate = (s, c, op, regionId) => airPower(s, c, op, s.regions[regionId]);
+
 
 /* ---------- The war, in real time ---------- */
 //
@@ -667,12 +733,13 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   let attack = 0;
   let attackTroops = 0;
   for (const a of attackers) {
-    let p = armyAttackEstimate(s, a, regionId) * (1 + 0.05 * gpsCoverage(s, a.owner));
+    let p = armyAttackEstimate(s, a, regionId) * (1 + 0.05 * gpsCoverage(s, a.owner)) * (knowsPlans(s, a.owner, holder) ? 1.08 : 1);
     if (a.landing) p *= 0.5;
     attack += p;
     attackTroops += a.troops;
   }
   attack *= 1 + 0.3 * airEdge;
+  if (reg.cas && reg.cas.until > s.week && onSameSide(s, reg.cas.side, lead)) attack *= 1 + 0.25 * Math.min(1, reg.cas.power);
 
   const g = gar.get(regionId) ?? { troops: 0, tanks: 0 };
   const defenders = Object.values(s.armies).filter((a) => a.region === regionId && !a.sea && onSameSide(s, a.owner, holder));
@@ -682,7 +749,7 @@ function battle(s, regionId, attackers, gar, dt = 1) {
     defence += power(a.troops, a.tanks, quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend') * (a.op.kind === 'hold' ? 1.1 : 1);
     defendTroops += a.troops;
   }
-  defence *= terrain.defend * (1 + 0.15 * reg.fort) * (1 - 0.2 * airEdge);
+  defence *= terrain.defend * (1 + 0.15 * reg.fort) * (1 - 0.2 * airEdge) * (knowsPlans(s, holder, lead) ? 1.08 : 1);
   defence = Math.max(defence, 0.5);
 
   const fresh = !(reg.battle && reg.battle.by === lead);
@@ -1001,6 +1068,8 @@ function supplyAll(s) {
     }
     // Partisans: a hostile people ambushes convoys and blows up rail lines
     if (reg.people !== a.owner && reg.ctrl === a.owner && (reg.loyalty ?? 50) < 30) supply *= 0.75 + 0.25 * (reg.loyalty / 30);
+    // Bombed roads and depots
+    if (reg.interdict && reg.interdict.until > s.week && atWar(s, reg.interdict.by, a.owner)) supply *= 1 - 0.4 * Math.min(1, reg.interdict.power);
     if (a.gen.trait === 'logistician') supply = Math.min(1, supply + 0.15);
     a.supply = supply * (1 - 0.6 * (c.short?.oil ?? 0));
   }
@@ -1037,19 +1106,61 @@ function airAndSea(s) {
     c.airOps = c.airOps.filter((op) => {
       const reg = s.regions[op.region];
       if (!reg || !atWar(s, c.id, reg.ctrl) || op.aircraft <= 0) return false;
+      op.mission ??= 'strategic';
+      op.total ??= { org: 0, killed: 0, dmg: 0, lost: 0, weeks: 0 };
       const def = s.countries[reg.ctrl];
-      const defAir = def ? def.aircraft * airQuality(def) * 0.3 : 5;
-      const adf = def ? def.tech.missile * 15 : 10;
-      const mine = op.aircraft * airQuality(c);
-      const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0)) * (1 + 0.2 * gpsCoverage(s, c.id));
-      reg.dmg = Math.min(0.9, reg.dmg + 0.012 * eff * Math.min(1, op.aircraft / 80));
+      const { eff, power, defAir } = airPower(s, c, op, reg);
+      const week = { org: 0, killed: 0, dmg: 0, lost: 0 };
+      if (op.mission === 'support') {
+        // The defenders take it, and our attack there goes in easier this coming week
+        const armies = Object.values(s.armies).filter((a) => a.region === op.region && !a.sea && onSameSide(s, a.owner, reg.ctrl));
+        for (const a of armies) {
+          const hit = Math.min(a.org, 7 * power);
+          a.org -= hit;
+          const killed = a.troops * 0.006 * power;
+          a.troops = Math.max(1, a.troops - killed);
+          week.org = Math.max(week.org, hit);
+          week.killed += killed;
+        }
+        const g = garrisons(s).get(op.region);
+        if (g && def) { const killed = g.troops * 0.004 * power; def.troops = Math.max(0, def.troops - killed); week.killed += killed; }
+        bury(s, reg.ctrl, week.killed);
+        reg.cas = { side: c.id, power, until: s.week + 2 };
+      } else if (op.mission === 'interdict') {
+        reg.interdict = { by: c.id, power, until: s.week + 2 };
+        for (const id of GEO[op.region].adj) {
+          const n = s.regions[id];
+          if (n && atWar(s, c.id, n.ctrl) && !(n.interdict?.until > s.week && n.interdict.power > power / 2)) n.interdict = { by: c.id, power: power / 2, until: s.week + 2 };
+        }
+        week.dmg = 0.004 * power;
+        reg.dmg = Math.min(0.9, reg.dmg + week.dmg);
+      } else {
+        week.dmg = 0.02 * power;
+        reg.dmg = Math.min(0.9, reg.dmg + week.dmg);
+      }
+      // Fighters and air defences shoot some of ours down; theirs suffer too
       const lost = Math.max(0, Math.round(op.aircraft * 0.006 * (1.2 - eff)));
+      week.lost = lost;
       op.aircraft -= lost;
       c.aircraft = Math.max(0, c.aircraft - lost);
       if (def && defAir > 0) def.aircraft = Math.max(0, def.aircraft - Math.round(def.aircraft * 0.002 * eff));
+      op.last = { ...week, eff: Math.round(eff * 100) / 100, week: s.week };
+      for (const k of ['org', 'killed', 'dmg', 'lost']) op.total[k] += week[k];
+      op.total.weeks++;
+      // A report from the air staff: after the first week, then once a month
+      if (op.total.weeks === 1 || op.total.weeks % 4 === 0) alert(s, c.id, airReport(op), 'info', { region: op.region, front: true });
       return op.aircraft > 0;
     });
   }
+}
+
+function airReport(op) {
+  const where = regionName(op.region);
+  const t = op.total;
+  const lost = t.lost ? ` We have lost ${Math.round(t.lost)} aircraft.` : '';
+  if (op.mission === 'support') return `Close air support over ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: ${troopsLabel(t.killed)} defenders hit, their organisation down ${Math.round(op.last.org)} points this week; our attacks there hit harder.${lost}`;
+  if (op.mission === 'interdict') return `Interdiction around ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: enemy armies there are short of supply.${lost}`;
+  return `Strategic bombing of ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: output ${Math.round(t.dmg * 100)} points lower.${lost}`;
 }
 
 function ordinal(n) {

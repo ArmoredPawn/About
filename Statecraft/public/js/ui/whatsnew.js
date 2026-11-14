@@ -5,15 +5,14 @@ import { h } from './dom.js';
 import { modal } from './dialogs.js';
 
 const KEY = 'statecraft.whatsnew';
-const VERSION = '2026-11-navies';
+const VERSION = '2026-11-world';
 
 const ITEMS = [
-  ['⚓', 'Navies on the map', 'Fleets sail the seas and straits. Click a fleet, then a sea or a coast: hold it, blockade an enemy, or patrol a strait. Landings need a fleet off the coast.', ['military', 'navy']],
-  ['🏳', 'Peoples and loyalty', 'Conquered peoples resist, and independence movements can be won over, held down or put to a referendum.', ['government', 'peoples']],
-  ['📦', 'Arm & fund', 'Send weapons, money or volunteers to someone else\'s war, or to rebels, openly or covertly.', ['diplomacy', 'aid']],
-  ['🛢', 'Oil & pipelines', 'OPEC+ cuts output and can embargo you; pipelines get fuel past blockades and closed straits.', ['market', 'energy']],
-  ['🌡', 'Climate', 'Emissions warm the world for good: more disasters, failing harvests. Tax carbon and make pledges.', ['world', 'climate']],
-  ['🛰', 'Space', 'Spy satellites count every army on Earth; your own GPS guides missiles. Race for the Moon and Mars.', ['research', 'space']],
+  ['🌍', 'The whole world plays', 'All 150 smaller nations are now countries with their own economy, army and navy, run by the computer. They found regional trade blocs, ask great powers for protection and fight old feuds. Only the 50 largest can be led by a person.', ['diplomacy', 'countries']],
+  ['🤝', 'A world to build', 'No alliances and no oil cartel exist at the start: found them yourself, or watch others do it.', ['diplomacy', 'alliances']],
+  ['🛂', 'Ask before you march through', 'An army whose road crosses another country asks it for access. If it agrees, the army marches on; if it refuses, the way is shut until you beat it in a war.', ['military', 'armies']],
+  ['⚓', 'Fleets where they really are', 'Every fleet sits at its exact spot on the water. Form one at any of your ports, click it, then click anywhere on the sea.', ['military', 'navy']],
+  ['✈', 'Air war and missiles', 'Give your armies close air support, cut the enemy’s supply lines, or bomb its industry. Fire missiles at armies, forts, airbases or factories, and see what they hit.', ['military', 'ops']],
 ];
 
 export function whatsNew(ctx, { force = false } = {}) {
@@ -29,7 +28,7 @@ export function whatsNew(ctx, { force = false } = {}) {
   dlg = modal({
     title: 'New in Statecraft',
     body: h('div.stack',
-      h('p.muted.small', 'Six new ways to run the world. Each has its own tab; the Cabinet warns you when one needs attention, and the ? button explains everything.'),
+      h('p.muted.small', 'What changed since you last played. The ? button explains everything, including navies, peoples, arm & fund, oil, climate and space.'),
       h('div.list', ITEMS.map(card))),
     actions: [{ label: 'Got it', kind: 'primary' }],
   });

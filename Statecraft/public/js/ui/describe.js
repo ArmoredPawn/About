@@ -20,6 +20,7 @@ export function describeProposal(s, p) {
       const parts = [t.armistice ? 'an armistice along the current front' : 'peace'];
       for (const c of t.cede ?? []) parts.push(`${regionName(c.region)} goes to ${nationName(s, c.to)}`);
       if (t.reparations?.amount) parts.push(`${nationName(s, t.reparations.from)} pays ${money(Number(t.reparations.amount))} a year for ${t.reparations.years ?? 5} years`);
+      if (t.access) parts.push('military access for each other\'s troops');
       return parts.join('; ');
     }
     case 'joinWar': return `joining the war against ${nationName(s, t.enemy)}`;

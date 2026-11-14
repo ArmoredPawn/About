@@ -1,109 +1,254 @@
-// The navies. Fleets sail between the world's seas and through its straits, fight the enemy fleets they meet,
-// blockade enemy coasts, patrol the straits, and win control of a sea so that armies can land across it.
+// The navies. Every fleet is at an exact point on the water. It sails where it is sent, along a real route round
+// the land and through the straits, fights the enemy fleets it comes near, blockades the coast it lies off,
+// patrols a strait it sits in, and gives our armies the control of the sea they need to land.
 //
-// Fleets are what drive the effects trade and the economy already understand: a fleet blockading a country
-// fills in c.blockades, and a fleet patrolling a strait fills in chokepoints[key].patrols. Both are worked out
-// from the fleets every step (applyFleets), so they can never disagree with what is on the map.
+// Fleets drive the effects trade and the economy already understand: a fleet blockading a country fills in
+// c.blockades, and a fleet patrolling a strait fills in chokepoints[key].patrols. Both are worked out from the
+// fleets every step (applyFleets), so they can never disagree with what is on the map.
+//
+// The water comes from data/seas.js (scripts/build-seas.js): a grid of cells about 100 km across, each land or
+// part of one of eight seas or seven straits, and a port off every coastal province.
 
 import { CHOKEPOINTS } from './data/world.js';
-import { LANES, SEA_NAMES, PATROL_MODES, basinsOf } from './trade.js';
+import { SEA_GRID, SEA_KEYS, SEA_RLE, PORTS } from './data/seas.js';
+import { MAP_SIZE } from './data/geo.js';
+import { SEA_NAMES, PATROL_MODES, basinsOf } from './trade.js';
 import { chance, rand, news, alert, nameOf, alive, atWar, allied, enemiesOf, nextId, addRel } from './core.js';
 import { commsReady } from './space.js';
+import { REGION_NAMES } from './names.js';
 
-/* ---------- The sea network ---------- */
+const regionLabel = (id) => (id ? REGION_NAMES[id] ?? id : 'sea');
 
-// Seas and straits, placed on the map with the same projection as the provinces (scripts/build-map.js)
-export const NODES = {
-  atl: { kind: 'sea', name: 'Atlantic', x: 685.1, y: 340.4 },
-  pac: { kind: 'sea', name: 'Pacific', x: 85.6, y: 380.5 },
-  med: { kind: 'sea', name: 'Mediterranean', x: 1016.2, y: 293.6 },
-  black: { kind: 'sea', name: 'Black Sea', x: 1098.4, y: 239.1 },
-  red: { kind: 'sea', name: 'Red Sea', x: 1133.9, y: 393.9 },
-  gulf: { kind: 'sea', name: 'Persian Gulf', x: 1203, y: 347.1 },
-  ind: { kind: 'sea', name: 'Indian Ocean', x: 1350.6, y: 580.2 },
-  eas: { kind: 'sea', name: 'East Asian seas', x: 1569.6, y: 427.3 },
-  hormuz: { kind: 'strait', x: 1231.7, y: 351.1 },
-  malacca: { kind: 'strait', x: 1491.6, y: 503.1 },
-  suez: { kind: 'strait', x: 1095.8, y: 323 },
-  bab: { kind: 'strait', x: 1163.1, y: 443.3 },
-  bosporus: { kind: 'strait', x: 1073.7, y: 252.6 },
-  panama: { kind: 'strait', x: 459.2, y: 466.6 },
-  gibraltar: { kind: 'strait', x: 888.9, y: 287.2 },
+/* ---------- The water ---------- */
+
+const W = MAP_SIZE.w;
+const CELL = SEA_GRID.cell;
+const GW = SEA_GRID.w;
+const GH = SEA_GRID.h;
+const LABELS = (() => {
+  const out = new Uint8Array(GW * GH);
+  let i = 0;
+  for (const run of SEA_RLE.split(',')) {
+    const v = parseInt(run[0], 36);
+    const n = parseInt(run.slice(1), 36);
+    out.fill(v, i, i + n);
+    i += n;
+  }
+  return out;
+})();
+export const KM_PER_PX = 20; // the map is 2,000 pixels for 360 degrees of longitude
+export { PORTS };
+
+const wrapX = (x) => ((x % W) + W) % W;
+const cellOf = (x, y) => [Math.floor(wrapX(x) / CELL) % GW, Math.max(0, Math.min(GH - 1, Math.floor(y / CELL)))];
+const labelOf = (gx, gy) => LABELS[gy * GW + gx];
+export const isWater = (x, y) => labelOf(...cellOf(x, y)) > 0;
+// The sea or strait a point is in: 'atl', 'hormuz'... (null on land)
+export function seaAt(x, y) {
+  const l = labelOf(...cellOf(x, y));
+  return l ? SEA_KEYS[l - 1] : null;
+}
+
+// Seas and straits: their names, and a point in each for labels and for sending fleets
+const SEA_POINTS = {
+  atl: [685.1, 340.4], pac: [85.6, 380.5], med: [1016.2, 293.6], black: [1098.4, 239.1], red: [1133.9, 393.9],
+  gulf: [1203, 347.1], ind: [1350.6, 580.2], eas: [1569.6, 427.3],
+  hormuz: [1231.7, 351.1], malacca: [1491.6, 503.1], suez: [1095.8, 323], bab: [1163.1, 443.3],
+  bosporus: [1073.7, 252.6], panama: [459.2, 466.6], gibraltar: [888.9, 287.2],
 };
-for (const [k, n] of Object.entries(NODES)) n.name ??= CHOKEPOINTS[k]?.name ?? SEA_NAMES[k] ?? k;
+export const NODES = Object.fromEntries(SEA_KEYS.map((k) => {
+  const [x, y] = nearestWater(...SEA_POINTS[k], k) ?? SEA_POINTS[k];
+  return [k, { kind: CHOKEPOINTS[k] ? 'strait' : 'sea', name: CHOKEPOINTS[k]?.name ?? SEA_NAMES[k] ?? k, x, y }];
+}));
 export const nodeName = (k) => NODES[k]?.name ?? k;
 export const isStrait = (k) => NODES[k]?.kind === 'strait';
 
-// Sailing distances between neighbouring nodes, in the trade lanes' units (about 1,500 km each). A lane through
-// a strait is split in two at the strait.
-const EDGES = new Map(Object.keys(NODES).map((k) => [k, []]));
-function link(a, b, len) {
-  EDGES.get(a).push({ to: b, len });
-  EDGES.get(b).push({ to: a, len });
-}
-for (const [a, b, len, strait] of LANES) {
-  if (strait) { link(a, strait, len / 2); link(strait, b, len / 2); } else link(a, b, len);
-}
-function edgeLen(a, b) {
-  let best = Infinity;
-  for (const e of EDGES.get(a) ?? []) if (e.to === b && e.len < best) best = e.len;
-  return best;
-}
-
-// The shortest way between two nodes: { path (the nodes after `from`), len } or null
-export function seaPath(from, to) {
-  if (!NODES[from] || !NODES[to]) return null;
-  if (from === to) return { path: [], len: 0 };
-  const dist = new Map([[from, 0]]);
-  const prev = new Map();
-  const open = [from];
-  const done = new Set();
-  while (open.length) {
-    open.sort((x, y) => dist.get(x) - dist.get(y));
-    const cur = open.shift();
-    if (done.has(cur)) continue;
-    done.add(cur);
-    if (cur === to) break;
-    for (const e of EDGES.get(cur)) {
-      const nd = dist.get(cur) + e.len;
-      if (nd < (dist.get(e.to) ?? Infinity)) { dist.set(e.to, nd); prev.set(e.to, cur); open.push(e.to); }
+// The nearest navigable water to a point (in a given sea or strait, if asked), or null
+export function nearestWater(x, y, want = null) {
+  const [sx, sy] = cellOf(x, y);
+  const ok = (gx, gy) => { const l = labelOf(gx, gy); return l > 0 && (!want || SEA_KEYS[l - 1] === want); };
+  for (let r = 0; r < 40; r++) {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const gx = (sx + dx + GW) % GW;
+      const gy = sy + dy;
+      if (gy < 0 || gy >= GH || !ok(gx, gy)) continue;
+      return [gx * CELL + CELL / 2, gy * CELL + CELL / 2];
     }
   }
-  if (!dist.has(to)) return null;
-  const path = [];
-  for (let x = to; x !== from; x = prev.get(x)) path.unshift(x);
-  return { path, len: dist.get(to) };
+  return null;
 }
 
-// Seas a country (or a province) touches, among the ones fleets sail
-export const seasOf = (s, id) => basinsOf(s, id).filter((k) => NODES[k]);
+// Distance across the map, the short way round where the Pacific wraps
+export function mapDistance(ax, ay, bx, by) {
+  let dx = Math.abs(ax - bx);
+  if (dx > W / 2) dx = W - dx;
+  return Math.hypot(dx, ay - by);
+}
 
-/* ---------- Strength ---------- */
+// A sea route from one point to another: waypoints (with x unwrapped, so a route across the Pacific edge runs
+// smoothly past 0 or 2,000), or null. A* over the water cells, then straightened where the sea allows.
+export function seaRoute(from, to) {
+  const [sx, sy] = cellOf(...from);
+  const [tx, ty] = cellOf(...to);
+  if (!labelOf(sx, sy) || !labelOf(tx, ty)) return null;
+  const start = sy * GW + sx;
+  const goal = ty * GW + tx;
+  if (start === goal) return [[to[0], to[1]]];
+  // Full precision: rounded costs let two cells keep "improving" each other for ever
+  const g = new Float64Array(GW * GH).fill(Infinity);
+  const came = new Int32Array(GW * GH).fill(-1);
+  const heap = new MinHeap();
+  const h = (i) => { let dx = Math.abs((i % GW) - tx); if (dx > GW / 2) dx = GW - dx; return Math.hypot(dx, Math.floor(i / GW) - ty); };
+  g[start] = 0;
+  heap.push(start, h(start));
+  const steps = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]];
+  while (heap.size) {
+    const i = heap.pop();
+    if (i === goal) break;
+    const gx = i % GW;
+    const gy = Math.floor(i / GW);
+    for (const [dx, dy, cost] of steps) {
+      const nx = (gx + dx + GW) % GW;
+      const ny = gy + dy;
+      if (ny < 0 || ny >= GH || !labelOf(nx, ny)) continue;
+      // No slipping diagonally between two land cells
+      if (dx && dy && (!labelOf((gx + dx + GW) % GW, gy) || !labelOf(gx, ny))) continue;
+      const j = ny * GW + nx;
+      const ng = g[i] + cost;
+      if (ng < g[j]) { g[j] = ng; came[j] = i; heap.push(j, ng + h(j)); }
+    }
+  }
+  if (came[goal] < 0) return null;
+  // Back from the goal, unwrapping x so the path is continuous
+  const cells = [];
+  for (let i = goal; i !== start && cells.length < GW * GH; i = came[i]) cells.push(i);
+  cells.reverse();
+  const pts = [];
+  let px = sx;
+  for (const i of cells) {
+    let x = i % GW;
+    while (x - px > GW / 2) x -= GW;
+    while (px - x > GW / 2) x += GW;
+    pts.push([x * CELL + CELL / 2, Math.floor(i / GW) * CELL + CELL / 2]);
+    px = x;
+  }
+  const last = pts[pts.length - 1];
+  const tox = to[0] + Math.round((last[0] - to[0]) / W) * W;
+  pts[pts.length - 1] = [tox, to[1]];
+  return straighten([[from[0], from[1]], ...pts]).slice(1);
+}
+
+// Drop waypoints wherever a straight line over open water does the same job (looking a limited way ahead,
+// which keeps long voyages quick to plan)
+function straighten(pts) {
+  if (pts.length <= 2) return pts;
+  const out = [pts[0]];
+  let a = 0;
+  while (a < pts.length - 1) {
+    let b = Math.min(pts.length - 1, a + 48);
+    while (b > a + 1 && !clearLine(pts[a], pts[b])) b--;
+    out.push(pts[b]);
+    a = b;
+  }
+  return out;
+}
+function clearLine([ax, ay], [bx, by]) {
+  const n = Math.ceil(Math.hypot(bx - ax, by - ay) / (CELL / 2));
+  for (let k = 1; k < n; k++) if (!isWater(ax + (bx - ax) * k / n, ay + (by - ay) * k / n)) return false;
+  return true;
+}
+export const routeLength = (from, route) => route.reduce((t, p, i) => { const q = i ? route[i - 1] : from; return t + Math.hypot(p[0] - q[0], p[1] - q[1]); }, 0);
+
+class MinHeap {
+  constructor() { this.items = []; this.keys = []; }
+  get size() { return this.items.length; }
+  push(item, key) {
+    const a = this.items;
+    const k = this.keys;
+    let i = a.length;
+    a.push(item); k.push(key);
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (k[p] <= key) break;
+      a[i] = a[p]; k[i] = k[p];
+      i = p;
+    }
+    a[i] = item; k[i] = key;
+  }
+  pop() {
+    const a = this.items;
+    const k = this.keys;
+    const top = a[0];
+    const item = a.pop();
+    const key = k.pop();
+    if (a.length) {
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1;
+        if (c >= a.length) break;
+        if (c + 1 < a.length && k[c + 1] < k[c]) c++;
+        if (k[c] >= key) break;
+        a[i] = a[c]; k[i] = k[c];
+        i = c;
+      }
+      a[i] = item; k[i] = key;
+    }
+    return top;
+  }
+}
+
+/* ---------- Strength and ranges ---------- */
 
 export { PATROL_MODES };
-export const MISSIONS = { hold: 'Hold the sea', patrol: 'Patrol the strait', blockade: 'Blockade' };
+export const MISSIONS = { hold: 'Hold position', patrol: 'Patrol the strait', blockade: 'Blockade' };
 export const MAX_FLEETS = 8;
 export const CARRIER_WEIGHT = 8; // a carrier group counts as eight warships
+export const REFIT_WEEKS = 6;
+// In map pixels (about 20 km each)
+export const ENGAGE = 22; // enemy fleets this close fight
+export const OFF_COAST = 30; // a fleet this close to a coast blockades it, or covers a landing on it
+export const IN_PORT = 12; // close enough to a port to take on or send home ships
 
 const navalTech = (s, owner) => s.countries[owner]?.tech?.naval ?? 5;
-
-// How fast a fleet sails: lane units a week (about 1,500 km each), from naval research
-export const fleetSpeed = (s, owner) => 0.9 + 0.1 * navalTech(s, owner);
+// How fast a fleet sails: km a week, from naval research (about 2,000 to 2,800)
+export const fleetSpeed = (s, owner) => (0.9 + 0.1 * navalTech(s, owner)) * 1500;
+const speedPx = (s, owner) => fleetSpeed(s, owner) / KM_PER_PX;
 
 export function fleetStrength(s, f) {
   return (f.ships + f.carriers * CARRIER_WEIGHT) * (0.6 + 0.08 * navalTech(s, f.owner)) * (0.5 + 0.5 * (f.org ?? 70) / 100);
 }
 
 const fleets = (s) => Object.values(s.fleets ?? {});
-const atNode = (f) => !(f.prog > 0);
+const moving = (f) => Boolean(f.route?.length);
 const sameSide = (s, a, b) => a === b || allied(s, a, b);
 
-// Who holds a sea: our side's fleet strength there against our enemies'
+// Seas a country (or a province) touches, among the ones fleets sail
+export const seasOf = (s, id) => basinsOf(s, id).filter((k) => NODES[k]);
+
+// Ports: the open water off each coastal province a country holds
+export function portsOf(s, cid) {
+  return Object.values(s.regions).filter((r) => r.ctrl === cid && PORTS[r.id]).map((r) => ({ region: r.id, x: PORTS[r.id][0], y: PORTS[r.id][1], sea: seaAt(...PORTS[r.id]), gdp: r.gdp }));
+}
+const nearestPort = (s, cid, x, y) => portsOf(s, cid).sort((a, b) => mapDistance(x, y, a.x, a.y) - mapDistance(x, y, b.x, b.y))[0] ?? null;
+
+// Who holds the water around a point: our side's fleet strength within a radius against our enemies'
+export function controlAt(s, cid, x, y, radius = OFF_COAST) {
+  let mine = 0;
+  let theirs = 0;
+  for (const f of fleets(s)) {
+    if (mapDistance(f.x, f.y, x, y) > radius) continue;
+    if (sameSide(s, cid, f.owner)) mine += fleetStrength(s, f);
+    else if (atWar(s, cid, f.owner)) theirs += fleetStrength(s, f);
+  }
+  return { mine, theirs };
+}
+// The same, for a whole sea (used by the computer)
 export function seaControl(s, cid, sea) {
   let mine = 0;
   let theirs = 0;
   for (const f of fleets(s)) {
-    if (f.at !== sea || !atNode(f)) continue;
+    if (f.at !== sea) continue;
     if (sameSide(s, cid, f.owner)) mine += fleetStrength(s, f);
     else if (atWar(s, cid, f.owner)) theirs += fleetStrength(s, f);
   }
@@ -120,112 +265,135 @@ export function inPort(s, c) {
 
 /* ---------- Setting up ---------- */
 
-// Every coastal country starts with its navy at sea: one fleet per sea it borders, the carriers with the first
+// Every coastal country starts with its navy at sea: a fleet off its main port in each sea it borders, the
+// carriers with the first
 export function initFleets(s) {
   s.fleets ??= {};
   for (const c of Object.values(s.countries)) {
     if (!alive(s, c.id) || c.ships + c.carriers <= 0) continue;
+    if (c.minor && c.ships < 3) continue; // a coastguard of a ship or two stays in harbour
     if (fleets(s).some((f) => f.owner === c.id)) continue;
-    const seas = seasOf(s, c.id);
-    if (!seas.length) continue;
-    const shares = seas.map((_, i) => (i === 0 ? 1.5 : 1));
+    const ports = portsOf(s, c.id);
+    const seas = [...new Set(ports.map((p) => p.sea))].filter((k) => k && !isStrait(k));
+    const ordered = seasOf(s, c.id).filter((k) => seas.includes(k));
+    for (const k of seas) if (!ordered.includes(k)) ordered.push(k);
+    if (!ordered.length) continue;
+    const use = ordered.slice(0, 3);
+    const shares = use.map((_, i) => (i === 0 ? 1.5 : 1));
     const total = shares.reduce((a, b) => a + b, 0);
     let left = Math.floor(c.ships);
-    seas.forEach((sea, i) => {
-      const ships = i === seas.length - 1 ? left : Math.floor(c.ships * shares[i] / total);
+    use.forEach((sea, i) => {
+      const ships = i === use.length - 1 ? left : Math.floor(c.ships * shares[i] / total);
       left -= ships;
       const carriers = i === 0 ? c.carriers : 0;
       if (ships + carriers <= 0) return;
-      addFleet(s, c, { sea, ships, carriers, name: `${NODES[sea].name} Fleet` });
+      const port = ports.filter((p) => p.sea === sea).sort((a, b) => b.gdp - a.gdp)[0];
+      addFleet(s, c, { x: port.x, y: port.y, ships, carriers, name: `${NODES[sea].name} Fleet`, port: port.region });
     });
   }
 }
 
-function addFleet(s, c, { sea, ships, carriers, name }) {
+// Fleets from a saved game made before fleets had exact positions: off a port in the sea they were in
+export function placeFleets(s) {
+  for (const f of fleets(s)) {
+    if (f.x != null) continue;
+    const port = portsOf(s, f.owner).filter((p) => p.sea === f.at)[0] ?? portsOf(s, f.owner)[0];
+    const at = port ? [port.x, port.y] : NODES[f.at] ? [NODES[f.at].x, NODES[f.at].y] : null;
+    if (!at) { delete s.fleets[f.id]; continue; }
+    f.x = at[0];
+    f.y = at[1];
+    f.route = [];
+    f.dest = null;
+    f.port = port?.region ?? null;
+    delete f.path; delete f.prog;
+    f.at = seaAt(f.x, f.y);
+  }
+}
+
+function addFleet(s, c, { x, y, ships, carriers, name, port }) {
   const id = nextId(s, 'f');
   s.fleets[id] = {
-    id, owner: c.id, name: String(name || 'Fleet').slice(0, 28), ships, carriers, at: sea, path: [], prog: 0, dest: sea,
-    mission: 'hold', mode: null, target: null, org: 80, status: `Holding the ${NODES[sea].name}`,
+    id, owner: c.id, name: String(name || 'Fleet').slice(0, 28), ships, carriers, x, y, route: [], dest: null, at: seaAt(x, y),
+    port: port ?? null, mission: 'hold', mode: null, target: null, org: 80, status: `In port at ${regionLabel(port)}`,
   };
   return s.fleets[id];
 }
 
 /* ---------- Orders ---------- */
 
-export function formFleet(s, c, { sea, ships, carriers = 0, name }) {
+// A new fleet puts to sea off one of our coastal provinces (or, given only a sea, our best port in it)
+export function formFleet(s, c, { region, sea, ships, carriers = 0, name }) {
   if (fleets(s).filter((f) => f.owner === c.id).length >= MAX_FLEETS) return `You can have at most ${MAX_FLEETS} fleets. Merge or disband one first.`;
-  const home = seasOf(s, c.id);
-  if (!home.length) return 'You have no coast, so no navy.';
-  if (!home.includes(sea)) return `New fleets put to sea from home waters: ${home.map((k) => NODES[k].name).join(' or ')}.`;
-  const port = inPort(s, c);
+  const ports = portsOf(s, c.id);
+  if (!ports.length) return 'We hold no coast, so we have no navy.';
+  let port = region ? ports.find((p) => p.region === region) : null;
+  if (region && !port) return 'Pick a coastal province we hold.';
+  if (!port && sea) port = ports.filter((p) => p.sea === sea).sort((a, b) => b.gdp - a.gdp)[0];
+  if (!port) port = ports.sort((a, b) => b.gdp - a.gdp)[0];
+  const pool = inPort(s, c);
   ships = Math.floor(Number(ships) || 0);
   carriers = Math.floor(Number(carriers) || 0);
   if (ships < 0 || carriers < 0 || ships + carriers < 1) return 'A fleet needs at least one ship.';
-  if (ships > port.ships || carriers > port.carriers) return `In port: ${port.ships} warships and ${port.carriers} carriers.`;
-  const f = addFleet(s, c, { sea, ships, carriers, name: name || `${ordinal(fleets(s).filter((f) => f.owner === c.id).length + 1)} Fleet` });
+  if (ships > pool.ships || carriers > pool.carriers) return `In port: ${pool.ships} warships and ${pool.carriers} carriers.`;
+  const f = addFleet(s, c, { x: port.x, y: port.y, ships, carriers, name: name || `${ordinal(fleets(s).filter((x) => x.owner === c.id).length + 1)} Fleet`, port: port.region });
   // Ships back from a lost battle are still being repaired
   if ((c.refitUntil ?? -1) > s.week) f.org = 25;
   return null;
 }
 
-// Sail somewhere and, on arrival, carry out a mission: hold the sea, patrol a strait, or blockade a country
-// (for a blockade, `to` may be left out: the fleet heads for the nearest of the target's seas)
-export function fleetOrder(s, c, { id, to, mission = 'hold', mode = null, target = null }) {
+// Sail to a point on the water and, on arrival, carry out a mission: hold there, patrol a strait, or blockade a
+// country. `to` may name a sea or strait instead of a point; for a blockade the fleet heads for the nearest
+// stretch of the target's coast.
+export function fleetOrder(s, c, { id, x, y, to, mission = 'hold', mode = null, target = null }) {
   const f = s.fleets?.[id];
   if (!f || f.owner !== c.id) return 'That fleet is not yours.';
   if (!MISSIONS[mission]) return 'Pick a mission.';
-  const from = f.prog > 0 ? f.path[0] : f.at;
+  let dest = Number.isFinite(Number(x)) && Number.isFinite(Number(y)) ? [Number(x), Number(y)] : null;
   if (mission === 'blockade') {
     if (!target || !(s.countries[target] || s.minors[target])) return 'Pick a country to blockade.';
     if (!atWar(s, c.id, target)) return `You are not at war with ${nameOf(s, target)}.`;
-    const seas = seasOf(s, target);
-    if (!seas.length) return `${nameOf(s, target)} has no coast to blockade.`;
-    if (!to || !seas.includes(to)) to = seas.map((k) => [k, seaPath(from, k)?.len ?? Infinity]).sort((x, y) => x[1] - y[1])[0][0];
+    const coast = portsOf(s, target);
+    if (!coast.length) return `${nameOf(s, target)} has no coast to blockade.`;
+    // Their coast nearest to where we point, or to the fleet
+    const ref = dest ?? [f.x, f.y];
+    const near = coast.sort((a, b) => mapDistance(ref[0], ref[1], a.x, a.y) - mapDistance(ref[0], ref[1], b.x, b.y))[0];
+    dest = [near.x, near.y];
   } else target = null;
   if (mission === 'patrol') {
-    if (!isStrait(to)) return 'Patrols guard a strait: pick one.';
+    const key = to ?? (dest ? seaAt(...dest) : null);
+    if (!isStrait(key)) return 'Patrols guard a strait: pick one.';
     if (!PATROL_MODES[mode]) return 'Pick what the patrol does.';
+    dest = [NODES[key].x, NODES[key].y];
   } else mode = null;
-  if (!NODES[to]) return 'Pick a sea or a strait.';
-  const route = plan(f, to);
-  if (!route) return `There is no sea route to the ${nodeName(to)}.`;
-  Object.assign(f, route, { dest: to, mission, mode, target });
-  f.status = f.path.length ? `Sailing to the ${nodeName(to)}` : statusOf(s, f);
+  if (!dest && to && NODES[to]) dest = [NODES[to].x, NODES[to].y];
+  if (!dest) return 'Pick a point on the water.';
+  if (!isWater(...dest)) {
+    const w = nearestWater(...dest);
+    // A click just off the shore counts as the water there; one well inland doesn't
+    if (!w || mapDistance(w[0], w[1], dest[0], dest[1]) > 15) return 'That is not open water.';
+    dest = w;
+  }
+  const route = seaRoute([f.x, f.y], dest);
+  if (!route) return 'There is no way there by sea.';
+  f.route = route;
+  f.dest = [wrapX(dest[0]), dest[1]];
+  Object.assign(f, { mission, mode, target, retreating: false });
+  f.status = route.length && routeLength([f.x, f.y], route) > 2 ? `Sailing to the ${nodeName(seaAt(...f.dest))}` : statusOf(s, f);
   applyFleets(s);
   return null;
-}
-
-// The route from where the fleet is now. Under way between two nodes, it either sails on or turns back,
-// whichever is shorter.
-function plan(f, to) {
-  if (!(f.prog > 0)) {
-    const r = seaPath(f.at, to);
-    return r && { path: r.path, prog: 0 };
-  }
-  const next = f.path[0];
-  const len = edgeLen(f.at, next);
-  const on = seaPath(next, to);
-  const back = seaPath(f.at, to);
-  const onLen = on ? len - f.prog + on.len : Infinity;
-  const backLen = back ? f.prog + back.len : Infinity;
-  if (onLen === Infinity && backLen === Infinity) return null;
-  if (onLen <= backLen) return { path: [next, ...on.path], prog: f.prog };
-  // Turning round: we are now sailing from `next` back towards `at`
-  const at = f.at;
-  f.at = next;
-  return { path: [at, ...back.path], prog: len - f.prog };
 }
 
 export function reinforceFleet(s, c, { id, ships = 0, carriers = 0 }) {
   const f = s.fleets?.[id];
   if (!f || f.owner !== c.id) return 'That fleet is not yours.';
-  if (!atNode(f) || f.path.length || !seasOf(s, c.id).includes(f.at)) return 'Ships join or leave a fleet in home waters only.';
+  const port = nearestPort(s, c.id, f.x, f.y);
+  if (moving(f) || !port || mapDistance(f.x, f.y, port.x, port.y) > IN_PORT) return 'Ships join or leave a fleet in one of our ports. Send it home first.';
   ships = Math.floor(Number(ships) || 0);
   carriers = Math.floor(Number(carriers) || 0);
-  const port = inPort(s, c);
-  if (ships > port.ships || carriers > port.carriers) return `In port: ${port.ships} warships and ${port.carriers} carriers.`;
+  const pool = inPort(s, c);
+  if (ships > pool.ships || carriers > pool.carriers) return `In port: ${pool.ships} warships and ${pool.carriers} carriers.`;
   if (f.ships + ships < 0 || f.carriers + carriers < 0) return 'The fleet doesn\'t have that many ships.';
-  if (f.ships + ships + f.carriers + carriers < 1) return 'A fleet needs at least one ship. Disband it instead.';
+  if (f.ships + ships + f.carriers + carriers < 1) return 'A fleet needs at least one ship. Send it to port instead.';
   f.ships += ships;
   f.carriers += carriers;
   if (ships + carriers > 0) f.org = Math.max(40, f.org - 10 * (ships + carriers) / (f.ships + f.carriers));
@@ -235,8 +403,8 @@ export function reinforceFleet(s, c, { id, ships = 0, carriers = 0 }) {
 export function mergeFleets(s, c, ids) {
   const list = (Array.isArray(ids) ? ids : []).map((id) => s.fleets?.[id]).filter((f) => f && f.owner === c.id);
   if (list.length < 2) return 'Pick two or more of your fleets.';
-  if (list.some((f) => !atNode(f)) || new Set(list.map((f) => f.at)).size > 1) return 'Fleets must be in the same sea or strait to merge.';
   const [keep, ...rest] = list;
+  if (list.some((f) => moving(f) || mapDistance(f.x, f.y, keep.x, keep.y) > IN_PORT)) return 'Fleets must be together, and stopped, to merge.';
   for (const f of rest) {
     keep.org = (keep.org * (keep.ships + keep.carriers) + f.org * (f.ships + f.carriers)) / (keep.ships + keep.carriers + f.ships + f.carriers);
     keep.ships += f.ships;
@@ -269,7 +437,7 @@ export function renameFleet(s, c, { id, name }) {
 export function recallFleets(s, c, { target, key }) {
   for (const f of fleets(s)) {
     if (f.owner !== c.id) continue;
-    if ((target && f.mission === 'blockade' && f.target === target) || (key && f.mission === 'patrol' && f.dest === key)) {
+    if ((target && f.mission === 'blockade' && f.target === target) || (key && f.mission === 'patrol' && seaAt(...(f.dest ?? [f.x, f.y])) === key)) {
       f.mission = 'hold';
       f.mode = null;
       f.target = null;
@@ -281,13 +449,20 @@ export function recallFleets(s, c, { target, key }) {
 }
 
 function statusOf(s, f) {
-  if (f.path.length) return `Sailing to the ${nodeName(f.dest)}`;
-  if (f.mission === 'blockade' && f.target) return `Blockading ${nameOf(s, f.target)} from the ${nodeName(f.at)}`;
+  if (moving(f)) return f.retreating ? 'Retreating' : `Sailing to the ${nodeName(seaAt(...(f.dest ?? [f.x, f.y])))}`;
+  if (f.mission === 'blockade' && f.target) return `Blockading ${nameOf(s, f.target)}`;
   if (f.mission === 'patrol') return `Patrolling the ${nodeName(f.at)}: ${PATROL_MODES[f.mode]?.toLowerCase() ?? ''}`;
-  return `Holding the ${nodeName(f.at)}`;
+  const port = nearestPort(s, f.owner, f.x, f.y);
+  if (port && mapDistance(f.x, f.y, port.x, port.y) <= IN_PORT) return `In port at ${regionLabel(port.region)}`;
+  return `Holding position in the ${nodeName(f.at)}`;
 }
 
 /* ---------- What the fleets do: blockades and patrols ---------- */
+
+// Is this fleet lying off the target's coast, close enough to stop its shipping?
+function offCoastOf(s, f, target) {
+  return portsOf(s, target).some((p) => mapDistance(f.x, f.y, p.x, p.y) <= OFF_COAST);
+}
 
 // Works out every country's blockades and every strait's patrols from where the fleets are and what they were
 // told to do. Run whenever fleets move or get orders.
@@ -298,14 +473,14 @@ export function applyFleets(s) {
   for (const c of Object.values(s.countries)) { c.blockades = {}; c.blockadeCarriers = {}; }
   for (const st of Object.values(s.chokepoints)) st.patrols = {};
   for (const f of fleets(s)) {
-    if (!atNode(f) || f.path.length) continue;
+    if (moving(f)) continue;
     const c = s.countries[f.owner];
     if (!c) continue;
-    if (f.mission === 'blockade' && f.target && atWar(s, f.owner, f.target) && seasOf(s, f.target).includes(f.at)) {
+    if (f.mission === 'blockade' && f.target && atWar(s, f.owner, f.target) && offCoastOf(s, f, f.target)) {
       c.blockades[f.target] = (c.blockades[f.target] ?? 0) + f.ships;
       c.blockadeCarriers[f.target] = (c.blockadeCarriers[f.target] ?? 0) + f.carriers;
     }
-    if (f.mission === 'patrol' && isStrait(f.at) && PATROL_MODES[f.mode]) {
+    if (f.mission === 'patrol' && isStrait(f.at) && PATROL_MODES[f.mode] && s.chokepoints[f.at]) {
       const st = s.chokepoints[f.at];
       const was = patrolsBefore[f.at]?.[f.owner];
       const cur = st.patrols[f.owner];
@@ -345,141 +520,152 @@ export function applyFleets(s) {
 
 export function navyStep(s, dt) {
   if (!s.fleets) return;
-  let moved = false;
+  let changed = false;
   for (const f of fleets(s)) {
     if (!s.countries[f.owner] || !alive(s, f.owner)) { delete s.fleets[f.id]; continue; }
-    if (sail(s, f, dt)) moved = true;
+    if (sail(s, f, dt)) changed = true;
   }
   battles(s, dt);
-  if (moved) applyFleets(s);
+  if (changed) applyFleets(s);
 }
 
-const hostileHere = (s, f) => fleets(s).some((g) => g !== f && g.at === f.at && atNode(g) && atWar(s, f.owner, g.owner));
+const hostileNear = (s, f) => fleets(s).some((g) => g !== f && atWar(s, f.owner, g.owner) && mapDistance(f.x, f.y, g.x, g.y) <= ENGAGE);
 
-// Returns true when the fleet reached a node
+// Returns true when the fleet arrived, or crossed into another sea or strait
 function sail(s, f, dt) {
-  if (!f.path.length) return false;
-  if (atNode(f) && hostileHere(s, f)) { f.status = `Fighting in the ${nodeName(f.at)}`; return false; }
-  f.prog += fleetSpeed(s, f.owner) * dt;
-  let reached = false;
-  let len = edgeLen(f.at, f.path[0]);
-  while (f.path.length && f.prog >= len) {
-    f.prog -= len;
-    f.at = f.path.shift();
-    reached = true;
-    // Enemy fleets bar the way: stop and fight
-    if (hostileHere(s, f)) { f.prog = 0; break; }
-    if (f.path.length) len = edgeLen(f.at, f.path[0]);
+  if (!moving(f)) return false;
+  // Enemy fleets close by: stand and fight (a retreating fleet keeps running)
+  if (!f.retreating && hostileNear(s, f)) { f.status = `Fighting in the ${nodeName(f.at)}`; return false; }
+  let budget = speedPx(s, f.owner) * dt;
+  while (budget > 0 && f.route.length) {
+    const [nx, ny] = f.route[0];
+    const d = Math.hypot(nx - f.x, ny - f.y);
+    if (d <= budget) { f.x = nx; f.y = ny; f.route.shift(); budget -= d; } else {
+      f.x += (nx - f.x) * budget / d;
+      f.y += (ny - f.y) * budget / d;
+      budget = 0;
+    }
   }
-  if (!f.path.length) f.prog = 0;
-  if (reached) {
-    f.reachedStep = s.stepNo;
+  // Back onto the map where a route crosses the Pacific edge
+  if (f.x < 0 || f.x >= W) {
+    const shift = f.x < 0 ? W : -W;
+    f.x += shift;
+    for (const p of f.route) p[0] += shift;
+  }
+  const at = seaAt(f.x, f.y) ?? f.at;
+  const crossed = at !== f.at;
+  f.at = at;
+  f.reachedStep = s.stepNo;
+  if (!f.route.length) {
+    f.retreating = false;
     f.status = statusOf(s, f);
-    if (!f.path.length && f.dest === f.at && f.mission !== 'hold') alert(s, f.owner, `${f.name} has reached the ${nodeName(f.at)}: ${f.status.toLowerCase()}.`, 'info', { front: true });
+    if (f.mission !== 'hold') alert(s, f.owner, `${f.name} is in position: ${f.status.toLowerCase()}.`, 'info', { front: true });
+    return true;
   }
-  return reached;
+  return crossed;
 }
 
 function battles(s, dt) {
-  const byNode = new Map();
-  for (const f of fleets(s)) if (atNode(f)) (byNode.get(f.at) ?? byNode.set(f.at, []).get(f.at)).push(f);
+  const all = fleets(s);
   s.seaBattles ??= {};
-  for (const [node, list] of byNode) {
-    const fighting = list.filter((f) => list.some((g) => atWar(s, f.owner, g.owner)));
-    const key = node;
-    if (!fighting.length) {
-      if (s.seaBattles[key]) delete s.seaBattles[key];
+  const active = new Set();
+  const plans = [];
+  for (const f of all) {
+    const foes = all.filter((g) => g !== f && atWar(s, f.owner, g.owner) && mapDistance(f.x, f.y, g.x, g.y) <= ENGAGE);
+    if (!foes.length) continue;
+    const friends = all.filter((g) => !atWar(s, f.owner, g.owner) && mapDistance(f.x, f.y, g.x, g.y) <= ENGAGE && (sameSide(s, f.owner, g.owner) || foes.some((e) => atWar(s, g.owner, e.owner))));
+    const foe = foes.reduce((t, g) => t + fleetStrength(s, g), 0);
+    const own = friends.reduce((t, g) => t + fleetStrength(s, g), 0);
+    plans.push({ f, foe, own, rate: 0.07 * dt * foe / (foe + own + 0.1) });
+    for (const g of foes) {
+      const key = [f.owner, g.owner].sort().join('|');
+      active.add(key);
+      if (!s.seaBattles[key]) {
+        s.seaBattles[key] = { since: s.week, at: f.at };
+        news(s, `Naval battle in the ${nodeName(f.at)}: ${nameOf(s, f.owner)} against ${nameOf(s, g.owner)}.`, 'war', [f.owner, g.owner]);
+        for (const x of [f.owner, g.owner]) alert(s, x, `Our fleets are fighting ${nameOf(s, x === f.owner ? g.owner : f.owner)}'s in the ${nodeName(f.at)}.`, 'war', { front: true, sea: [f.x, f.y] });
+      }
+    }
+  }
+  for (const k of Object.keys(s.seaBattles)) if (!active.has(k)) delete s.seaBattles[k];
+  // Everyone's losses are worked out first, then taken together
+  for (const { f, foe, own, rate } of plans) {
+    if (!s.fleets[f.id]) continue;
+    const c = s.countries[f.owner];
+    const lost = f.ships * rate;
+    f.ships -= lost;
+    c.ships = Math.max(0, c.ships - lost);
+    const sunk = sinkCarriers(s, f, rate * 0.5);
+    if (sunk) {
+      c.carriers = Math.max(0, c.carriers - sunk);
+      news(s, `${nameOf(s, f.owner)} loses ${sunk === 1 ? 'an aircraft carrier' : `${sunk} aircraft carriers`} in the ${nodeName(f.at)}.`, 'war', [f.owner]);
+    }
+    f.org = Math.max(0, f.org - 22 * dt);
+    f.battle = s.week;
+    f.status = `Fighting in the ${nodeName(f.at)}`;
+    if (f.ships < 0.5 && f.carriers <= 0) {
+      delete s.fleets[f.id];
+      news(s, `${nameOf(s, f.owner)}'s ${f.name} is sunk in the ${nodeName(f.at)}.`, 'war', [f.owner]);
+      alert(s, f.owner, `${f.name} has been destroyed in the ${nodeName(f.at)}.`, 'bad', { front: true });
       continue;
     }
-    if (!s.seaBattles[key]) {
-      const sides = [...new Set(fighting.map((f) => f.owner))];
-      s.seaBattles[key] = { since: s.week, sides };
-      news(s, `Naval battle in the ${nodeName(node)}: ${sides.map((x) => nameOf(s, x)).join(', ')}.`, 'war', sides);
-      for (const x of sides) alert(s, x, `Our fleets are fighting in the ${nodeName(node)}.`, 'war', { front: true });
-    }
-    // Everyone's losses are worked out first, then taken together
-    const plans = fighting.map((f) => {
-      let foe = 0;
-      let own = 0;
-      for (const g of list) {
-        if (atWar(s, f.owner, g.owner)) foe += fleetStrength(s, g);
-        else if (sameSide(s, f.owner, g.owner) || list.some((e) => atWar(s, f.owner, e.owner) && atWar(s, g.owner, e.owner))) own += fleetStrength(s, g);
-      }
-      return { f, foe, own, rate: 0.07 * dt * foe / (foe + own + 0.1) };
-    });
-    for (const { f, foe, own, rate } of plans) {
-      const c = s.countries[f.owner];
-      const lost = f.ships * rate;
-      f.ships -= lost;
-      c.ships = Math.max(0, c.ships - lost);
-      const sunk = sinkCarriers(s, f, rate * 0.5);
-      if (sunk) {
-        c.carriers = Math.max(0, c.carriers - sunk);
-        news(s, `${nameOf(s, f.owner)} loses ${sunk === 1 ? 'an aircraft carrier' : `${sunk} aircraft carriers`} in the ${nodeName(node)}.`, 'war', [f.owner]);
-      }
-      f.org = Math.max(0, f.org - 22 * dt);
-      f.status = `Fighting in the ${nodeName(node)}`;
-      if (f.ships < 0.5 && f.carriers <= 0) {
-        delete s.fleets[f.id];
-        news(s, `${nameOf(s, f.owner)}'s ${f.name} is sunk in the ${nodeName(node)}.`, 'war', [f.owner]);
-        alert(s, f.owner, `${f.name} has been destroyed in the ${nodeName(node)}.`, 'bad', { front: true });
-        continue;
-      }
-      // Badly outgunned or worn out: break off and run for home
-      if (f.org < 20 || own < foe * 0.3) retreat(s, f, node);
-    }
+    // Badly outgunned or worn out: break off and run for home
+    if (f.org < 20 || own < foe * 0.3) retreat(s, f);
   }
 }
 
-export const REFIT_WEEKS = 6;
-
-function withdraw(s, f, node) {
-  delete s.fleets[f.id];
-  const c = s.countries[f.owner];
-  if (c) c.refitUntil = s.week + REFIT_WEEKS;
-  news(s, `${nameOf(s, f.owner)}'s ${f.name} is beaten in the ${nodeName(node)} and withdraws into port.`, 'war', [f.owner]);
-  alert(s, f.owner, `${f.name} lost the battle for the ${nodeName(node)} and has withdrawn into port. Its ${Math.round(f.ships)} ships${f.carriers ? ` and ${Math.round(f.carriers)} carriers` : ''} need ${REFIT_WEEKS} weeks to refit before they can sail again.`, 'bad', { front: true });
-}
-
 function sinkCarriers(s, f, p) {
-  let sunk = 0;
   const whole = Math.floor(f.carriers * p);
-  sunk += whole;
-  if (chance(s, f.carriers * p - whole)) sunk++;
+  let sunk = whole + (chance(s, f.carriers * p - whole) ? 1 : 0);
   sunk = Math.min(f.carriers, sunk);
   f.carriers -= sunk;
   return sunk;
 }
 
-function retreat(s, f, node) {
-  const home = seasOf(s, f.owner).map((k) => [k, seaPath(node, k)]).filter(([, r]) => r).sort((x, y) => x[1].len - y[1].len)[0];
-  // Beaten in its own waters: the fleet runs for harbour, and the enemy holds the sea
-  if (!home || home[0] === node) return withdraw(s, f, node);
-  f.path = home[1].path;
-  f.dest = home[0];
+function retreat(s, f) {
+  if (f.retreating) return;
+  const home = portsOf(s, f.owner)
+    .map((p) => ({ ...p, d: mapDistance(f.x, f.y, p.x, p.y) }))
+    .filter((p) => !fleets(s).some((g) => atWar(s, f.owner, g.owner) && mapDistance(g.x, g.y, p.x, p.y) <= ENGAGE))
+    .sort((a, b) => a.d - b.d)[0];
+  // Nowhere safe to run, or already off our own coast: into harbour, and the enemy holds the sea
+  if (!home || home.d <= OFF_COAST * 1.5) return withdraw(s, f);
+  const route = seaRoute([f.x, f.y], [home.x, home.y]);
+  if (!route) return withdraw(s, f);
+  f.route = route;
+  f.dest = [home.x, home.y];
+  f.retreating = true;
   f.mission = 'hold';
   f.mode = null;
   f.target = null;
-  f.status = `Retreating to the ${nodeName(home[0])}`;
-  // The first leg is sailed at once, so the fleet gets clear of the battle
-  f.prog = 0.0001;
-  news(s, `${nameOf(s, f.owner)}'s ${f.name} breaks off and retreats from the ${nodeName(node)}.`, 'war', [f.owner]);
-  alert(s, f.owner, `${f.name} was outgunned in the ${nodeName(node)} and is falling back to the ${nodeName(home[0])}.`, 'bad', { front: true });
+  f.status = `Retreating to ${regionLabel(home.region)}`;
+  news(s, `${nameOf(s, f.owner)}'s ${f.name} breaks off and retreats from the ${nodeName(f.at)}.`, 'war', [f.owner]);
+  alert(s, f.owner, `${f.name} was outgunned in the ${nodeName(f.at)} and is falling back to ${regionLabel(home.region)}.`, 'bad', { front: true });
+}
+
+function withdraw(s, f) {
+  delete s.fleets[f.id];
+  const c = s.countries[f.owner];
+  if (c) c.refitUntil = s.week + REFIT_WEEKS;
+  news(s, `${nameOf(s, f.owner)}'s ${f.name} is beaten in the ${nodeName(f.at)} and withdraws into port.`, 'war', [f.owner]);
+  alert(s, f.owner, `${f.name} lost the battle for the ${nodeName(f.at)} and has withdrawn into port. Its ${Math.round(f.ships)} ships${f.carriers ? ` and ${Math.round(f.carriers)} carriers` : ''} need ${REFIT_WEEKS} weeks to refit before they can sail again.`, 'bad', { front: true });
 }
 
 /* ---------- Once a week: readiness, shore batteries and blockade attrition ---------- */
 
 export function navyTick(s) {
   if (!s.fleets) initFleets(s);
+  placeFleets(s);
   for (const f of fleets(s)) {
     const c = s.countries[f.owner];
     if (!c || !alive(s, f.owner)) { delete s.fleets[f.id]; continue; }
-    // Ships lost elsewhere (or never built) come off the fleets too
-    const fighting = Boolean(s.seaBattles?.[f.at]) && atNode(f);
-    const home = seasOf(s, f.owner).includes(f.at) && atNode(f);
+    f.at = seaAt(f.x, f.y) ?? f.at;
+    const fighting = f.battle === s.week;
+    const port = nearestPort(s, f.owner, f.x, f.y);
+    const home = port && mapDistance(f.x, f.y, port.x, port.y) <= OFF_COAST;
     if (!fighting) f.org = Math.min(100, f.org + (home ? 10 : 4) * (1 - 0.6 * (c.short?.oil ?? 0)) * (commsReady(s, f.owner) ? 1.25 : 1));
     // Shore missiles and aircraft from a hostile shore
-    if (atNode(f) && isStrait(f.at)) {
+    if (isStrait(f.at)) {
       for (const h of shoreHolders(s, f.at)) {
         if (!atWar(s, h, f.owner)) continue;
         const shore = s.countries[h];
@@ -491,8 +677,8 @@ export function navyTick(s) {
         }
       }
     }
-    // Blockading an enemy coast: its missiles and aircraft wear the fleet down
-    if (f.mission === 'blockade' && f.target && atNode(f) && !f.path.length) {
+    // Lying off an enemy coast: its missiles and aircraft wear the fleet down
+    if (f.mission === 'blockade' && f.target && !moving(f)) {
       const t = s.countries[f.target];
       const lost = f.ships * 0.004 * (t ? 0.5 + t.tech.missile / 12 + Math.min(1, t.aircraft / 1500) : 0.3);
       f.ships = Math.max(0, f.ships - lost);
@@ -518,74 +704,72 @@ export function shoreHolders(s, key) {
 
 /* ---------- Landings ---------- */
 
-// Can our side put an army ashore here? It needs a fleet of ours or an ally's in the sea off the coast, at
-// least as strong as the enemy's fleets there. Returns a reason, or null.
+// Can our side put an army ashore here? It needs a fleet of ours or an ally's lying off that coast, at least as
+// strong as the enemy's there. Returns a reason, or null.
 export function landingControl(s, cid, region) {
-  const seas = seasOf(s, region);
-  if (!seas.length) return 'there is no open sea off that coast';
-  let best = null;
-  for (const sea of seas) {
-    const { mine, theirs } = seaControl(s, cid, sea);
-    if (mine > 0 && mine >= theirs) return null;
-    if (!best || mine - theirs > best.mine - best.theirs) best = { sea, mine, theirs };
-  }
-  if (!best.mine) return `no fleet of ours or an ally's is in the ${seas.map(nodeName).join(' or ')}. Send a fleet there first (Military → Navy)`;
-  return `enemy fleets control the ${nodeName(best.sea)}. Win the sea first`;
+  const port = PORTS[region];
+  if (!port) return 'there is no open sea off that coast';
+  const { mine, theirs } = controlAt(s, cid, port[0], port[1], OFF_COAST + 8);
+  if (mine > 0 && mine >= theirs) return null;
+  if (!mine) return `no fleet of ours or an ally's is off that coast. Send a fleet there first (click it, then click the coast)`;
+  return 'enemy fleets control the waters off that coast. Win the sea first';
 }
 
-// The navy escorting an army across: its strength in the sea of the landing against the enemy's
+// The navy escorting an army across: its strength off the landing beaches against the enemy's
 export function crossingOdds(s, cid, region) {
-  let mine = 0;
-  let theirs = 0;
-  for (const sea of seasOf(s, region)) {
-    const c = seaControl(s, cid, sea);
-    mine += c.mine;
-    theirs += c.theirs;
-  }
-  return { mine, theirs };
+  const port = PORTS[region];
+  if (!port) return { mine: 0, theirs: 0 };
+  return controlAt(s, cid, port[0], port[1], OFF_COAST + 8);
 }
 
 /* ---------- Computer-run admirals ---------- */
 
 export function aiNavy(s, c) {
   const mine = fleets(s).filter((f) => f.owner === c.id);
-  const home = seasOf(s, c.id);
-  if (!home.length) return;
-  const port = inPort(s, c);
-  // New ships join the fleet in home waters, or put to sea as a new one
-  if (port.ships + port.carriers >= 3 && !((c.refitUntil ?? -1) > s.week)) {
-    const idle = mine.find((f) => atNode(f) && !f.path.length && home.includes(f.at));
-    if (idle) reinforceFleet(s, c, { id: idle.id, ships: port.ships, carriers: port.carriers });
+  const ports = portsOf(s, c.id);
+  if (!ports.length) return;
+  const main = [...ports].sort((a, b) => b.gdp - a.gdp)[0];
+  const pool = inPort(s, c);
+  // New ships join a fleet in port, or put to sea as a new one
+  if (pool.ships + pool.carriers >= 3 && !((c.refitUntil ?? -1) > s.week)) {
+    const idle = mine.find((f) => !moving(f) && ports.some((p) => mapDistance(f.x, f.y, p.x, p.y) <= IN_PORT));
+    if (idle) reinforceFleet(s, c, { id: idle.id, ships: pool.ships, carriers: pool.carriers });
     else if (mine.length < MAX_FLEETS) {
       // Put to sea only where the enemy doesn't hold the water: otherwise the ships stay safe in harbour
-      const portPower = fleetStrength(s, { owner: c.id, ships: port.ships, carriers: port.carriers, org: 80 });
-      const sea = home.find((k) => seaControl(s, c.id, k).theirs < portPower * 0.8);
-      if (sea) formFleet(s, c, { sea, ships: port.ships, carriers: port.carriers, name: `${NODES[sea].name} Fleet` });
+      const strength = fleetStrength(s, { owner: c.id, ships: pool.ships, carriers: pool.carriers, org: 80 });
+      const port = [...ports].sort((a, b) => b.gdp - a.gdp).find((p) => controlAt(s, c.id, p.x, p.y, ENGAGE * 2).theirs < strength * 0.8);
+      if (port) formFleet(s, c, { region: port.region, ships: pool.ships, carriers: pool.carriers, name: `${nodeName(port.sea)} Fleet` });
     }
   }
   const enemies = [...enemiesOf(s, c.id)].filter((e) => alive(s, e));
-  const ready = (f) => atNode(f) && !f.path.length && f.org >= 45;
+  const ready = (f) => !moving(f) && f.org >= 45;
   // At peace: blockading fleets come home
   if (!enemies.length) {
     for (const f of mine) {
-      if (f.mission === 'blockade' || (f.mission === 'patrol' && f.mode !== 'escort')) fleetOrder(s, c, { id: f.id, to: home[0], mission: 'hold' });
+      if (f.mission === 'blockade' || (f.mission === 'patrol' && f.mode !== 'escort')) {
+        const home = f.port && PORTS[f.port] ? { x: PORTS[f.port][0], y: PORTS[f.port][1] } : main;
+        fleetOrder(s, c, { id: f.id, x: home.x, y: home.y, mission: 'hold' });
+      }
     }
     return;
   }
-  const strength = (id) => fleets(s).filter((f) => f.owner === id).reduce((t, f) => t + fleetStrength(s, f), 0);
-  const ours = strength(c.id);
-  // Enemy fleets in our home waters: bring the navy home to meet them, if it can win
-  for (const sea of home) {
-    const { mine: here, theirs } = seaControl(s, c.id, sea);
-    if (theirs > 0 && here < theirs && ours > theirs * 1.2) {
-      for (const f of mine.filter((x) => ready(x) && x.at !== sea).slice(0, 2)) fleetOrder(s, c, { id: f.id, to: sea, mission: 'hold' });
+  const strengthOf = (id) => fleets(s).filter((f) => f.owner === id).reduce((t, f) => t + fleetStrength(s, f), 0);
+  const ours = strengthOf(c.id);
+  // Enemy fleets off our coast: meet them, if we can win
+  for (const g of fleets(s)) {
+    if (!enemies.includes(g.owner)) continue;
+    if (!ports.some((p) => mapDistance(g.x, g.y, p.x, p.y) <= OFF_COAST * 2)) continue;
+    const { mine: here } = controlAt(s, c.id, g.x, g.y, ENGAGE);
+    if (here < fleetStrength(s, g) && ours > fleetStrength(s, g) * 1.2) {
+      const pick = mine.filter(ready).sort((a, b) => mapDistance(a.x, a.y, g.x, g.y) - mapDistance(b.x, b.y, g.x, g.y))[0];
+      if (pick) fleetOrder(s, c, { id: pick.id, x: g.x, y: g.y, mission: 'hold' });
     }
   }
   // Blockade the weaker enemies' coasts
   for (const e of enemies) {
-    if (!seasOf(s, e).length) continue;
+    if (!portsOf(s, e).length) continue;
     if (mine.some((f) => f.mission === 'blockade' && f.target === e)) continue;
-    const theirs = strength(e) + (s.minors[e] ? 2 : 0);
+    const theirs = strengthOf(e) + (s.minors[e] ? 2 : 0);
     if (ours < theirs * 1.4) continue;
     const pick = mine.filter(ready).sort((a, b) => fleetStrength(s, b) - fleetStrength(s, a))[0];
     if (pick) fleetOrder(s, c, { id: pick.id, mission: 'blockade', target: e });
@@ -594,8 +778,8 @@ export function aiNavy(s, c) {
   if (ours > 60 && chance(s, 0.15)) {
     for (const [key, cp] of Object.entries(CHOKEPOINTS)) {
       const hits = enemies.some((e) => cp.importCut?.nations.includes(e) || cp.exportCut?.nations.includes(e));
-      if (!hits || mine.some((f) => f.dest === key)) continue;
-      const pick = mine.filter(ready).filter((f) => f.mission === 'hold').sort((a, b) => (seaPath(a.at, key)?.len ?? 99) - (seaPath(b.at, key)?.len ?? 99))[0];
+      if (!hits || mine.some((f) => f.mission === 'patrol' && f.dest && seaAt(...f.dest) === key)) continue;
+      const pick = mine.filter(ready).filter((f) => f.mission === 'hold').sort((a, b) => mapDistance(a.x, a.y, NODES[key].x, NODES[key].y) - mapDistance(b.x, b.y, NODES[key].x, NODES[key].y))[0];
       if (pick) { fleetOrder(s, c, { id: pick.id, to: key, mission: 'patrol', mode: 'enemies' }); break; }
     }
   }
@@ -609,12 +793,11 @@ export function fleetsFor(s, cid, { seen = false } = {}) {
   return fleets(s).map((f) => {
     const own = !me || f.owner === cid || allied(s, cid, f.owner);
     const base = {
-      id: f.id, owner: f.owner, name: f.name, at: f.at, next: f.path[0] ?? null, prog: Math.round((f.prog ?? 0) * 100) / 100,
-      len: f.path.length ? Math.round(edgeLen(f.at, f.path[0]) * 100) / 100 : 0, carriers: Math.round(f.carriers),
-      mission: f.mission, target: f.target, mode: f.mode, battle: Boolean(s.seaBattles?.[f.at]) && atNode(f),
+      id: f.id, owner: f.owner, name: f.name, x: Math.round(f.x * 10) / 10, y: Math.round(f.y * 10) / 10, at: f.at, moving: moving(f),
+      carriers: Math.round(f.carriers), mission: f.mission, target: f.target, mode: f.mode, battle: f.battle === s.week,
     };
     return own
-      ? { ...base, ships: Math.round(f.ships), org: Math.round(f.org), path: [...f.path], dest: f.dest, status: f.status, exact: true }
+      ? { ...base, ships: Math.round(f.ships), org: Math.round(f.org), route: f.route.map(([x, y]) => [Math.round(x), Math.round(y)]), dest: f.dest, status: f.status, exact: true }
       : { ...base, ships: seen ? Math.round(f.ships) : Math.max(1, Math.round(f.ships / 5) * 5), exact: false, seen };
   });
 }

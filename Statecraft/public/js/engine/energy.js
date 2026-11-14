@@ -1,13 +1,14 @@
 // Oil and gas politics: the producers' cartel, embargoes, strategic reserves and pipelines.
 //
-// The cartel (OPEC+ at the start) agrees a production cut that its chair sets: fewer barrels, higher prices.
+// There is no cartel at the start. A major producer can found one; its members agree a production cut that its
+// leader sets: fewer barrels, higher prices.
 // Each member decides whether to keep to it or quietly pump more and pocket the difference, and cheats get
 // caught. The chair can also embargo a country, as in 1973, cutting it off from the cartel's oil.
 // Pipelines carry oil and gas past blockades, closed straits and embargoes: a buyer gets that share of its
 // fuel whatever happens at sea, unless the seller shuts the pipe, a war cuts it, or someone blows it up.
 // Bypass pipelines let an exporter reach the open sea without passing a strait (Saudi Arabia's Petroline).
 
-import { CARTEL_START, CUTS, PIPELINES, PIPELINE_PROJECTS } from './data/energy.js';
+import { CUTS, PIPELINES, PIPELINE_PROJECTS } from './data/energy.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, chance, news, alert, nameOf, alive, atWar, addRel, money, isMinor } from './core.js';
 
@@ -17,10 +18,8 @@ export { CUTS };
 /* ---------- Setting up ---------- */
 
 export function initEnergy(s) {
-  // Only once: a cartel that later collapses stays gone (null) until someone founds a new one
-  if (!('cartel' in s)) {
-    s.cartel = { name: CARTEL_START.name, members: CARTEL_START.members.filter((id) => s.countries[id] || s.minors[id]), chair: 'sau', cut: CARTEL_START.cut, embargo: [], founded: 0, expelled: {}, share: 0.5 };
-  }
+  // The world starts with no cartel, as with alliances: producers found one if they choose
+  if (!('cartel' in s)) s.cartel = null;
   if (!s.pipelines) {
     s.pipelines = PIPELINES.map((p) => ({ id: p.id, status: p.shut ? 'shut' : 'open', until: null, left: 0 }));
   }
@@ -124,7 +123,6 @@ export function cartelJoin(s, c) {
   ct.members.push(c.id);
   c.cartelCheat = false;
   news(s, `${c.name} joins ${ct.name}.`, 'economy', [c.id]);
-  pickChair(s);
   return null;
 }
 
@@ -154,9 +152,10 @@ function dissolve(s) {
   s.cartel = null;
 }
 
+// The founder leads; if the leader leaves or falls, the biggest producer still in takes over
 function pickChair(s) {
   const ct = s.cartel;
-  if (!ct) return;
+  if (!ct || (ct.members.includes(ct.chair) && alive(s, ct.chair))) return;
   const shares = oilShares(s);
   const best = ct.members.filter((m) => s.countries[m] && alive(s, m)).sort((a, b) => (shares.get(b) ?? 0) - (shares.get(a) ?? 0))[0];
   if (best && best !== ct.chair) {
@@ -353,6 +352,8 @@ export function aiEnergy(s, c) {
     if (!c.cartelCheat && (broke || sour) && ct.cut >= 10 && chance(s, 0.25) && !c.cartelCaught) setCheat(s, c, { on: true });
     else if (c.cartelCheat && (c.cartelCaught ?? 0) >= 1) setCheat(s, c, { on: false });
   } else if (ct && price < 0.85 && chance(s, 0.03)) cartelJoin(s, c);
+  // No cartel and prices sagging: a big producer calls the others together
+  else if (!ct && price < 0.85 && (oilShares(s).get(c.id) ?? 0) >= 0.05 && chance(s, 0.05)) cartelFound(s, c, { name: "The Oil Producers' Cartel" });
   // In a world price shock, importers with full tanks put some of their reserve on the market to bring prices
   // down (as the IEA does). An embargoed country keeps its reserve: it is already drawn on to cover the gap.
   const weeksLeft = (c.stock.oil ?? 0) / Math.max(0.001, c.demand?.oil ?? 0);

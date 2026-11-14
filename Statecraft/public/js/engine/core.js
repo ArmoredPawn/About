@@ -41,7 +41,8 @@ export function monthLabel(week) {
 
 /* ---------- Nations (playable countries and minor nations) ---------- */
 
-export const isMinor = (id) => id?.startsWith('m-');
+// Minor nations are the states that break away during a game (every nation on the map at the start is a country)
+export const isMinor = (id) => id?.startsWith('m-x-');
 export const nation = (s, id) => s.countries[id] ?? s.minors[id];
 export const nameOf = (s, id) => nation(s, id)?.name ?? id;
 export const alive = (s, id) => {
@@ -130,7 +131,9 @@ export function onSameSide(s, a, b) {
 
 /* ---------- News (public) and alerts (to one country) ---------- */
 
+const ROUTINE = new Set(['election', 'incident']);
 export function news(s, text, kind = 'info', about = []) {
+  if (ROUTINE.has(kind) && about.length && about.every((id) => s.countries[id]?.minor)) return;
   s.news.push({ id: s.nextId++, w: s.week, text, kind, about });
   if (s.news.length > 300) s.news.splice(0, s.news.length - 300);
   s.fresh.push({ type: 'news', w: s.week, text, kind, about });

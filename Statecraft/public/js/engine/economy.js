@@ -80,7 +80,7 @@ function sanctionShare(s, id, world) {
 function homeWaters(s, id) {
   const seas = new Set(seasOf(s, id));
   let p = 0;
-  for (const f of Object.values(s.fleets ?? {})) if (f.owner === id && seas.has(f.at) && !(f.prog > 0)) p += fleetStrength(s, f);
+  for (const f of Object.values(s.fleets ?? {})) if (f.owner === id && seas.has(f.at) && !f.route?.length) p += fleetStrength(s, f);
   return p;
 }
 

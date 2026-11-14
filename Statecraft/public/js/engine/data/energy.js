@@ -1,13 +1,7 @@
-// Oil and gas politics: the producers' cartel as it stands in 2027, the pipelines that carry oil and gas across
-// borders, and pipelines that have been planned but not built.
+// Oil and gas politics: the cartel's production cuts, the pipelines that carry oil and gas across borders, and
+// pipelines that have been planned but not built.
 
-// OPEC+ in the game: the OPEC members and their Russian-led partners (with Mexico, Kazakhstan, Oman and
-// Azerbaijan). Their production cut, in percent, as agreed in 2027.
-export const CARTEL_START = {
-  name: 'OPEC+',
-  members: ['sau', 'rus', 'irq', 'are', 'irn', 'kaz', 'mex', 'm-kuwait', 'm-nigeria', 'm-libya', 'm-algeria', 'm-oman', 'm-venezuela', 'm-azerbaijan'],
-  cut: 5,
-};
+// No cartel exists when the game begins: producers found one if they choose (see energy.js)
 export const CUTS = [0, 5, 10, 20, 30];
 
 // share: how much of each buyer's need for that fuel the pipeline can carry (for buyers), or how much of the

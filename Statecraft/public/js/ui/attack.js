@@ -75,8 +75,8 @@ function accessButtons(ctx, world, army, target) {
   const block = blockers(world, s.me, army.region, target).filter((x) => x !== holderOf(ctx, target) && s.countries[x] && !s.countries[x].exile);
   if (!block.length) return null;
   return h('div.row.wrap.gap', { style: { marginTop: '4px' } }, block.map((x) => h('button.btn.small', { type: 'button', onclick: async () => {
-    const err = await ctx.send({ type: 'propose', to: x, kind: 'access', terms: {} });
-    if (!err) ctx.toast(`Asked ${nationName(s, x)} for military access. ${s.countries[x].human ? 'Its leader will answer.' : 'They will answer within a week.'}`, 'info');
+    const err = await ctx.send({ type: 'propose', to: x, kind: 'access', terms: { army: army.id, target } });
+    if (!err) ctx.toast(`Asked ${nationName(s, x)} to let our troops pass. ${s.countries[x].human ? 'Its leader will answer.' : 'They will answer within a week.'} If they agree, ${army.name} sets off at once.`, 'info');
   } }, `Ask ${nationName(s, x)} for access`)));
 }
 
@@ -88,7 +88,7 @@ function accessDialog(ctx, army, target) {
   modal({
     title: `No way through to ${regionName(target)}`,
     body: h('div.stack', h('p', noRouteReason(world, s.me, army.region, target)), buttons,
-      h('p.muted.small', 'A country that grants access lets your troops and tanks pass. One that refuses has to be fought through.')),
+      h('p.muted.small', 'Every country between us and the objective must agree to let our troops pass (allies always do). If one agrees, the army sets off on its own. If it refuses, the only way through is to defeat it in a war; a peace treaty can then force it to grant access.')),
     actions: [{ label: 'Close', kind: 'ghost' }],
   });
   return true;

@@ -12,6 +12,7 @@ import { clamp, news, alert, chance, rand, enemiesOf, nextId, rel, money, troops
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 const CAPITALS = Object.fromEntries(PROVINCES.filter((p) => p.capital).map((p) => [p.country, p.id]));
+export const capitalOf = (s, id) => CAPITALS[id] ?? (s.regions[id] ? id : null);
 
 /* ---------- Conscription ---------- */
 
@@ -193,7 +194,7 @@ export function restraint(s, c) {
 function protestsTick(s, c) {
   const p = pressures(s, c);
   const hold = restraint(s, c);
-  const capital = CAPITALS[c.id];
+  const capital = capitalOf(s, c.id);
   for (const [cause, pressure] of Object.entries(p)) {
     const want = Math.max(0, pressure * (1 - hold) - 12);
     let pr = c.protests.find((x) => x.cause === cause);
@@ -282,7 +283,7 @@ function revoltsTick(s, gar) {
       if (reg.ctrl !== c.id || !reg.revolt) continue;
       n++;
       rebels += reg.revolt.rebels;
-      if (reg.id === CAPITALS[c.id]) capital = true;
+      if (reg.id === capitalOf(s, c.id)) capital = true;
     }
     const was = c.civilWar;
     c.civilWar = n >= 2 || capital || rebels > Math.max(20, c.troops * 0.1);

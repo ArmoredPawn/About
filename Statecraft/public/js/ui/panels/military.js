@@ -11,6 +11,7 @@ import { peaceDialog } from './diplomacy.js';
 import { CONSCRIPTION } from '../../engine/government.js';
 import { RANGE_KINDS, rangeCost, RANGE_WEEKS } from '../../engine/science.js';
 import { navy, blockadeDialog, myFleets } from './navy.js';
+import { airOps } from './air.js';
 
 export function military(ctx) {
   const tab = ctx.sub('military', 'overview');
@@ -276,15 +277,11 @@ function ops(ctx) {
   const s = ctx.state;
   const me = s.you;
   const enemies = s.wars.filter((w) => w.a === s.me || w.b === s.me).map((w) => (w.a === s.me ? w.b : w.a));
-  const freeAir = me.aircraft - me.airOps.reduce((t, o) => t + o.aircraft, 0);
   const fleets = myFleets(s);
   const blockading = fleets.filter((f) => f.mission === 'blockade');
   return h('div',
     !enemies.length ? h('div.warning.info', 'You are at peace. Air campaigns, blockades and missile strikes need a war.') : null,
-    h('div.section', h('h3', 'Air campaigns'),
-      h('div.list', me.airOps.length ? me.airOps.map((o) => h('div.item', h('div.item-head', h('span.name', regionName(o.region)), h('span.mono.small', `${o.aircraft} aircraft`)),
-        h('div.actions', h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'air', region: o.region, aircraft: 0 }) }, 'Call off')))) : [h('div.empty', 'None. Bombing wrecks industry, oil fields and mines in a province.')]),
-      h('button.btn.small', { style: { marginTop: '8px' }, disabled: !enemies.length || freeAir < 1, onclick: () => airCampaign(ctx) }, `New air campaign (${num(freeAir)} free)`)),
+    airOps(ctx, enemies),
     h('div.section', h('h3', 'Naval blockades'),
       h('div.list', blockading.length ? blockading.map((f) => h('div.item', h('div.item-head', flag(f.target), h('span.name', nationName(s, f.target)), h('span.mono.small', `${f.name}: ${num(f.ships)} ships`)),
         h('div.meta', f.path?.length ? f.status : `Cutting ${s.countries[f.target]?.blockaded ?? 0}% of their sea trade`),
@@ -292,14 +289,8 @@ function ops(ctx) {
       h('div.actions', { style: { marginTop: '8px' } },
         h('button.btn.small', { disabled: !enemies.length || !fleets.length, onclick: () => blockadeDialog(ctx, enemies) }, 'Send a fleet to blockade…'),
         h('button.btn.small.ghost', { onclick: () => ctx.setSub('military', 'navy') }, 'Navy'))),
-    h('div.section', h('h3', 'Missile strikes'),
-      h('p.muted.small', `${num(me.missiles)} missiles. Target an enemy province's oil fields, factories or troops. Air defences intercept some.`),
-      h('button.btn.small', { style: { marginTop: '8px' }, disabled: !enemies.length || me.missiles < 1, onclick: () => ctx.strikeTarget('missile') }, 'Pick a target…')),
-  );
-}
 
-function airCampaign(ctx) {
-  ctx.strikeTarget('air');
+  );
 }
 
 /* ---------- Production ---------- */

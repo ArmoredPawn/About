@@ -7,6 +7,7 @@ import {
   P5, clamp, news, alert, nameOf, nation, isMinor, alive, atWar, allied, enemiesOf, alliancesOf, treaty, rel, addRel,
   setRel, nextId, money, warBetween, warCaseMade,
 } from './core.js';
+import { orderArmy } from './military.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 export const PROPOSAL_WEEKS = 4;
@@ -78,7 +79,7 @@ function callAllies(s, aggressor, victim) {
   for (const al of alliancesOf(s, victim, 'military')) {
     for (const m of al.members) if (m !== victim && m !== aggressor) called.add(m);
   }
-  const g = s.minors[victim]?.guarantor;
+  const g = nation(s, victim)?.guarantor;
   if (g && g !== aggressor) called.add(g);
   for (const m of called) {
     const c = s.countries[m];
@@ -87,7 +88,7 @@ function callAllies(s, aggressor, victim) {
       propose(s, victim, m, 'callToArms', { enemy: aggressor, ally: victim }, true);
       continue;
     }
-    const guarantor = s.minors[victim]?.guarantor === m;
+    const guarantor = nation(s, victim)?.guarantor === m;
     const willing = rel(s, m, aggressor) < 40 && (guarantor || al(s, m, victim) || rel(s, m, victim) > 40);
     if (willing) {
       for (const pact of alliancesOf(s, victim, 'military')) if (pact.secret && pact.members.includes(m)) revealAlliance(s, pact, `as ${c.name} goes to war for ${nameOf(s, victim)}`);
@@ -140,6 +141,11 @@ export function makePeace(s, a, b, terms = {}) {
     reg.unrest = 50;
     reg.battle = null;
     ceded.add(region);
+  }
+  // The loser lets the winner's troops pass from now on
+  if (terms.access && !treaty(s, 'access', a, b)) {
+    s.treaties.push({ id: nextId(s, 't'), kind: 'access', a, b, since: s.week, until: s.week + 99999 });
+    news(s, `${nameOf(s, a)} and ${nameOf(s, b)} agree to let each other's troops pass.`, 'diplomacy', [a, b]);
   }
   if (!terms.armistice) {
     for (const reg of Object.values(s.regions)) {
@@ -273,12 +279,23 @@ export function describe(s, p) {
       else parts.push('peace');
       for (const c of t.cede ?? []) parts.push(`${regionName(c.region)} to ${nameOf(s, c.to)}`);
       if (t.reparations?.amount) parts.push(`${nameOf(s, t.reparations.from)} pays ${money(Number(t.reparations.amount))} a year for ${t.reparations.years ?? 5} years`);
+      if (t.access) parts.push('military access for each other\'s troops');
       return parts.join('; ');
     }
     case 'joinWar': return `join the war against ${nameOf(s, t.enemy)}`;
     case 'callToArms': return `honour your alliance and defend ${nameOf(s, t.ally)} against ${nameOf(s, t.enemy)}`;
     default: return p.kind;
   }
+}
+
+// Access granted: the army that was waiting at the border sets off for where it was sent
+function resumeMarch(s, p) {
+  const t = p.terms ?? {};
+  const army = s.armies[t.army];
+  const c = s.countries[p.from];
+  if (!army || !c || army.owner !== p.from || !t.target) return;
+  const err = orderArmy(s, c, army, { kind: 'go', target: t.target });
+  alert(s, p.from, err ? `${nameOf(s, p.to)} granted access, but ${army.name} still can't reach its objective: ${err}` : `${nameOf(s, p.to)} granted access: ${army.name} is on its way.`, err ? 'warn' : 'good', { front: true });
 }
 
 export function respond(s, cid, id, accept) {
@@ -293,7 +310,8 @@ export function respond(s, cid, id, accept) {
   const from = nameOf(s, p.from);
   const to = nameOf(s, p.to);
   if (!accept) {
-    alert(s, p.from, `${to} declined: ${describe(s, p)}.`, 'warn');
+    if (p.kind === 'access') alert(s, p.from, `${to} refused our troops passage. They can't cross ${to}: the only way through now is to defeat it in a war (Diplomacy, or its provinces on the map).`, 'warn', { country: p.to });
+    else alert(s, p.from, `${to} declined: ${describe(s, p)}.`, 'warn');
     if (p.kind === 'callToArms') {
       const c = s.countries[cid];
       c.rep = Math.max(0, c.rep - 8);
@@ -317,7 +335,10 @@ export function respond(s, cid, id, accept) {
     case 'fta': case 'nap': case 'access':
       s.treaties.push({ id: nextId(s, 't'), kind: p.kind, a: p.from, b: p.to, since: s.week, until: s.week + 99999 });
       addRel(s, p.from, p.to, p.kind === 'fta' ? 12 : 8);
-      news(s, `${from} and ${to} sign ${p.kind === 'fta' ? 'a free trade agreement' : p.kind === 'nap' ? 'a non-aggression pact' : 'a military access agreement'}.`, 'diplomacy', [p.from, p.to]);
+      if (!(p.kind === 'fta' && s.countries[p.from]?.minor && s.countries[p.to]?.minor)) {
+        news(s, `${from} and ${to} sign ${p.kind === 'fta' ? 'a free trade agreement' : p.kind === 'nap' ? 'a non-aggression pact' : 'a military access agreement'}.`, 'diplomacy', [p.from, p.to]);
+      }
+      if (p.kind === 'access') resumeMarch(s, p);
       break;
     case 'deal': {
       const buyer = t.seller === p.from ? p.to : p.from;

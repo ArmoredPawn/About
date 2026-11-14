@@ -5,6 +5,7 @@ import { COUNTRY_IDS, COUNTRIES } from '../public/js/engine/data/countries.js';
 import { PROVINCES } from '../public/js/engine/data/regions.js';
 import { GEO, ORDER } from '../public/js/engine/data/geo.js';
 import { route, freeForces, bury } from '../public/js/engine/military.js';
+import { rel } from '../public/js/engine/core.js';
 
 function game(seed = 1, leader = 'usa') {
   const g = Game.create({ seed });
@@ -61,8 +62,10 @@ test('commands are checked: you cannot spend money you do not have or attack wit
 test('invading Kuwait: the general advances, captures it and the world reacts', () => {
   const g = game(5, 'irq');
   assert.equal(g.command('irq', { type: 'war', target: 'm-kuwait' }), null);
-  // The United States guarantees Kuwait and joins the war
-  assert.ok(g.s.wars.some((w) => w.a === 'usa' && w.b === 'irq'), 'USA defends Kuwait');
+  // Kuwait is a country the computer runs, with an army of its own, but no one is bound to defend it at the start
+  assert.ok(g.s.countries['m-kuwait'] && !g.s.countries['m-kuwait'].human, 'Kuwait is computer-run');
+  assert.equal(g.s.countries['m-kuwait'].minor, true, 'and not playable');
+  assert.ok(!g.s.wars.some((w) => w.a === 'usa' && w.b === 'irq'), 'no guarantees at the start');
   g.command('irq', { type: 'armyCreate', region: 'irq-bs', troops: 150, tanks: 300 });
   const army = Object.values(g.s.armies).find((a) => a.owner === 'irq');
   assert.equal(g.command('irq', { type: 'armyOrder', id: army.id, kind: 'attack', target: 'm-kuwait', aggr: 'allout' }), null);
@@ -434,18 +437,25 @@ test('navies are fleets on the map: patrols, blockades and sea battles come from
   const g = game(4, 'gbr');
   const s = g.s;
   assert.ok(Object.values(s.fleets).some((f) => f.owner === 'usa' && f.at === 'atl'), 'the US Atlantic Fleet');
+  assert.ok(Object.values(s.fleets).every((f) => Number.isFinite(f.x) && Number.isFinite(f.y)), 'every fleet is at an exact point');
   assert.ok(!Object.values(s.fleets).some((f) => f.owner === 'che'), 'landlocked Switzerland has no navy');
   const f = Object.values(s.fleets).find((x) => x.owner === 'gbr');
   assert.match(g.command('gbr', { type: 'fleetOrder', id: f.id, mission: 'blockade', target: 'fra' }), /not at war/);
   assert.equal(g.command('gbr', { type: 'fleetOrder', id: f.id, to: 'gibraltar', mission: 'patrol', mode: 'escort' }), null);
   assert.equal(s.chokepoints.gibraltar.patrols.gbr, undefined, 'not there yet');
-  for (let i = 0; i < 40 && f.path.length; i++) g.step(1 / 9);
-  assert.equal(f.at, 'gibraltar');
+  for (let i = 0; i < 90 && f.route.length; i++) { g.step(1 / 9); if (i % 9 === 8) g.tick(); }
+  assert.equal(f.at, 'gibraltar', 'sailed round Spain into the strait');
   assert.equal(s.chokepoints.gibraltar.patrols.gbr.mode, 'escort');
-  // China and Taiwan at war: the much smaller fleet in its own waters withdraws into port
+  // Any point on the water: the North Sea off Norway
+  assert.equal(g.command('gbr', { type: 'fleetOrder', id: f.id, x: 905, y: 135, mission: 'hold' }), null);
+  assert.match(g.command('gbr', { type: 'fleetOrder', id: f.id, x: 1000, y: 200, mission: 'hold' }) ?? '', /water/, 'not inland');
+  // China and Taiwan at war: China's main fleet sails at Taiwan's, which, far smaller and off its own coast, withdraws into port
   declareWar(s, s.countries.chn, 'twn', 'conquest');
-  for (let i = 0; i < 9; i++) g.step(1 / 9);
-  assert.ok(!Object.values(s.fleets).some((x) => x.owner === 'twn' && x.at === 'eas'), "Taiwan's fleet has left the East Asian seas");
+  const tw = Object.values(s.fleets).find((x) => x.owner === 'twn');
+  const cn = Object.values(s.fleets).filter((x) => x.owner === 'chn').sort((a, b) => b.ships - a.ships)[0];
+  assert.equal(g.command('chn', { type: 'fleetOrder', id: cn.id, x: tw.x, y: tw.y, mission: 'hold' }), null);
+  for (let i = 0; i < 90 && s.fleets[tw.id]; i++) { g.step(1 / 9); if (i % 9 === 8) g.tick(); }
+  assert.ok(!s.fleets[tw.id], "Taiwan's fleet has left the sea");
   assert.ok(s.countries.twn.refitUntil > s.week, 'and is refitting in port');
 });
 
@@ -456,9 +466,13 @@ test("a landing needs a fleet in the sea off the coast, at least as strong as th
   g.command('jpn', { type: 'war', target: 'kor', goal: 'conquest' });
   const from = Object.keys(s.regions).find((id) => id.startsWith('jpn-') && GEO[id].coast);
   const target = Object.keys(s.regions).find((id) => id.startsWith('kor-') && GEO[id].coast);
-  assert.equal(landingProblem(s, { id: 'jpn' }, from, target), null, "Japan's fleet out-guns Korea's in the East Asian seas");
-  for (const f of Object.values(s.fleets)) if (f.owner === 'jpn') delete s.fleets[f.id];
-  assert.match(landingProblem(s, { id: 'jpn' }, from, target), /no fleet of ours/);
+  assert.match(landingProblem(s, { id: 'jpn' }, from, target), /no fleet of ours/, 'our fleet is still in home waters');
+  for (const k of Object.values(s.fleets)) if (k.owner === 'kor') delete s.fleets[k.id]; // Korea's navy is in port
+  const { PORTS } = await import('../public/js/engine/navy.js');
+  const f = Object.values(s.fleets).filter((x) => x.owner === 'jpn').sort((a, b) => b.ships - a.ships)[0];
+  assert.equal(g.command('jpn', { type: 'fleetOrder', id: f.id, x: PORTS[target][0], y: PORTS[target][1], mission: 'hold' }), null);
+  for (let i = 0; i < 90 && f.route.length; i++) { g.step(1 / 9); if (i % 9 === 8) g.tick(); }
+  assert.equal(landingProblem(s, { id: 'jpn' }, from, target), null, "with Japan's fleet off the Korean coast, the landing can go ahead");
 });
 
 /* ---------- Peoples ---------- */
@@ -513,8 +527,11 @@ test("the cartel's cut and embargo bite, and pipelines get fuel past them", asyn
   const { cartelOutput, embargoCut, pipelineShare, bypassShare } = await import('../public/js/engine/energy.js');
   const g = game(5, 'sau');
   const s = g.s;
-  assert.equal(s.cartel.name, 'OPEC+');
+  assert.equal(s.cartel, null, 'no cartel at the start');
+  assert.equal(g.command('sau', { type: 'cartelFound', name: 'The Producers' }), null);
   assert.equal(s.cartel.chair, 'sau');
+  for (const id of ['irq', 'are', 'irn', 'rus', 'kaz']) s.countries[id].human = { name: 'x' }, assert.equal(g.command(id, { type: 'cartelJoin' }), null);
+  for (const id of ['irq', 'are', 'irn', 'rus', 'kaz']) s.countries[id].human = null;
   for (let w = 0; w < 4; w++) g.tick();
   const before = s.market.price.oil;
   assert.equal(g.command('sau', { type: 'cartelCut', cut: 30 }), null);
@@ -572,10 +589,103 @@ test('a game saved before navies, peoples, oil, climate and space carries on und
   delete old.fleets; delete old.aid; delete old.pipelines; delete old.cartel; delete old.climate; delete old.space;
   for (const r of Object.values(old.regions)) { delete r.people; delete r.loyalty; delete r.policy; }
   for (const c of Object.values(old.countries)) delete c.space;
+  // Back then the smaller nations were passive 'minors' that only defended themselves
+  for (const c of Object.values(old.countries)) {
+    if (!c.minor) continue;
+    delete old.countries[c.id];
+    old.minors[c.id] = { id: c.id, name: c.name, troops: c.troops, tanks: c.tanks, nukes: c.nukes, guarantor: null, chokepoint: null, puppetOf: c.id === 'm-kuwait' ? 'usa' : null, annexed: false, capitulated: false, gdp: c.gdp, pop: c.pop, short: {}, stock: {} };
+  }
   const back = new Game(old);
+  assert.equal(Object.keys(back.s.minors).length, 0, 'the old minor nations are countries now');
+  assert.ok(back.s.countries['m-kuwait'].minor && back.s.countries['m-kuwait'].conscription, 'with all a country needs');
+  assert.ok(back.s.treaties.some((t) => t.kind === 'access' && t.a === 'usa' && t.b === 'm-kuwait'), 'a puppet lets its old master through');
   for (let i = 0; i < 3; i++) { for (let j = 0; j < 3; j++) back.step(1 / 3); back.tick(); }
   assert.ok(Object.keys(back.s.fleets).length > 20);
-  assert.ok(back.s.cartel && back.s.climate && back.s.space && back.s.pipelines.length);
+  assert.ok('cartel' in back.s && back.s.climate && back.s.space && back.s.pipelines.length);
   assert.ok(Object.values(back.s.regions).every((r) => r.people && r.loyalty != null));
   assert.ok(back.view('usa').fleets.length > 20);
+});
+
+/* ---------- Spies ---------- */
+
+test('spies uncover war plans that can be acted on, and a turned network\'s lies backfire', async () => {
+  const { intelAction } = await import('../public/js/engine/spies.js');
+  const g = game(51, 'gbr');
+  const s = g.s;
+  const me = s.countries.gbr;
+  me.treasury += 100;
+  // Russia is planning to attack Poland; our network in Moscow finds out
+  s.countries.rus.ai.plan = 'pol';
+  s.countries.rus.ai.planAt = s.week + 100; // keep the plan alive while we watch
+  assert.equal(g.command('gbr', { type: 'spyPlant', target: 'rus', agents: 12 }), null);
+  s.countries.rus.counterIntel = 0;
+  let plan = null;
+  for (let w = 0; w < 12 && !plan; w++) { g.tick(); plan = me.reports.find((r) => r.act === 'plan'); }
+  assert.ok(plan, 'the plan was reported');
+  assert.equal(plan.victim, 'pol');
+  assert.ok(me.inbox.some((m) => /preparing to attack Poland/.test(m.text)), 'and we were alerted');
+  const relBefore = s.rel['gbr|pol'] ?? 0;
+  assert.equal(g.command('gbr', { type: 'intelAct', id: plan.id, action: 'warn' }), null);
+  assert.ok((s.rel['gbr|pol'] ?? 0) > relBefore, 'Poland is grateful');
+  assert.ok(s.countries.pol.mob >= 1, 'and mobilises');
+  assert.match(g.command('gbr', { type: 'intelAct', id: plan.id, action: 'expose' }), /already acted/);
+  // A lie from a turned network: exposing it costs us
+  const rep = me.rep;
+  me.reports.push({ id: 999999, w: s.week, about: 'rus', text: 'fake', kind: 'plan', act: 'plan', planner: 'rus', victim: 'fin', turned: true });
+  assert.equal(intelAction(s, me, { id: 999999, action: 'expose' }), null);
+  assert.ok(me.rep < rep, 'exposing a fabrication hurts our standing');
+  assert.ok(!g.view('gbr').you.reports.some((r) => 'turned' in r), 'the view never says which reports are lies');
+  // Rolling up their network in our country
+  s.countries.rus.spies.gbr = { agents: 6, since: 0, turned: false, lastReport: 0 };
+  me.reports.push({ id: 999998, w: s.week, about: 'rus', text: 'their spies', kind: 'counter', act: 'rollup', target: 'rus' });
+  assert.equal(g.command('gbr', { type: 'intelAct', id: 999998, action: 'rollup' }), null);
+  assert.equal(s.countries.rus.spies.gbr, undefined);
+});
+
+/* ---------- Military access ---------- */
+
+test('crossing another country takes its permission: granted, the army marches on; refused, only war opens the way', async () => {
+  const { respond } = await import('../public/js/engine/diplomacy.js');
+  const g = game(61, 'fra');
+  const s = g.s;
+  for (const f of Object.values(s.fleets)) if (f.owner === 'fra') delete s.fleets[f.id]; // no landing by sea
+  g.command('fra', { type: 'war', target: 'pol', goal: 'conquest' });
+  g.command('fra', { type: 'armyCreate', region: 'fra-es', troops: 60, tanks: 0 });
+  const army = Object.values(s.armies).find((a) => a.owner === 'fra');
+  assert.match(g.command('fra', { type: 'armyOrder', id: army.id, kind: 'go', target: 'pol-wp' }) ?? '', /Germany|access|through|cross/i, 'Germany is in the way');
+  // Fighting on the same side is no longer a free pass
+  g.command('deu', { type: 'war', target: 'pol', goal: 'conquest' });
+  assert.ok(g.command('fra', { type: 'armyOrder', id: army.id, kind: 'go', target: 'pol-wp' }), 'still needs Germany\'s permission');
+  // Ask; Germany agrees; the army sets off by itself
+  s.countries.deu.human = { name: 'Berlin' };
+  assert.equal(g.command('fra', { type: 'propose', to: 'deu', kind: 'access', terms: { army: army.id, target: 'pol-wp' } }), null);
+  const p = Object.values(s.proposals).find((x) => x.kind === 'access');
+  assert.equal(respond(s, 'deu', p.id, true), null);
+  assert.equal(army.op.target, 'pol-wp', 'the army is on its way');
+  assert.ok(s.countries.fra.inbox.some((m) => /granted access/.test(m.text)));
+  // A refusal says so plainly
+  g.command('fra', { type: 'propose', to: 'che', kind: 'access', terms: {} });
+  s.countries.che.human = { name: 'Bern' };
+  const q = Object.values(s.proposals).find((x) => x.kind === 'access' && x.to === 'che');
+  if (q) {
+    respond(s, 'che', q.id, false);
+    assert.ok(s.countries.fra.inbox.some((m) => /refused our troops passage/.test(m.text)));
+  }
+});
+
+test('every other nation is a country the computer runs: blocs, protectors and wars of their own', () => {
+  const g = game(12, 'usa');
+  const s = g.s;
+  const npc = Object.values(s.countries).filter((c) => c.minor);
+  assert.ok(npc.length > 140, 'about 150 smaller nations');
+  assert.equal(Object.keys(s.alliances).length, 0, 'no alliances at the start');
+  g.setLeader('m-greece', 'Someone');
+  assert.equal(s.countries['m-greece'].human, null, 'a smaller nation cannot be led by a person');
+  assert.ok(rel(s, 'm-armenia', 'm-azerbaijan') < -50, 'old feuds');
+  assert.deepEqual(s.countries['m-serbia'].claims, ['m-kosovo']);
+  for (let w = 0; w < 80; w++) { for (let i = 0; i < 3; i++) g.step(1 / 3); g.tick(); }
+  const blocs = Object.values(s.alliances).filter((al) => al.kind === 'economic' && al.members.every((m) => s.countries[m]?.minor));
+  assert.ok(blocs.length >= 5 && blocs.some((al) => al.members.length >= 4), 'regional trade blocs formed');
+  assert.ok(Object.values(s.alliances).some((al) => al.kind === 'military' && al.members.some((m) => s.countries[m]?.minor) && al.members.some((m) => !s.countries[m]?.minor)), 'a smaller nation found a protector');
+  assert.ok(!s.news.some((n) => /goes to the polls|Election upset/.test(n.text) && n.about.every((id) => s.countries[id]?.minor)), 'their routine elections stay out of the news');
 });

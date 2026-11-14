@@ -70,7 +70,8 @@ function warnings(ctx) {
   const enemies = s.wars.filter((w) => w.a === s.me || w.b === s.me);
   for (const w of enemies) {
     const foe = w.a === s.me ? w.b : w.a;
-    add('bad', `At war with ${nationName(s, foe)} for ${s.week - w.since} weeks.`, () => ctx.go('military'));
+    const weeks = s.week - w.since;
+    add('bad', weeks < 1 ? `At war with ${nationName(s, foe)}: the war has just begun.` : `At war with ${nationName(s, foe)} for ${weeks} week${weeks === 1 ? '' : 's'}.`, () => ctx.go('military'));
   }
   const lost = Object.values(s.regions).filter((r) => r[0] === s.me && r[1] !== s.me);
   if (lost.length) add('bad', `${lost.length} of our provinces are under enemy occupation.`);

@@ -10,10 +10,11 @@ import { modal, numberField, selectField, confirmBox } from './dialogs.js';
 import { armyCard, myArmies, formArmy } from './panels/military.js';
 import { declareWar } from './panels/diplomacy.js';
 import { attackDialog, attackable } from './attack.js';
-import { fleetCard } from './panels/navy.js';
+import { fleetCard, formDialog } from './panels/navy.js';
 import { provincePeople } from './panels/peoples.js';
 import { aidDialog as armDialog } from './panels/proxy.js';
-import { nodeName } from '../engine/navy.js';
+import { airDialog, missileDialog } from './panels/air.js';
+import { nodeName, PORTS } from '../engine/navy.js';
 import { subregions, GOING } from '../engine/terrain.js';
 
 const TERRAIN_OF = Object.fromEntries(PROVINCES.map((p) => [p.id, p.terrain]));
@@ -45,6 +46,7 @@ export function showRegion(ctx, id) {
     actions.push(h('button.btn.small', { onclick: () => buildInfra(ctx, id, gdp) }, `Infrastructure (${infra}/10)`));
     actions.push(h('button.btn.small', { onclick: () => fortify(ctx, id, fort) }, `Fortify (${fort}/5)`));
     actions.push(h('button.btn.small', { onclick: () => formArmy(ctx, id) }, 'Form army here'));
+    if (PORTS[id]) actions.push(h('button.btn.small', { onclick: () => formDialog(ctx, id) }, 'Form a fleet here'));
   }
   if (mineHeld && !mineOwned) {
     actions.push(h('button.btn.small', { onclick: () => fortify(ctx, id, fort) }, `Fortify (${fort}/5)`));
@@ -125,9 +127,9 @@ export function showFleet(ctx, id) {
   fill($('inspector'),
     h('button.icon-btn.close', { onclick: () => ctx.closeSelection(), 'aria-label': 'Close' }, '✕'),
     h('h2', f.name),
-    h('div.row.gap.sub', flag(f.owner), h('span', nationName(s, f.owner)), h('span.faint', f.next && f.prog > 0 ? `at sea, bound for the ${nodeName(f.next)}` : `in the ${nodeName(f.at)}`)),
+    h('div.row.gap.sub', flag(f.owner), h('span', nationName(s, f.owner)), h('span.faint', `${f.moving ? 'at sea ' : ''}in the ${nodeName(f.at)}`)),
     h('div', { style: { marginTop: '10px' } }, fleetCard(ctx, f, true)),
-    f.owner === s.me ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Click a sea name, a strait (◆) or any coast to send this fleet there, then choose what it does.') : null,
+    f.owner === s.me ? h('p.muted.small', { style: { marginTop: '8px' } }, 'Click anywhere on the water, a strait (◆) or a coast to send this fleet there, then choose what it does.') : null,
   );
   $('inspector').hidden = false;
 }
@@ -207,24 +209,11 @@ function fortify(ctx, id, fort) {
 }
 
 export function airStrike(ctx, id) {
-  const me = ctx.state.you;
-  const free = me.aircraft - me.airOps.reduce((t, o) => t + o.aircraft, 0);
-  const f = numberField('Aircraft', { value: Math.floor(free * 0.3), min: 1, max: free, step: 1 });
-  modal({
-    title: `Air campaign over ${regionName(id)}`,
-    body: h('div.stack', h('p.muted.small', `${free} aircraft free. Bombing raises damage to its industry, oil fields and mines each week; enemy fighters and air defences shoot some down.`), f.el),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Begin', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'air', region: id, aircraft: Number(f.input.value) })) || false }],
-  });
+  airDialog(ctx, id);
 }
 
 export function missile(ctx, id) {
-  const me = ctx.state.you;
-  const f = numberField('Missiles', { value: Math.min(me.missiles, 50), min: 1, max: me.missiles, step: 1 });
-  modal({
-    title: `Missile strike on ${regionName(id)}`,
-    body: h('div.stack', h('p.muted.small', `${me.missiles} missiles in stock. Air defences intercept some; the rest damage facilities and troops.`), f.el),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Fire', kind: 'danger', onClick: async () => !(await ctx.send({ type: 'missile', region: id, count: Number(f.input.value) })) || false }],
-  });
+  missileDialog(ctx, id);
 }
 
 async function nuke(ctx, id) {

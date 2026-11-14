@@ -4,7 +4,6 @@
 // plays out continuously rather than in jumps.
 
 import { GEO, ORDER, MAP_SIZE } from '../engine/data/geo.js';
-import { COUNTRIES } from '../engine/data/countries.js';
 import { PROVINCES } from '../engine/data/regions.js';
 import { CHOKEPOINTS } from '../engine/data/world.js';
 import { route } from '../engine/military.js';
@@ -419,7 +418,7 @@ export class WorldMap {
         const onScreen = g.area * unit * unit;
         if (s.minors[id] && r.owner === id && onScreen > 400) {
           out.push(svg('text', { class: 'region-label', x: g.x, y: g.y, 'font-size': 10 / unit, 'stroke-width': 1.8 / unit }, s.minors[id].name));
-        } else if (unit >= 2.4 && s.countries[r.owner] && onScreen > 2500) {
+        } else if (unit >= 2.4 && s.countries[r.owner] && !s.countries[id] && onScreen > 2500) {
           out.push(svg('text', { class: 'region-label', x: g.x, y: g.y + 12 / unit, 'font-size': 9 / unit, 'stroke-width': 1.8 / unit }, provinceShort(id)));
         }
       }
@@ -446,7 +445,8 @@ export class WorldMap {
       if (a.exact && a.sea && a.sea.from) {
         pts.push(GEO[a.sea.from], GEO[a.sea.to]);
         arrows.push(arrowPath(pts, colorOf(a.owner), unit, true));
-      } else if (a.exact && a.path?.length && friendly(a.owner)) {
+      } else if (a.exact && a.path?.length) {
+        // Ours and our allies', and an enemy's when our spies are deep inside its government
         pts.push(from, ...a.path.map((id) => GEO[id]));
         arrows.push(arrowPath(pts, colorOf(a.owner), unit, a.op?.kind !== 'attack'));
       } else if (a.attacking && !a.sea) {
@@ -521,88 +521,61 @@ export class WorldMap {
     const unit = this.#unit();
     const fleets = s.fleets ?? [];
     const friendly = (owner) => owner === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(owner) && al.members.includes(s.me));
-    // Where each fleet is: at a node, or part of the way along its next leg (but never drawn across the edge of
-    // the map, where the Pacific wraps round)
-    const spot = (f) => {
-      const a = NODES[f.at];
-      const b = f.next ? NODES[f.next] : null;
-      if (!b || !(f.prog > 0) || !f.len) return { key: f.at, x: a.x, y: a.y, moving: false };
-      const k = Math.min(1, f.prog / f.len);
-      if (Math.abs(a.x - b.x) > W / 2) return k < 0.5 ? { key: f.at, x: a.x, y: a.y, moving: true } : { key: f.next, x: b.x, y: b.y, moving: true };
-      return { key: `${f.at}>${f.next}`, x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, moving: true };
-    };
-    const groups = new Map();
-    for (const f of fleets) {
-      const p = spot(f);
-      (groups.get(p.key) ?? groups.set(p.key, []).get(p.key)).push([f, p]);
+    const w = 40 / unit;
+    const hgt = 13 / unit;
+    // Fleets at (nearly) the same spot are fanned out side by side so none hides another
+    const placed = [];
+    const spot = new Map();
+    const order = [...fleets].sort((a, b) => (a.owner === s.me ? -1 : 0) - (b.owner === s.me ? -1 : 0) || (a.id < b.id ? -1 : 1));
+    for (const f of order) {
+      const near = placed.filter((p) => Math.abs(p.x - f.x) < w * 0.9 && Math.abs(p.y - f.y) < hgt * 0.9).length;
+      const cx = f.x + (near % 2) * (w + 2 / unit) - (near ? (w + 2 / unit) / 2 : 0);
+      const cy = f.y + Math.floor(near / 2) * (hgt + 2 / unit);
+      spot.set(f.id, [cx, cy]);
+      placed.push({ x: f.x, y: f.y });
     }
     const now = performance.now();
     const seen = new Set();
-    const arrows = [];
-    const extras = [];
-    const enemies = new Set(s.wars.filter((w) => w.a === s.me || w.b === s.me).map((w) => (w.a === s.me ? w.b : w.a)));
-    // Ours first, then allies', then enemies', then the biggest of the rest
-    const rank = (f) => (f.owner === s.me ? 0 : friendly(f.owner) ? 1 : enemies.has(f.owner) ? 2 : 3);
-    const room = unit >= 4 ? 16 : unit >= 2 ? 10 : 6;
-    for (const all of groups.values()) {
-      all.sort((x, y) => rank(x[0]) - rank(y[0]) || (y[0].ships + y[0].carriers * 8) - (x[0].ships + x[0].carriers * 8) || (x[0].id < y[0].id ? -1 : 1));
-      // A crowded sea: the rest fold into one "+N fleets" marker (hover to list them)
-      const shown = all.length > room ? all.slice(0, room - 1) : all;
-      const hidden = all.slice(shown.length);
-      const list = hidden.length ? [...shown, [null, all[0][1]]] : shown;
-      list.forEach(([f, p], i) => {
-        if (!f) {
-          const w = 40 / unit;
-          const hgt = 13 / unit;
-          const x = p.x + (i % 2) * (w + 2 / unit) - (w + 2 / unit) / 2;
-          const y = p.y + 10 / unit + Math.floor(i / 2) * (hgt + 2 / unit);
-          extras.push(svg('g', { class: 'fleet-more', transform: `translate(${x} ${y})`, 'data-node': NODES[p.key] ? p.key : null },
-            svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: hgt / 2 }),
-            svg('text', { x: 0, y: 0, 'font-size': 8.5 / unit }, `+${hidden.length} fleets`),
-            svg('title', {}, hidden.map(([x2]) => `${s.countries[x2.owner]?.name ?? x2.owner}: ${x2.name}, ${x2.ships} ships${x2.carriers ? `, ${x2.carriers} carriers` : ''}`).join('\n'))));
-          return;
-        }
-        const w = 40 / unit;
-        const hgt = 13 / unit;
-        const cols = 2;
-        const cx = p.x + (i % cols) * (w + 2 / unit) - (list.length > 1 ? (w + 2 / unit) / 2 : 0);
-        const cy = p.y + 10 / unit + Math.floor(i / cols) * (hgt + 2 / unit);
-        seen.add(f.id);
-        let n = this.fleetNodes.get(f.id);
-        if (!n) {
-          n = { g: svg('g', { 'data-fleet': f.id }), x: cx, y: cy, fx: cx, fy: cy, tx: cx, ty: cy, t0: now, dur: 1 };
-          this.fleetNodes.set(f.id, n);
-          this.gFleets.append(n.g);
-        }
-        if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
-          n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
-          n.dur = this.moving ? (this.stepMs ?? this.tickMs) * 0.95 : 250;
-        }
-        const mine = friendly(f.owner);
-        n.g.setAttribute('class', `fleet${this.selectedFleet === f.id ? ' sel' : ''}${mine ? '' : ' foe'}${f.battle ? ' fighting' : ''}`);
-        n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
-        const label = `⚓${f.exact || f.seen ? '' : '~'}${f.ships}${f.carriers ? ` +${f.carriers}✈` : ''}`;
-        n.g.replaceChildren(
-          svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: hgt / 2, fill: colorOf(f.owner) }),
-          svg('text', { x: 0, y: 0, 'font-size': 8.5 / unit }, label),
-          svg('title', {}, `${f.name} (${s.countries[f.owner]?.name ?? ''}): ${f.ships} warships${f.carriers ? `, ${f.carriers} aircraft carriers` : ''}${f.status ? ` · ${f.status}` : ''}`));
-      });
-    }
-    // Our fleets' courses
     for (const f of fleets) {
-      if (!f.exact || !f.path?.length || f.owner !== s.me) continue;
-      const pts = [spot(f), ...f.path.map((k) => NODES[k])];
-      // Skip legs that wrap round the map
-      const legs = [];
-      for (let i = 1; i < pts.length; i++) if (Math.abs(pts[i].x - pts[i - 1].x) < W / 2) legs.push([pts[i - 1], pts[i]]);
-      for (const leg of legs) arrows.push(arrowPath(leg, colorOf(f.owner), unit, true));
+      const [cx, cy] = spot.get(f.id);
+      seen.add(f.id);
+      let n = this.fleetNodes.get(f.id);
+      if (!n) {
+        n = { g: svg('g', { 'data-fleet': f.id }), x: cx, y: cy, fx: cx, fy: cy, tx: cx, ty: cy, t0: now, dur: 1 };
+        this.fleetNodes.set(f.id, n);
+        this.gFleets.append(n.g);
+      }
+      // Never glide across the whole map where a fleet crosses the Pacific edge
+      if (Math.abs(n.tx - cx) > W / 2) { n.x = n.fx = n.tx = cx; n.y = n.fy = n.ty = cy; }
+      if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
+        n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
+        n.dur = this.moving ? (this.stepMs ?? this.tickMs) * 0.95 : 250;
+      }
+      const mine = friendly(f.owner);
+      n.g.setAttribute('class', `fleet${this.selectedFleet === f.id ? ' sel' : ''}${mine ? '' : ' foe'}${f.battle ? ' fighting' : ''}`);
+      n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
+      const label = `⚓ ${f.ships}${f.carriers ? ` +${f.carriers}✈` : ''}`;
+      n.g.replaceChildren(
+        svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: hgt / 2, fill: colorOf(f.owner) }),
+        svg('text', { x: 0, y: 0, 'font-size': 8.5 / unit }, label),
+        svg('title', {}, `${f.name} (${s.countries[f.owner]?.name ?? ''}): ${f.ships} warships${f.carriers ? `, ${f.carriers} aircraft carriers` : ''}${f.status ? ` · ${f.status}` : ''}`));
     }
     for (const [id, n] of this.fleetNodes) if (!seen.has(id)) { n.g.remove(); this.fleetNodes.delete(id); }
+    // Our fleets' courses: a dotted line along the route, to a ring where it will stop
+    const lines = [];
+    for (const f of fleets) {
+      if (f.owner !== s.me || !f.route?.length) continue;
+      const pts = [[f.x, f.y], ...f.route];
+      // Draw each leg on the copy of the map it falls on (routes across the Pacific edge run past 0 or 2,000)
+      for (const shift of [0, -W, W]) {
+        const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('');
+        lines.push(svg('path', { d, class: 'fleet-route', stroke: colorOf(f.owner), 'stroke-width': 2 / unit, 'stroke-dasharray': `${4 / unit} ${3 / unit}` }));
+      }
+      const [ex, ey] = f.route[f.route.length - 1];
+      lines.push(svg('circle', { cx: ((ex % W) + W) % W, cy: ey, r: 5 / unit, class: 'fleet-dest', stroke: colorOf(f.owner), 'stroke-width': 1.5 / unit }));
+    }
     this.gFleetArrows ??= (() => { const g = svg('g', { 'pointer-events': 'none' }); this.gFleets.before(g); return g; })();
-    this.gFleetArrows.replaceChildren(...arrows);
-    this.gFleetMore ??= (() => { const g = svg('g'); this.gFleets.after(g); return g; })();
-    this.gFleetMore.replaceChildren(...extras);
-    this.gFleetMore.style.display = this.layers.fleets ? '' : 'none';
+    this.gFleetArrows.replaceChildren(...lines);
     this.#drawSeas();
   }
 
@@ -760,9 +733,9 @@ export class WorldMap {
     this.#apply();
   }
 
-  // Centre on a sea or a strait
+  // Centre on a sea, a strait, or a point
   focusPoint(node) {
-    const n = NODES[node];
+    const n = typeof node === 'string' ? NODES[node] : node;
     if (!n) return;
     this.view.k = Math.max(this.view.k, 2.5);
     this.view.cx = n.x;
@@ -853,6 +826,7 @@ export class WorldMap {
         if (armyEl && this.targeting.onArmy?.(armyEl.dataset.army)) return;
         if (fleetEl && this.targeting.onFleet?.(fleetEl.dataset.fleet)) return;
         if (nodeEl && this.targeting.onNode?.(nodeEl.dataset.node)) return;
+        if (!id && !armyEl && !fleetEl && !nodeEl && this.targeting.onWater) { const [mx, my] = this.#toMap(d.x, d.y); this.targeting.onWater(((mx % W) + W) % W, my); return; }
         if (id && (!this.targeting.filter || this.targeting.filter(id))) this.targeting.onPick(id);
         else if (id) this.targeting.onReject?.(id);
         return;

@@ -137,7 +137,7 @@ function judge(s, c, p) {
       if (al.kind === 'military' && alliancesOf(s, c.id, 'military').length >= 2) return false;
       return !dislike && r >= (al.kind === 'military' ? 45 : 20);
     }
-    case 'fta': return r >= 5 && !sanctioning(s, c.id, p.from) && !sanctioning(s, p.from, c.id);
+    case 'fta': return r >= 5 && !sanctioning(s, c.id, p.from) && !sanctioning(s, p.from, c.id) && !(c.minor && s.treaties.filter((t) => t.kind === 'fta' && (t.a === c.id || t.b === c.id)).length >= 4);
     case 'nap': return r >= -30;
     case 'access': return r >= 40;
     case 'deal': {
@@ -174,6 +174,8 @@ function judgePeace(s, c, p) {
   const giving = (t.cede ?? []).filter((x) => x.to !== c.id);
   const getting = (t.cede ?? []).filter((x) => x.to === c.id);
   const paying = t.reparations?.from === c.id ? Number(t.reparations.amount) : 0;
+  // Letting the enemy's troops through is a concession only the losing side makes
+  if (t.access && !(lostShare(s, c.id) >= 0.08 || ratio < 0.7)) return false;
   if (!giving.length && !paying) {
     if (getting.length || t.reparations?.from === p.from) return true;
     if (t.armistice) return age >= 8 && (ratio < 1.6 || iLost > theyLost);
@@ -284,14 +286,20 @@ function war(s, c, gar) {
 
   // Air, sea and missiles
   if (!c.airOps.length && c.aircraft > 40) {
+    const attacking = Object.values(s.armies).filter((a) => a.owner === c.id && a.attacking).map((a) => a.attacking);
+    const enemyArmies = Object.values(s.armies).filter((a) => enemySet.has(a.owner) && !a.sea && GEO[a.region].adj.some((x) => s.regions[x]?.ctrl === c.id)).map((a) => a.region);
     const targets = Object.values(s.regions).filter((reg) => enemySet.has(reg.ctrl) && GEO[reg.id].adj.some((x) => s.regions[x]?.ctrl === c.id));
-    if (targets.length) setAirCampaign(s, c, pick(s, targets).id, Math.floor(c.aircraft * 0.3));
+    if (attacking.length) setAirCampaign(s, c, pick(s, attacking), Math.floor(c.aircraft * 0.35), 'support');
+    else if (enemyArmies.length) setAirCampaign(s, c, pick(s, enemyArmies), Math.floor(c.aircraft * 0.3), 'interdict');
+    else if (targets.length) setAirCampaign(s, c, pick(s, targets).id, Math.floor(c.aircraft * 0.3), 'strategic');
   }
   if (c.missiles > 50 && chance(s, 0.1)) {
     const targets = Object.values(s.regions).filter((reg) => enemySet.has(reg.ctrl) && s.countries[reg.ctrl]);
     if (targets.length) {
       const best = targets.sort((x, y) => (Object.keys(y.res).length + y.gdp / 500) - (Object.keys(x.res).length + x.gdp / 500))[0];
-      missileStrike(s, c, best.id, Math.floor(c.missiles * 0.05));
+      const massed = Object.values(s.armies).find((a) => enemySet.has(a.owner) && !a.sea && a.troops > 50);
+      if (massed) missileStrike(s, c, massed.region, Math.floor(c.missiles * 0.05), 'army');
+      else missileStrike(s, c, best.id, Math.floor(c.missiles * 0.05), 'industry');
     }
   }
   for (const [key, cp] of Object.entries(CHOKEPOINTS)) {
@@ -371,7 +379,7 @@ const AGGRESSIVE = { autocracy: 1, hybrid: 0.55, democracy: 0.1 };
 
 function ambition(s, c, gar) {
   if (s.week < 20 || c.stability < 40 || c.civilWar) return;
-  s.aiWars ??= [];
+  const quota = c.minor ? (s.smallWars ??= []) : (s.aiWars ??= []);
   const plan = c.ai.plan;
   if (plan) {
     // A plan made weeks ago: strike if it still makes sense, else shelve it
@@ -379,9 +387,9 @@ function ambition(s, c, gar) {
     if (!ok) { c.ai.plan = null; return; }
     if (s.week - c.ai.planAt >= 6) {
       c.ai.plan = null;
-      if (s.aiWars.filter((w) => w > s.week - 52).length >= 2) return;
+      if (quota.filter((w) => w > s.week - 52).length >= 2) return;
       if (!declareWar(s, c, plan, 'conquest')) {
-        s.aiWars.push(s.week);
+        quota.push(s.week);
         c.ai.warAt = s.week;
       }
     } else {
@@ -397,7 +405,7 @@ function ambition(s, c, gar) {
     return;
   }
   if ((s.week - (c.ai.warAt ?? -99)) < 104) return;
-  if (s.aiWars.filter((w) => w > s.week - 52).length >= 2) return;
+  if (quota.filter((w) => w > s.week - 52).length >= 2) return;
   const aggression = AGGRESSIVE[c.gov] ?? 0.3;
   let best = null;
   for (const n of neighbours(s, c.id)) {
@@ -440,10 +448,12 @@ function targetScore(s, c, t) {
 
 function standing(s, c) {
   initSpies(c);
+  if (c.minor) smallNation(s, c);
   const others = Object.values(s.countries).filter((o) => o.id !== c.id && alive(s, o.id) && !atWar(s, c.id, o.id));
   // Free trade with friends
-  if (chance(s, 0.3)) {
-    const partner = others.filter((o) => rel(s, c.id, o.id) > 30 && !treaty(s, 'fta', c.id, o.id) && !sanctioning(s, c.id, o.id) && !sanctioning(s, o.id, c.id) && !Object.values(s.proposals).some((p) => p.from === c.id && p.to === o.id))
+  const ftas = (id) => s.treaties.filter((t) => t.kind === 'fta' && (t.a === id || t.b === id)).length;
+  if (chance(s, c.minor ? 0.1 : 0.3) && !(c.minor && ftas(c.id) >= 4)) {
+    const partner = others.filter((o) => !(o.minor && ftas(o.id) >= 4) && rel(s, c.id, o.id) > 30 && !treaty(s, 'fta', c.id, o.id) && !sanctioning(s, c.id, o.id) && !sanctioning(s, o.id, c.id) && !Object.values(s.proposals).some((p) => p.from === c.id && p.to === o.id))
       .sort((a, b) => b.gdp - a.gdp)[0];
     if (partner && !(partner.human && chance(s, 0.6))) propose(s, c.id, partner.id, 'fta');
   }
@@ -471,6 +481,51 @@ function standing(s, c) {
     const atWarNow = enemiesOf(s, c.id).size > 0;
     const field = atWarNow ? pick(s, ['army', 'air', 'missile']) : chance(s, 0.5) ? c.focus : pick(s, ['industry', 'army', 'energy', 'cyber', 'air', 'naval']);
     if (c.tech[field] < 12 && c.treasury > projectCost(c, c.tech[field] + 1) * 3) startResearch(s, c, field);
+  }
+}
+
+// What the world's smaller nations do on top of the rest: band together with their neighbours in a trade bloc,
+// and, when a much stronger rival threatens them, look for a protector among the powers that are their friends
+function smallNation(s, c) {
+  const pending = (from, to) => Object.values(s.proposals).some((p) => p.from === from && p.to === to && p.kind === 'alliance');
+  // A trade bloc with the neighbours
+  if (c.bloc && !alliancesOf(s, c.id, 'economic').length && chance(s, 0.2)) {
+    const bloc = Object.values(s.alliances).find((al) => al.name === c.bloc);
+    if (bloc) {
+      const host = s.countries[bloc.founder] && !s.countries[bloc.founder].human ? bloc.founder : bloc.members.find((m) => !s.countries[m]?.human);
+      if (host && bloc.members.length < 16 && !pending(host, c.id)) propose(s, host, c.id, 'alliance', { alliance: bloc.id });
+    } else {
+      const made = createAlliance(s, c, { name: c.bloc, kind: 'economic' });
+      if (made?.id) {
+        const others = Object.values(s.countries).filter((o) => o.id !== c.id && o.bloc === c.bloc && alive(s, o.id) && !atWar(s, c.id, o.id));
+        for (const o of others) propose(s, c.id, o.id, 'alliance', { alliance: made.id });
+      }
+    }
+  }
+  // A pact we founded that no one joined is wound up
+  for (const al of Object.values(s.alliances)) {
+    if (al.founder === c.id && al.members.length === 1 && s.week - al.since > 8 && !Object.values(s.proposals).some((p) => p.terms?.alliance === al.id)) delete s.alliances[al.id];
+  }
+  // A protector against a rival far stronger than us
+  if (alliancesOf(s, c.id, 'military').some((al) => al.members.length > 1) || !chance(s, 0.35)) return;
+  const mine = militaryPower(s, c.id);
+  const threat = Object.values(s.countries).filter((o) => o.id !== c.id && alive(s, o.id) && rel(s, c.id, o.id) < -30 && militaryPower(s, o.id) > mine * 1.5)
+    .sort((a, b) => militaryPower(s, b.id) - militaryPower(s, a.id))[0];
+  if (!threat) return;
+  const protector = Object.values(s.countries)
+    .filter((o) => o.id !== c.id && o.id !== threat.id && alive(s, o.id) && !o.minor && rel(s, c.id, o.id) >= 40 && rel(s, o.id, threat.id) < 10 && !atWar(s, c.id, o.id))
+    .filter((o) => o.human || (rel(s, o.id, c.id) >= 45 && alliancesOf(s, o.id, 'military').length < 2))
+    .sort((a, b) => militaryPower(s, b.id) - militaryPower(s, a.id))[0];
+  if (!protector || pending(c.id, protector.id) || pending(protector.id, c.id)) return;
+  const theirs = alliancesOf(s, protector.id, 'military').find((al) => al.founder === protector.id && al.members.length < 10 && !al.members.some((m) => rel(s, c.id, m) < -20));
+  if (theirs && !protector.human) {
+    propose(s, protector.id, c.id, 'alliance', { alliance: theirs.id });
+  } else if (!alliancesOf(s, c.id, 'military').length) {
+    const made = createAlliance(s, c, { name: `${c.name}–${protector.name} Defence Pact`, kind: 'military' });
+    if (made?.id) {
+      propose(s, c.id, protector.id, 'alliance', { alliance: made.id });
+      news(s, `${c.name}, fearing ${threat.name}, asks ${protector.name} for protection.`, 'diplomacy', [c.id, protector.id, threat.id]);
+    }
   }
 }
 

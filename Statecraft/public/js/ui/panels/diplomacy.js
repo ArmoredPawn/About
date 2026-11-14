@@ -246,11 +246,13 @@ export function peaceDialog(ctx, foe) {
   }
   const boxes = disputed.map(([id, to]) => [id, to, h('input', { type: 'checkbox', checked: to === s.me })]);
   const payer = selectField('Reparations paid by', [['', 'No reparations'], [foe, nationName(s, foe)], [s.me, 'Us']], '');
+  const accessBox = h('input', { type: 'checkbox' });
   const amount = numberField('Reparations a year', { value: 0, min: 0, suffix: '$ billions' });
   const terms = h('div.stack',
     disputed.length ? h('div.field', h('span', 'Provinces that change hands (ticked) — the rest return to their owner'),
       h('div.choice-grid', boxes.map(([id, to, box]) => h('label.choice', box, h('span', `${regionName(id)} → ${to === s.me ? 'us' : nationName(s, foe)}`))))) : h('p.muted.small', 'Neither side occupies the other\'s land.'),
-    payer.el, amount.el);
+    payer.el, amount.el,
+    h('label.row.gap', { style: { cursor: 'pointer' } }, accessBox, h('span', h('b', 'Military access'), h('span.muted.small', { style: { display: 'block' } }, `${nationName(s, foe)} must let our troops pass through it from now on.`))));
   const sync = () => { terms.hidden = kind.input.value !== 'terms'; };
   kind.input.addEventListener('change', sync);
   sync();
@@ -264,6 +266,7 @@ export function peaceDialog(ctx, foe) {
         if (kind.input.value === 'terms') {
           t.cede = boxes.filter(([, , b]) => b.checked).map(([region, to]) => ({ region, to }));
           if (payer.input.value && Number(amount.input.value) > 0) t.reparations = { from: payer.input.value, amount: Number(amount.input.value), years: 5 };
+          if (accessBox.checked) t.access = true;
         }
         return !(await ctx.send({ type: 'propose', to: foe, kind: 'peace', terms: t })) || false;
       },

@@ -1,10 +1,10 @@
 // The spy network: agents planted abroad, what they relay home, covert operations, and catching the agents
 // other countries plant on us.
 
-import { h, flag, money, nationName, regionName } from '../dom.js';
+import { h, flag, money, nationName } from '../dom.js';
 import { INTEL } from '../../engine/events.js';
 import { COUNTER_INTEL, MAX_AGENTS } from '../../engine/spies.js';
-import { modal, numberField, selectField } from '../dialogs.js';
+import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 
 export function spies(ctx) {
   const tab = ctx.sub('spies', 'networks');
@@ -28,7 +28,14 @@ function networks(ctx) {
   const list = Object.entries(me.spies ?? {});
   return h('div',
     h('button.btn.primary.block', { onclick: () => plantDialog(ctx) }, '＋ Plant agents in a country'),
-    h('p.muted.small', { style: { marginTop: '6px' } }, 'Agents take about four weeks to settle in. Then they report every couple of weeks: armies on the move, weapons being built, secret pacts, war plans, the treasury and the mood on the streets. A big enough network, and better tradecraft than their counter-intelligence, shows you their armies on the map. The bigger the network, the likelier it is to be caught.'),
+    h('div.warning.info', { style: { marginTop: '8px', display: 'block' } },
+      h('b', 'What spies get you'),
+      h('ul', { style: { margin: '6px 0 0 18px', padding: 0 } },
+        h('li', 'Reports every two weeks: armies on the move, weapons being built, secret pacts, war plans, nuclear programmes, research and the treasury.'),
+        h('li', 'Discoveries you can act on: warn a country it is about to be attacked, expose a war plan, a secret pact or a nuclear programme, or roll up their spies in our country.'),
+        h('li', 'Deep inside (enough agents, good tradecraft): their armies\' orders on our map, their full dossier, and an 8% edge for our armies fighting them.'),
+        h('li', 'Easier, safer covert operations (sabotage, cyberattacks, stealing technology).'))),
+    h('p.muted.small', { style: { marginTop: '6px' } }, 'Agents take about four weeks to settle in. The bigger the network, the likelier it is to be caught, and a caught network may be turned to feed us lies: act on those and it backfires.'),
     h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map(([id, n]) => {
       const age = s.week - n.since;
       const count = (me.reports ?? []).filter((r) => r.about === id).length;
@@ -38,6 +45,7 @@ function networks(ctx) {
         h('div.meta', `Planted week ${n.since} · ${count} reports so far${sees ? ' · their armies show on our map' : age >= 4 ? ' · not yet deep enough to track their armies' : ''}`),
         h('div.actions',
           h('button.btn.small', { onclick: () => { ctx.ui.spyFilter = id; ctx.setSub('spies', 'reports'); } }, 'Reports'),
+          sees ? h('button.btn.small', { onclick: () => ctx.focusCountry(id) }, 'See their armies') : null,
           h('button.btn.small', { disabled: n.agents >= MAX_AGENTS, onclick: () => plantDialog(ctx, id) }, 'Add agents…'),
           h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'spyRecall', target: id }) }, 'Recall')));
     }) : [h('div.empty', 'No agents abroad.')]));
@@ -75,9 +83,36 @@ function reports(ctx) {
       h('option', { value: 'all', selected: filter === 'all' }, 'All networks'),
       sources.map((id) => h('option', { value: id, selected: filter === id }, nationName(s, id))))),
     h('p.muted.small', 'Relayed in secret by agents who haven\'t been caught. A network that has been caught and turned feeds you lies, and you won\'t be told.'),
-    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.slice(0, 80).map((r) => h('div.item',
+    h('div.list', { style: { marginTop: '10px' } }, list.length ? list.slice(0, 80).map((r) => h('div.item', { class: r.act === 'plan' && !r.used ? 'urgent' : '' },
       h('div.item-head', flag(r.about), h('span.name', nationName(s, r.about)), h('span.chip', { class: KIND[r.kind]?.[1] ?? '' }, KIND[r.kind]?.[0] ?? 'Intel'), h('span.muted.small', { style: { marginLeft: 'auto' } }, `week ${r.w}`)),
-      h('div.meta', { style: { color: 'var(--ink)' } }, r.text))) : [h('div.empty', 'No reports yet. Plant agents under Networks.')]));
+      h('div.meta', { style: { color: 'var(--ink)' } }, r.text),
+      actions(ctx, r))) : [h('div.empty', 'No reports yet. Plant agents under Networks.')]));
+}
+
+// What we can do with a discovery, right on the report
+const USED = { warn: 'We warned them', expose: 'Exposed to the world', rollup: 'Their network rolled up' };
+function actions(ctx, r) {
+  const s = ctx.state;
+  if (!r.act) return null;
+  if (r.used) return h('div.actions', h('span.chip.good', USED[r.used] ?? 'Acted on'));
+  if (r.w < s.week - 26) return null;
+  const act = (action, title, text, label, danger = false) => h('button.btn.small', {
+    class: danger ? 'danger' : '',
+    onclick: async () => { if (await confirmBox(title, text, { ok: label, danger })) { await ctx.send({ type: 'intelAct', id: r.id, action }); } },
+  }, label);
+  const planner = nationName(s, r.planner ?? r.about);
+  const victim = r.victim ? nationName(s, r.victim) : '';
+  if (r.act === 'plan') {
+    if (r.victim === s.me) return h('div.actions', h('button.btn.small.primary', { onclick: () => { ctx.focusCountry(r.planner); ctx.go('military', 'armies'); } }, 'Prepare our defences'));
+    return h('div.actions',
+      act('warn', `Warn ${victim}?`, `We tell ${victim} in confidence. It will be grateful and get ready, and ${planner} won't know it was us.`, `Warn ${victim}`),
+      act('expose', `Expose ${planner}'s plan?`, `We reveal it to the world. ${planner} loses standing and is furious with us; with surprise gone it may call the attack off. If our network has been turned and this is a lie, we are the ones who look foolish.`, 'Expose it', true));
+  }
+  if (r.act === 'pact') return h('div.actions', act('expose', 'Expose the secret pact?', 'Its members lose standing and will resent us. Everyone will know who is bound to whom.', 'Expose the pact', true));
+  if (r.act === 'nukes') return h('div.actions', act('expose', 'Expose the nuclear programme?', `${nationName(s, r.target)} loses standing and the democracies turn against it. It will be furious with us.`, 'Expose it', true));
+  if (r.act === 'rollup') return h('div.actions', act('rollup', 'Roll up their network?', `Our police arrest every agent ${nationName(s, r.target)} has here. Relations will suffer, but their spying stops.`, 'Arrest their agents'));
+  if (r.act === 'steal') return h('div.actions', h('button.btn.small', { onclick: () => { ctx.ui.opTarget = r.target; ctx.setSub('spies', 'ops'); } }, 'Steal their research…'));
+  return null;
 }
 
 /* ---------- Covert operations ---------- */
@@ -137,4 +172,3 @@ function counter(ctx) {
   );
 }
 
-export { regionName };

@@ -1,7 +1,8 @@
 # Statecraft
 
 A real-time geopolitics game for up to 20 leaders. Each player is handed one of the world's 50 largest economies at
-random; the computer runs the other countries and about 150 smaller nations. The world never pauses: a week passes
+random; the computer runs the other countries, and every other nation on Earth (about 150 more) is a full country it
+runs too, with its own economy, army, navy and diplomacy. No alliances and no oil cartel exist at the start. The world never pauses: a week passes
 every few seconds, armies glide across the map and front lines creep through contested provinces as you watch.
 
 - **Economy:** taxes, six spending lines, the interest rate, debt, inflation, stimulus, rationing.
@@ -16,15 +17,17 @@ every few seconds, armies glide across the map and front lines creep through con
 - **Market:** buy from the country you choose, or around sanctions through intermediaries; sell surplus or list it
   for other leaders. Every cargo sails through the real straits or goes overland, and can be seized or sunk on the
   way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes.
-- **Navies:** fleets sail the world's eight seas and seven straits on the map. Hold a sea, blockade an enemy's coast
-  or patrol a strait to escort friends or stop everyone else. Enemy fleets in the same waters fight; a beaten fleet
-  runs for home or into port to refit. Landing an army overseas needs a fleet in the sea off that coast, at least as
-  strong as the enemy's there.
+- **Navies:** every fleet sits at its exact spot on the water. Form one at any of your ports, click it, then click
+  anywhere on the sea: it sails the shortest way round the land (through the straits and canals) to hold position,
+  blockade an enemy's coast or patrol a strait to escort friends or stop everyone else. Enemy fleets that come within
+  about 450 km fight; a beaten fleet runs into port to refit. Landing an army overseas needs a fleet lying off that
+  coast, at least as strong as the enemy's there.
 - **Peoples:** every province has a people and a loyalty to whoever rules it. Conquered peoples resist with partisans
   and uprisings that can hand a province back; real independence movements (Catalonia, Scotland, Quebec, Kashmir,
   Tibet, Kurdistan, Balochistan…) can be granted autonomy, cracked down on or offered a referendum. Wars drive
   refugees across borders, which neighbours take in or turn away.
-- **Oil and gas:** OPEC+ sets a production cut and can embargo a country, as in 1973; members can cheat on their
+- **Oil and gas:** no cartel exists at the start; producers can found one that sets a production cut and embargoes a
+  country, as OPEC did in 1973; members can cheat on their
   quota and get caught. Real pipelines (Druzhba, Power of Siberia, Petroline round Hormuz…) deliver whatever happens
   at sea, can be shut as leverage or sabotaged, and planned ones (Power of Siberia 2, EastMed, TAPI…) can be built.
   Strategic reserves can be released in a price shock.
@@ -38,13 +41,18 @@ every few seconds, armies glide across the map and front lines creep through con
 - **War:** declare war in one click (leaving any alliance you share), draft and form an army group, then click it and
   click anywhere on the map: it goes at once, fighting through enemy ground or landing from the sea. Fronts move both
   ways. Make the case for war to the nation first and the public takes it far better. If an order can't go ahead, a
-  bar at the bottom of the map says why. Armies cross other countries only with military access. Generals pick the
+  bar at the bottom of the map says why. An army whose road crosses another country asks it for military access; if
+  it refuses, the way is shut until it is beaten in a war (a peace treaty can demand access). Generals pick the
   route and fight; wars far from home need money, factories and troops to guard the supply lines; the dead come off
   the population. Each province shows its ground (forests, passes, marshes); ground thought impassable, like the
   Ardennes, is lightly held and an attack through it surprises the defenders. Aircraft and missiles only reach so far
-  from a base. Air campaigns, missile strikes, blockades, nuclear weapons, peace treaties and armistices.
+  from a base. Air missions (close air support, interdiction of supply lines, strategic bombing) and missile strikes
+  on armies, forts, airbases or industry, each reported by the air staff; blockades, nuclear weapons, peace treaties
+  and armistices.
 - **Computer-run countries** trade, sign deals and pacts (some secret), spy on rivals and pick their own fights with
-  weak neighbours. Invaded, they mobilise, conscript, draft every reservist and call on their friends.
+  weak neighbours. The smaller nations found regional trade blocs (the East African Community, the Caribbean
+  Community…), ask friendly great powers for protection against a threatening rival, and fight old feuds (Armenia and
+  Azerbaijan, Serbia and Kosovo, Venezuela and Guyana…). Invaded, they mobilise, conscript, draft every reservist and call on their friends.
 - **Diplomacy:** open or secret alliances, trade blocs, free trade, non-aggression pacts, military access, resource
   deals, loans, aid, sanctions, tariffs, UN resolutions with P5 vetoes.
 - **Spies:** plant agents abroad; once settled in they relay armies on the move, weapons being built, secret pacts and
@@ -79,7 +87,9 @@ npm run dev   # http://localhost:3001 (multiplayer and solo)
 ## Changing the world
 
 - Countries: `public/js/engine/data/countries.js`. Provinces and their resources: `data/regions.js`.
-  Minor nations: `data/minors.js`. Starting friendships, rivalries, sanctions and straits: `data/world.js`.
+  The smaller nations: their size, people, forces and resources in `data/minors.js`; flags, governments, feuds,
+  claims and trade blocs in `data/nations.js`. Starting friendships, rivalries, sanctions and straits: `data/world.js`.
+- The sea fleets sail on (and the open water off every coastal province) is generated by `npm run build:seas`.
 - After changing provinces or their seed points, run `npm run build:map`. It rebuilds `public/data/map.json` and
   `public/js/engine/data/geo.js` (both committed) and warns about any province that ends up with no land.
 

@@ -213,6 +213,17 @@ input[type="checkbox"], input[type="radio"] { width: auto; min-height: 0; paddin
 .list { display: grid; gap: 6px; }
 .item { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; }
 .item.clickable { cursor: pointer; }
+.pick-list { display: grid; gap: 6px; }
+.pick-card { display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2, #151b2b); color: inherit; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.pick-card:hover { border-color: var(--line-strong); }
+.pick-card[aria-pressed="true"] { border-color: var(--accent); background: rgb(143 149 255 / 0.12); box-shadow: inset 3px 0 0 var(--accent); }
+.pick-card .pick-text { display: grid; gap: 2px; }
+.pick-card .pick-text span { color: var(--ink-soft); font-size: 12px; line-height: 1.35; }
+.pick-icon { font-size: 20px; width: 28px; text-align: center; flex: none; line-height: 1.2; }
+.pick-icon.small { font-size: 14px; width: 18px; }
+.pick-legend { display: grid; gap: 4px; font-size: 12px; color: var(--ink-soft); }
+.forecast { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; background: rgb(255 255 255 / 0.02); display: grid; gap: 4px; }
+.item.urgent { border-color: rgb(229 72 77 / 0.55); box-shadow: inset 3px 0 0 #e5484d; }
 .item.clickable:hover { border-color: var(--line-strong); background: #182035; }
 .item-head { display: flex; align-items: center; gap: 8px; }
 .item-head .name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -294,6 +305,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .fleet.fighting rect { stroke: #ff3b3b; stroke-width: 2; }
 .map .fleet-more rect { fill: rgb(20 26 40 / 0.92); stroke: rgb(150 190 230 / 0.6); stroke-width: 0.8; vector-effect: non-scaling-stroke; }
 .map .fleet-more text { fill: rgb(200 220 240); font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.map .fleet-route { fill: none; opacity: 0.75; pointer-events: none; }
+.map .fleet-dest { fill: none; opacity: 0.9; }
+.howto { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--radius-sm); background: rgb(143 149 255 / 0.08); border: 1px solid rgb(143 149 255 / 0.25); font-size: 12.5px; }
 .map .sea-name { fill: rgb(150 190 230 / 0.42); font-style: italic; font-weight: 600; letter-spacing: 0.08em; text-anchor: middle; paint-order: stroke; stroke: rgb(5 8 14 / 0.4); stroke-linejoin: round; cursor: pointer; }
 .map .sea-name:hover { fill: rgb(170 210 250 / 0.85); }
 .map .pipeline { fill: none; stroke-linecap: round; pointer-events: stroke; }

@@ -7,7 +7,7 @@ import { renderHud, liveDate } from './ui/hud.js';
 import { Chat } from './ui/chat.js';
 import { toast, confirmBox, closeModal } from './ui/dialogs.js';
 import { showRegion, showArmy, showFleet, closeInspector, airStrike, missile } from './ui/inspector.js';
-import { orderDialog, seaForRegion } from './ui/panels/navy.js';
+import { orderDialog, waterOff } from './ui/panels/navy.js';
 import { whatsNew } from './ui/whatsnew.js';
 import { overview } from './ui/panels/overview.js';
 import { economy } from './ui/panels/economy.js';
@@ -122,7 +122,7 @@ const ctx = {
     map.selectArmy(null);
     map.select(null);
     showFleet(ctx, id);
-    if (focus) map.focusPoint(f.at);
+    if (focus) map.focusPoint({ x: f.x, y: f.y });
     if (f.owner === app.state.me) ctx.orderFleet(f);
   },
   orderFleet(fleet) {
@@ -133,21 +133,22 @@ const ctx = {
     };
     ctx.target({
       keep: true,
-      text: `Click a sea, a strait (◆) or a coast to send ${fleet.name} there`,
-      filter: (rid) => Boolean(GEO[rid]?.coast && seaForRegion(app.state, live(), rid)),
-      reason: (rid) => (GEO[rid]?.coast ? 'No sea route to that coast.' : `${regionName(rid)} has no coast.`),
-      onReject: (rid) => hint(GEO[rid]?.coast ? 'No sea route to that coast.' : `${regionName(rid)} is inland: pick a coast, a sea or a strait.`, 'bad', 5000),
-      onNode: (node) => { ctx.endTarget(); orderDialog(ctx, live(), node); return true; },
+      text: `Click anywhere on the water, a strait (◆) or a coast to send ${fleet.name} there`,
+      filter: (rid) => Boolean(waterOff(rid)),
+      reason: (rid) => `${regionName(rid)} is inland: click the water, or a coast.`,
+      onReject: (rid) => hint(`${regionName(rid)} is inland: click the water, or a coast.`, 'bad', 5000),
+      onWater: (x, y) => { ctx.endTarget(); orderDialog(ctx, live(), { x, y }); },
+      onNode: (node) => { ctx.endTarget(); orderDialog(ctx, live(), { node }); return true; },
       onFleet: (fid) => {
         const x = app.state.fleets.find((y) => y.id === fid);
         if (!x) return false;
         if (x.owner === app.state.me) { if (fid !== fleet.id) ctx.selectFleet(fid); return true; }
         ctx.endTarget();
-        orderDialog(ctx, live(), x.next && x.prog > 0 ? x.next : x.at);
+        orderDialog(ctx, live(), { x: x.x, y: x.y });
         return true;
       },
       onArmy: () => true,
-      onPick: (rid) => { ctx.endTarget(); orderDialog(ctx, live(), seaForRegion(app.state, live(), rid), { prefer: enemyAt(rid) }); },
+      onPick: (rid) => { ctx.endTarget(); const w = waterOff(rid); orderDialog(ctx, live(), { x: w.x, y: w.y, prefer: enemyAt(rid) }); },
     });
   },
   closeSelection,
@@ -375,16 +376,12 @@ function onLive(m) {
     for (const f of s.fleets) {
       const x = moves.get(f.id);
       if (x) {
-        [, f.at, f.next, f.prog, f.len, f.ships] = x;
-        f.battle = Boolean(x[6]);
-        if (f.path?.length && f.path[0] === f.at) f.path = f.path.slice(1);
-      } else if (f.next || f.battle) {
-        // It stopped since the last update: a fleet sails at most one leg between updates, so it is where it
-        // was heading
-        if (f.next) f.at = f.next;
-        if (f.path?.length && f.path[0] === f.at) f.path = f.path.slice(1);
-        f.next = null; f.prog = 0; f.len = 0; f.battle = false;
-      }
+        [, f.x, f.y, f.at, f.ships] = x;
+        f.battle = Boolean(x[5]);
+        // Waypoints already passed drop off our drawn course
+        while (f.route?.length && Math.hypot(f.route[0][0] - f.x, f.route[0][1] - f.y) < 3) f.route.shift();
+        f.moving = Boolean(f.route?.length) || f.moving;
+      } else if (f.battle) f.battle = false;
     }
   }
   const battles = new Map(m.battles.map((b) => [b[0], b]));
@@ -416,7 +413,7 @@ function frontNews(m, me) {
 function onAlert(item) {
   if (app.state) frontNews(item, app.state.me);
   const kind = item.kind === 'war' ? 'war' : item.kind;
-  const go = item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : null;
+  const go = item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
   toast(item.text, kind, go);
 }
 
@@ -473,7 +470,7 @@ function renderRail() {
     overview: s ? s.proposals.filter((p) => p.to === s.me).length : 0,
     diplomacy: s ? s.un.filter((r) => !r.done && !r.votes[s.me]).length : 0,
     government: s?.you ? (s.you.protests ?? []).filter((p) => p.size >= 30).length + (s.you.civilWar ? 1 : 0) : 0,
-    spies: s?.you ? (s.you.reports ?? []).filter((r) => r.w >= s.week - 1).length : 0,
+    spies: s?.you ? (s.you.reports ?? []).filter((r) => (r.act === 'plan' && !r.used && r.w >= s.week - 8) || r.w >= s.week - 1).length : 0,
   };
   const panelOpen = !$('game').classList.contains('panel-closed');
   $('rail').replaceChildren(...TABS.map(([id, label, icon]) => {
@@ -540,7 +537,7 @@ function renderMapTools() {
   $('map-tools').replaceChildren(seg, sel ?? '', layers);
   const legend = [];
   const item = (color, text, hatch) => h('div.row', h('span.swatch', { style: { background: hatch ? `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` : color } }), text);
-  if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#2a3142', 'Minor nations (computer-run)'));
+  if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#6f5a6e', 'Muted colours: the 150 smaller nations, always run by the computer'));
   if (mode === 'alliances') legend.push(item('#8f95ff', 'You'), item('#4f8fe0', 'Military allies'), item('#3f9e7a', 'Trade partners / friendly'), item('#e5484d', 'At war with you'), item('#b0444a', 'Hostile'));
   if (mode === 'resources') legend.push(h('div.row', h('span.res-dot', { style: { background: RES_COLORS[res], width: '14px', height: '14px', fontSize: '7px' } }, RES_LETTERS[res]), `${RESOURCE_INFO[res].name} (${RESOURCE_INFO[res].unit}). Brighter = more`), h('div.faint', 'Hollow circles: untapped reserves to develop'));
   if (mode === 'economy') legend.push(item('#7fb6ff', 'Economic output per area'));

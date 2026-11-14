@@ -2,7 +2,7 @@
 
 import { ORDER } from './data/geo.js';
 import { RESOURCES } from './data/regions.js';
-import { createState } from './setup.js';
+import { createState, promoteMinors } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news } from './core.js';
 import { marketTick, economyTick, debtRatio, upkeep, blockadeEffect } from './economy.js';
 import { militaryTick, militaryStep, garrisons, marchSpeed } from './military.js';
@@ -14,7 +14,7 @@ import { governmentTick, initGovernment } from './government.js';
 import { tradeTick, marketView } from './trade.js';
 import { spiesTick, initSpies } from './spies.js';
 import { initRange } from './science.js';
-import { initFleets, fleetsFor, applyFleets } from './navy.js';
+import { initFleets, fleetsFor, applyFleets, placeFleets } from './navy.js';
 import { initPeoples, peoplesTick, loyaltyTarget } from './peoples.js';
 import { aidTick, aidFor } from './proxy.js';
 import { initEnergy, energyTick, energyView } from './energy.js';
@@ -43,7 +43,8 @@ export class Game {
 
   setLeader(cid, name) {
     const c = this.s.countries[cid];
-    if (c) c.human = name ? { name } : null;
+    // Only the 50 largest economies can be led by a person; every other nation is always run by the computer
+    if (c && !(name && c.minor)) c.human = name ? { name } : null;
     this.cache = null;
   }
 
@@ -124,10 +125,9 @@ export class Game {
       const b = s.regions[id].battle;
       if (b) battles.push([i, b.by, r0(b.prog), b.from ?? 0]);
     });
-    // Only the fleets that are moving or fighting change between weekly updates: [id, at, next, prog, len,
-    // ships, battle]. (A fleet that forms, sinks or withdraws makes news, which sends everyone the full state.)
-    const changed = new Set(Object.values(s.fleets ?? {}).filter((f) => f.path.length || f.reachedStep === s.stepNo).map((f) => f.id));
-    const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.at, f.next, f.prog, f.len, f.ships, f.battle ? 1 : 0]);
+    // Only the fleets that are moving or fighting change between weekly updates: [id, x, y, sea, ships, battle].
+    const changed = new Set(Object.values(s.fleets ?? {}).filter((f) => f.route?.length || f.reachedStep === s.stepNo).map((f) => f.id));
+    const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.x, f.y, f.at, f.ships, f.battle ? 1 : 0]);
     return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles };
   }
 }
@@ -152,7 +152,11 @@ function armiesFor(s, cid) {
 
 // Adds whatever an older saved game is missing, so it carries on under the current rules
 function upgrade(s) {
+  promoteMinors(s);
+  for (const c of Object.values(s.countries)) { initGovernment(c); initSpies(c); initRange(c); }
   if (!s.fleets) { initFleets(s); applyFleets(s); }
+  else if (Object.values(s.countries).some((c) => c.minor && c.ships >= 3 && !Object.values(s.fleets).some((f) => f.owner === c.id))) initFleets(s);
+  placeFleets(s);
   if (Object.values(s.regions).some((r) => r.people == null)) initPeoples(s);
   s.aid ??= [];
   if (!s.pipelines) initEnergy(s);
@@ -177,7 +181,11 @@ export function rankings(s) {
   const maxG = Math.max(...list.map((c) => c.gdp), 1);
   const maxM = Math.max(...list.map((c) => militaryPower(s, c.id)), 1);
   const startProvinces = {};
-  for (const reg of Object.values(s.regions)) if (!isMinor(reg.id)) startProvinces[reg.id.split('-')[0]] = (startProvinces[reg.id.split('-')[0]] ?? 0) + 1;
+  for (const reg of Object.values(s.regions)) {
+    if (isMinor(reg.id)) continue;
+    const home = s.countries[reg.id] ? reg.id : reg.id.split('-')[0];
+    startProvinces[home] = (startProvinces[home] ?? 0) + 1;
+  }
   const rows = Object.values(s.countries).map((c) => {
     const held = Object.values(s.regions).filter((r) => r.owner === c.id).length;
     const power = c.exile ? 0 : 100 * (0.45 * Math.sqrt(c.gdp / maxG) + 0.35 * Math.sqrt(militaryPower(s, c.id) / maxM) + 0.1 * c.stability / 100 + 0.1 * c.rep / 100);
