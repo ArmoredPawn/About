@@ -92,6 +92,7 @@ const ctx = {
   go(tab, sub) { app.tab = tab; if (sub) app.subs[tab] = sub; if (tab !== 'diplomacy') app.ui.dossier = null; openPanel(); renderRail(); renderPanel(true); },
   openCountry(id) { app.ui.dossier = id; ctx.go('diplomacy'); },
   openRegion(id, focus) { selectRegion(id); if (focus) map.focus([id]); },
+  closeUp(id) { if (app.ui.view === 'strategic') { app.ui.view = 'auto'; map.setView('auto'); } map.closeUp(id); renderMapTools(); },
   focusCountry(id) {
     // Frame the homeland around the capital, not far-flung islands (Guam, Hawaii, French Guiana)
     const ids = Object.entries(INDEX).filter(([, i]) => app.state.regions[i][0] === id).map(([rid]) => rid);
@@ -223,6 +224,8 @@ const map = new WorldMap($('map'), {
   onRegion: (id) => (id ? selectRegion(id) : closeSelection()),
   onArmy: (id) => ctx.selectArmy(id),
   onFleet: (id) => ctx.selectFleet(id),
+  onCargo: (id) => { app.ui.cargo = id; ctx.go('market', 'ships'); },
+  onViewChange: () => renderMapTools(),
   onContext: (id) => quickOrder(id),
   onTargetHint: (text) => hint(text, 'bad', 0),
 });
@@ -547,10 +550,12 @@ function renderMapTools() {
     onclick: () => { app.ui.layers[k] = !app.ui.layers[k]; map.setLayers(app.ui.layers); renderMapTools(); },
   }, label)));
   map.setLayers(app.ui.layers);
-  // Strategic (provinces) or city view (every city's output, and the front up close)
-  app.ui.view ??= 'strategic';
-  map.setView(app.ui.view);
-  const views = h('div.seg', { title: 'Strategic view, or the close-up city view with every city’s output' }, [['strategic', 'Strategic'], ['cities', 'Cities']].map(([k, label]) => h('button', {
+  // Strategic (provinces) or city close-up (every city's output, and the front up close); on Auto the map
+  // turns into the close-up as you zoom in
+  app.ui.view ??= 'auto';
+  if (map.view2 !== app.ui.view) map.setView(app.ui.view);
+  const close = map.cityView;
+  const views = h('div.seg', { title: 'Auto: zoom in for the city close-up. Strategic: provinces only. Cities: the close-up at any zoom' }, [['auto', close && app.ui.view === 'auto' ? 'Auto: close-up' : 'Auto'], ['strategic', 'Strategic'], ['cities', 'Cities']].map(([k, label]) => h('button', {
     'aria-pressed': String(app.ui.view === k),
     onclick: () => { app.ui.view = k; map.setView(k); renderMapTools(); },
   }, label)));
@@ -559,7 +564,7 @@ function renderMapTools() {
   const item = (color, text, hatch) => h('div.row', h('span.swatch', { style: { background: hatch ? `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` : color } }), text);
   if (mode === 'political') legend.push(item('#e5e7ef', 'Land is coloured by who holds it now'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ffffff' } }), 'Front line: who holds which side of a contested province'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px solid #ff3b3b' } }), 'Countries at war with you'), item('#6f5a6e', 'Muted colours: the 150 smaller nations, always run by the computer'));
   if (mode === 'political' && app.ui.layers.trade) legend.push(h('div.row', h('span.swatch', { style: { background: 'repeating-linear-gradient(90deg, #d89a3a 0 4px, transparent 4px 7px)' } }), 'Sea lanes: the world’s main trade, coloured by what it carries (thicker = more). Dots are cargoes at sea'));
-  if (app.ui.view === 'cities') legend.push(h('div.row', h('span.swatch', { style: { background: '#e5e7ef', borderRadius: '50%' } }), 'Cities, sized by population, coloured by who holds them; gold figures are yearly output. Diamonds are capitals. Hover one for its share of the national economy'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ff5a5a', borderRadius: '50%' } }), 'Taken in fighting still under way: the front has passed it'));
+  if (close) legend.push(h('div.row', h('b', 'City close-up'), ' (zoom out for the strategic map)'), h('div.row', h('span.swatch', { style: { background: '#e5e7ef', borderRadius: '50%' } }), 'Cities, sized by population, coloured by who holds them; gold figures are yearly output. Diamonds are capitals. Hover one for its share of the national economy'), h('div.row', h('span.swatch', { style: { background: 'transparent', border: '2px dashed #ff5a5a', borderRadius: '50%' } }), 'Taken in fighting still under way: the front has passed it'));
   if (mode === 'alliances') legend.push(item('#8f95ff', 'You'), item('#4f8fe0', 'Military allies'), item('#3f9e7a', 'Trade partners / friendly'), item('#e5484d', 'At war with you'), item('#b0444a', 'Hostile'));
   if (mode === 'resources') legend.push(h('div.row', h('span.res-dot', { style: { background: RES_COLORS[res], width: '14px', height: '14px', fontSize: '7px' } }, RES_LETTERS[res]), `${RESOURCE_INFO[res].name} (${RESOURCE_INFO[res].unit}). Brighter = more`), h('div.faint', 'Hollow circles: untapped reserves to develop'));
   if (mode === 'economy') legend.push(item('#7fb6ff', 'Economic output per area'));

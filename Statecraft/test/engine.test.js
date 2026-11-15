@@ -247,7 +247,14 @@ test('a purchase ships the cargo; it is delivered, or stopped with both sides to
     const [x, y] = shipAt(g.s, sh, 0.85);
     Object.assign(fleet, { x, y, route: [], ships: 30, org: 90 });
     for (const f of Object.values(g.s.fleets)) if (f.owner === 'jpn') { f.x = 5; f.y = 5; }
+    // Before sending it, China sees how soon this fleet meets the cargo and its odds
+    const seen = g.view('chn').shipments.find((x) => x.id === sh.id);
+    const option = seen.hunt.find((o) => o.fleet === fleet.id);
+    assert.ok(option.weeks > 0 && option.seize > 0 && option.sink >= option.seize, 'odds are shown, sinking surer than seizing');
     assert.equal(g.command('chn', { type: 'intercept', id: sh.id, fleet: fleet.id, how: 'seize' }), null);
+    const hunted = g.view('chn').shipments.find((x) => x.id === sh.id);
+    assert.equal(hunted.hunter.fleet, fleet.id, 'the cargo shows who is after it');
+    assert.match(fleet.status, /Lying in wait|Sailing to seize/);
     for (let i = 0; i < 10 * 8 && !sh.done; i++) { g.step(0.125); if ((g.s.stepped ?? 0) >= 0.999) g.tick(); }
     if (sh.done && sh.left > 0) {
       stopped++;
@@ -854,4 +861,19 @@ test('automatic capture keeps an army attacking province after province; a prepa
   assert.ok(s2.countries.tur.treasury + s2.countries.tur.milFunds < before, 'it costs money');
   assert.ok(s2.countries.egy.inbox.some((m) => /build-up/.test(m.text)), 'spies report it');
   assert.match(g2.command('tur', { type: 'armyLanding', id: t.id }), /under way/);
+});
+
+test('an occupied province works for its occupier, not its home country', () => {
+  const g = game(31, 'deu');
+  const s = g.s;
+  g.tick();
+  const reg = Object.values(s.regions).filter((r) => r.owner === 'pol').sort((a, b) => b.gdp - a.gdp)[0];
+  const deu0 = s.countries.deu.pot;
+  const pol0 = s.countries.pol.pot;
+  reg.ctrl = 'deu';
+  reg.unrest = 0;
+  g.tick();
+  const share = reg.gdp * (1 - 0.8 * reg.dmg);
+  assert.ok(s.countries.deu.pot - deu0 > share * 0.9, 'the occupier gains (nearly) all its output');
+  assert.ok(pol0 - s.countries.pol.pot > share * 0.9, 'the home country loses it');
 });

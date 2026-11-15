@@ -12,6 +12,7 @@ import { stopShipment, escortPower } from './trade.js';
 import { clamp, chance, alert, nameOf, atWar, allied, sanctioning } from './core.js';
 
 const W = MAP_SIZE.w;
+const an = (w) => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
 const wrap = (x) => ((x % W) + W) % W;
 const ESCORT_RANGE = ENGAGE * 3; // friendly warships this close to a cargo defend it
 const NEAR_END = 0.18; // the share of the voyage near each end where a blockade catches it
@@ -102,6 +103,14 @@ function hostility(s, sh, f) {
   return war ? f.raid ?? 'seize' : null;
 }
 
+// The chance that warships this strong stop a cargo guarded by escorts this strong. Sinking it is surer than
+// seizing it: a prize has to be boarded and sailed home, and it can still slip away.
+export function stopChance(attack, escort, how) {
+  if (attack <= 0 || escort >= attack) return 0;
+  const base = clamp(attack / (attack + escort + 0.5), 0.55, 0.95);
+  return how === 'sink' ? base : Math.max(0.4, base - 0.15);
+}
+
 // Fleets meet a cargo: the escorts fight them off, or they stop it
 function encounter(s, sh, attackers, how, x, y) {
   const attack = attackers.reduce((t, f) => t + fleetStrength(s, f), 0);
@@ -111,16 +120,16 @@ function encounter(s, sh, attackers, how, x, y) {
   const what = RESOURCE_INFO[sh.res].name.toLowerCase();
   if (escort >= attack) {
     for (const f of attackers) f.org = Math.max(0, (f.org ?? 70) - 12);
-    alert(s, by, `Our ships tried to stop a ${what} cargo bound for ${nameOf(s, sh.buyer)} ${where}, but its escorts were too strong and drove us off.`, 'warn', { front: true });
-    alert(s, sh.buyer, `${nameOf(s, by)}'s navy went for a ${what} cargo bound for us ${where}. Its escorts got it through.`, 'good');
+    alert(s, by, `Our ships tried to stop ${an(what)} cargo bound for ${nameOf(s, sh.buyer)} ${where}, but its escorts were too strong and drove us off.`, 'warn', { front: true });
+    alert(s, sh.buyer, `${nameOf(s, by)}'s navy went for ${an(what)} cargo bound for us ${where}. Its escorts got it through.`, 'good');
     endHunt(s, sh, attackers, false);
     return;
   }
-  if (chance(s, clamp(attack / (attack + escort + 0.5), 0.55, 0.95))) {
+  if (chance(s, stopChance(attack, escort, how))) {
     stopShipment(s, sh, by, how, where);
     endHunt(s, sh, attackers, true);
   } else {
-    alert(s, by, `A ${what} cargo bound for ${nameOf(s, sh.buyer)} slipped past our ships ${where}.`, 'warn', { front: true });
+    alert(s, by, `${an(what).replace(/^a/, "A")} cargo bound for ${nameOf(s, sh.buyer)} slipped past our ships ${where}.`, 'warn', { front: true });
     endHunt(s, sh, attackers, false);
   }
 }
@@ -131,25 +140,65 @@ function endHunt(s, sh, fleets, got) {
     f.mission = 'hold';
     f.target = null;
     f.route = [];
+    f.huntLabel = null;
     f.status = got ? 'Holding position after the interception' : 'Holding position: the cargo got away';
   }
 }
 
 /* ---------- Hunting a cargo ---------- */
 
-// The point on a cargo's lane where this fleet can meet it before it reaches port, or null
-export function interceptPoint(s, sh, f) {
-  if (sh.mode !== 'sea' || sh.done) return null;
+// Where and when this fleet can meet a cargo before it reaches port: the point on its lane and the weeks until
+// the cargo gets there (the fleet is waiting by then), or null if it can't get there in time
+function meeting(s, sh, f, step = 0.01) {
+  if (sh.mode !== 'sea' || sh.done || !f) return null;
   const now = voyage(s, sh);
   const speed = fleetSpeed(s, f.owner) / KM_PER_PX; // map pixels a week
-  for (let t = now; t <= 0.97; t += 0.01) {
+  for (let t = now; t <= 0.97; t += step) {
     const p = shipAt(s, sh, t);
     if (!p) return null;
     // Sea routes wind: allow a third more than the straight line
     const fleetWeeks = (mapDistance(f.x, f.y, p[0], p[1]) * 1.3) / Math.max(1, speed);
     const shipWeeks = (t - now) * sh.total;
-    if (fleetWeeks <= shipWeeks + 0.1) return p;
+    if (fleetWeeks <= shipWeeks + 0.1) return { p, weeks: Math.max(shipWeeks, fleetWeeks) };
   }
+  return null;
+}
+
+export function interceptPoint(s, sh, f) { return meeting(s, sh, f)?.p ?? null; }
+
+// What a leader sees before sending a fleet after a cargo: for each of their fleets, how soon it could meet the
+// cargo and its chances of seizing or sinking it against the escorts there now
+export function huntOptions(s, cid, sh) {
+  const out = [];
+  for (const f of Object.values(s.fleets ?? {})) {
+    if (f.owner !== cid || f.ships + (f.carriers ?? 0) < 1) continue;
+    const m = meeting(s, sh, f, 0.02);
+    if (!m) { out.push({ fleet: f.id, weeks: null }); continue; }
+    const attack = fleetStrength(s, f);
+    const escort = escortAt(s, sh, m.p[0], m.p[1]);
+    out.push({
+      fleet: f.id, weeks: Math.round(m.weeks * 10) / 10, escort: Math.round(escort * 10) / 10, attack: Math.round(attack * 10) / 10,
+      seize: Math.round(stopChance(attack, escort, 'seize') * 100), sink: Math.round(stopChance(attack, escort, 'sink') * 100),
+    });
+  }
+  return out;
+}
+
+// The fleet of ours already hunting a cargo, and how soon it meets it
+export function hunterOf(s, cid, sh) {
+  const f = Object.values(s.fleets ?? {}).find((x) => x.owner === cid && x.mission === 'intercept' && x.target === sh.id);
+  if (!f) return null;
+  const m = meeting(s, sh, f, 0.02);
+  return { fleet: f.id, name: f.name, how: f.how ?? 'seize', weeks: m ? Math.round(m.weeks * 10) / 10 : null, waiting: !f.route?.length };
+}
+
+// Call a hunting fleet back: it holds where it is
+export function callOffHunt(s, c, { fleet }) {
+  const f = s.fleets?.[fleet];
+  if (!f || f.owner !== c.id) return 'Pick one of your fleets.';
+  if (f.mission !== 'intercept') return 'That fleet isn\'t hunting a cargo.';
+  Object.assign(f, { mission: 'hold', target: null, route: [], dest: null, huntLabel: null });
+  f.status = 'Holding position: the hunt was called off';
   return null;
 }
 
@@ -161,8 +210,9 @@ export function huntCargo(s, c, sh, f, how) {
   if (!p) return `${f.name} can't catch it before it reaches port. A fleet closer to its route might.`;
   const way = waterRoute([f.x, f.y], p);
   if (!way) return `${f.name} has no way there by sea.`;
-  Object.assign(f, { route: way, dest: p, mission: 'intercept', target: sh.id, how, mode: null, retreating: false });
-  f.status = `Hunting a ${RESOURCE_INFO[sh.res].name.toLowerCase()} cargo bound for ${nameOf(s, sh.buyer)}`;
+  const label = `${how === 'sink' ? 'sink' : 'seize'} ${an(RESOURCE_INFO[sh.res].name.toLowerCase())} cargo bound for ${nameOf(s, sh.buyer)}`;
+  Object.assign(f, { route: way, dest: p, mission: 'intercept', target: sh.id, how, mode: null, retreating: false, huntLabel: label });
+  f.status = `Sailing to ${label}`;
   return null;
 }
 
@@ -207,6 +257,7 @@ export function shippingStep(s) {
     if (!sh || sh.done || !live.has(sh.id)) {
       f.mission = 'hold';
       f.target = null;
+      f.huntLabel = null;
       f.status = 'Holding position: the cargo reached port';
       if (sh && !sh.done) alert(s, f.owner, `The ${RESOURCE_INFO[sh.res].name.toLowerCase()} cargo our fleet was hunting reached ${nameOf(s, sh.buyer)}.`, 'warn');
       continue;

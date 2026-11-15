@@ -449,6 +449,7 @@ export function recallFleets(s, c, { target, key }) {
 }
 
 function statusOf(s, f) {
+  if (f.mission === 'intercept' && f.huntLabel) return moving(f) && !f.retreating ? `Sailing to ${f.huntLabel}` : `Lying in wait to ${f.huntLabel}`;
   if (moving(f)) return f.retreating ? 'Retreating' : `Sailing to the ${nodeName(seaAt(...(f.dest ?? [f.x, f.y])))}`;
   if (f.mission === 'blockade' && f.target) return `Blockading ${nameOf(s, f.target)}`;
   if (f.mission === 'patrol') return `Patrolling the ${nodeName(f.at)}: ${PATROL_MODES[f.mode]?.toLowerCase() ?? ''}`;

@@ -379,11 +379,11 @@ function stop(s, sh, by, how, where) {
   alert(s, sh.buyer, `${nameOf(s, by)} stopped the shipment of ${what} from ${nameOf(s, sh.seller)} to us${where ? ` ${where}` : ''}. Our payment was refunded.`, 'bad');
   alert(s, by, seized
     ? `We seized ${fmtQty(sh.res, sh.qty)} of ${what} bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}.`
-    : `We sank a ${what} cargo bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}.`, 'good');
+    : `We sank ${/^[aeiou]/.test(what) ? "an" : "a"} ${what} cargo bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}.`, 'good');
   // Piracy in peacetime is an outrage
   for (const victim of [sh.buyer, sh.seller]) {
     if (!atWar(s, by, victim)) {
-      addRel(s, by, victim, -18);
+      addRel(s, by, victim, seized ? -18 : -25);
       const t = s.countries[by];
       if (t) t.rep = Math.max(0, t.rep - 3);
     }

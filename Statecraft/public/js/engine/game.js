@@ -12,6 +12,7 @@ import { eventsTick } from './events.js';
 import { runCommand } from './commands.js';
 import { governmentTick, initGovernment } from './government.js';
 import { tradeTick, marketView } from './trade.js';
+import { huntOptions, hunterOf } from './shipping.js';
 import { spiesTick, initSpies } from './spies.js';
 import { initRange } from './science.js';
 import { initFleets, fleetsFor, applyFleets, placeFleets } from './navy.js';
@@ -356,8 +357,11 @@ export function view(s, cid, { gar, ranks }) {
     chokepoints: s.chokepoints,
     shipments: (s.shipments ?? []).filter((x) => !x.done && (!(x.covert || x.secret) || x.buyer === cid || x.seller === cid || knows(x.buyer) || knows(x.seller)))
       .map((x) => ({
-        id: x.id, seller: x.seller, buyer: x.buyer, res: x.res, qty: x.qty, cost: r1(x.cost || x.payment || 0), mode: x.mode, straits: x.straits, transit: x.transit,
+        id: x.id, seller: x.seller, buyer: x.buyer, res: x.res, qty: x.qty, cost: Math.round((x.cost || x.payment || 0) * 1000) / 1000, mode: x.mode, straits: x.straits, transit: x.transit,
         left: x.left, total: x.total, covert: x.covert, secret: x.secret, deal: Boolean(x.deal), lane: x.lane ?? null, x: x.x, y: x.y,
+        // Our fleets' chances against it, and the one of ours already after it
+        ...(me && x.mode === 'sea' && x.buyer !== cid && x.seller !== cid && !allied(s, cid, x.buyer) && !allied(s, cid, x.seller)
+          ? { hunter: hunterOf(s, cid, x), hunt: huntOptions(s, cid, x) } : {}),
       })),
     rel: me ? Object.fromEntries(Object.keys(s.countries).map((id) => [id, r0(s.rel[id < cid ? `${id}|${cid}` : `${cid}|${id}`] ?? (id === cid ? 100 : 0))])) : {},
     news: s.news.slice(-150),

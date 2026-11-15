@@ -466,6 +466,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .trade-lane.deal { opacity: 0.25; }
 .map .trade-ship { opacity: 0.7; cursor: default; }
 .map .trade-ship.ours { opacity: 1; }
+.map .trade-ship:not(.ours) { cursor: pointer; }
+.map .trade-ship.hunted { opacity: 1; }
+.map .hunt-ring { animation: hunt-pulse 1.4s ease-in-out infinite; }
+@keyframes hunt-pulse { 50% { opacity: 0.35; } }
+.hunt-status { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgba(255, 90, 90, 0.1); font-size: 12.5px; }
+.how-it-works { display: grid; gap: 4px; margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.04); font-size: 12.5px; line-height: 1.45; }
+.how-it-works ol { margin: 2px 0 4px; padding-left: 18px; display: grid; gap: 2px; }
 .map .trade-flow { fill: none; stroke-linecap: butt; opacity: 0.55; pointer-events: stroke; animation: trade-flow 1.6s linear infinite; }
 .map .trade-flow.ours { opacity: 0.85; }
 .map .trade-flow:hover { opacity: 0.9; }
@@ -478,6 +485,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .city.fallen circle { stroke-dasharray: 2 1.5; }
 .map .city-label { fill: #f1f3f9; font-weight: 600; paint-order: stroke; stroke: rgb(5 8 14 / 0.88); stroke-linejoin: round; dominant-baseline: central; pointer-events: none; }
 .map .city-output { fill: #ffd27a; font-weight: 700; }
-.map.city-view .region { fill-opacity: 0.82; }
+.map.city-view .region { fill-opacity: 0.55; }
+.map .city-area { opacity: 0.32; stroke: none; }
+.map .city.fallen .city-area { opacity: 0.5; }
 .map.city-view .front-line { stroke-width: 1.6; stroke-dasharray: 3 2; }
 .map .fallout { pointer-events: none; }

@@ -22,8 +22,13 @@ const NEUTRAL_LIGHT = '#343c50';
 const CAPITALS = Object.fromEntries(PROVINCES.filter((p) => p.capital).map((p) => [p.country, p.id]));
 const INDEX = Object.fromEntries(ORDER.map((id, i) => [id, i]));
 
+// How far in (screen pixels per map unit) the automatic view turns into the city close-up
+const CITY_ZOOM = 3;
+
 export class WorldMap {
-  constructor(el, { onRegion, onArmy, onFleet, onHover, onContext, onTargetHint }) {
+  constructor(el, { onRegion, onArmy, onFleet, onCargo, onHover, onContext, onTargetHint, onViewChange }) {
+    this.onCargo = onCargo;
+    this.onViewChange = onViewChange;
     this.el = el;
     this.onRegion = onRegion;
     this.onArmy = onArmy;
@@ -37,8 +42,10 @@ export class WorldMap {
     this.selectedFleet = null;
     // What the map shows on top of the land: switched in the map tools
     this.layers = { armies: true, fleets: true, pipelines: true, trade: true };
-    // 'strategic': provinces and armies; 'cities': every city with its output, and a ragged, close-up front
-    this.view2 = 'strategic';
+    // 'auto': the strategic map, turning into the city close-up as you zoom in; 'strategic': provinces and armies
+    // only; 'cities': every city with its output, and a ragged, close-up front, at any zoom
+    this.view2 = 'auto';
+    this.cityShown = false;
     this.tradeShips = new Map();
     this.fronts = new Map();
     this.samples = new Map();
@@ -111,11 +118,30 @@ export class WorldMap {
     this.#animate();
   }
 
-  // Strategic or city view
+  // Strategic, city, or automatic (cities once zoomed in)
   setView(view) {
-    this.view2 = view === 'cities' ? 'cities' : 'strategic';
-    this.el.classList.toggle('city-view', this.view2 === 'cities');
+    this.view2 = ['cities', 'strategic'].includes(view) ? view : 'auto';
+    this.#syncView();
     if (this.state) { this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); }
+  }
+
+  // Whether the city close-up is showing now
+  get cityView() { return this.cityShown; }
+
+  #syncView() {
+    const on = this.view2 === 'cities' || (this.view2 === 'auto' && this.#unit() >= CITY_ZOOM);
+    if (on === this.cityShown) return false;
+    this.cityShown = on;
+    this.el.classList.toggle('city-view', on);
+    this.onViewChange?.(on);
+    return true;
+  }
+
+  // Fly in to the city close-up of a province (a battle, usually)
+  closeUp(id) {
+    this.focus([id]);
+    const unit = this.#unit();
+    if (unit < CITY_ZOOM * 1.6) this.zoomBy((CITY_ZOOM * 1.6) / unit);
   }
 
   /* ---------- Cities (the close-up view) ---------- */
@@ -135,12 +161,16 @@ export class WorldMap {
       const shown = (f?.shown ?? r.prog) / 100;
       list.forEach((c, i) => { if (depth[i] <= shown) fallen.add(c.name); });
     }
-    const national = this.state.countries[r.owner]?.gdp ?? null;
-    return list.map((c) => ({ ...c, output: c.share * r.gdp, national: national ? (c.share * r.gdp) / national : null, holder: fallen.has(c.name) ? r.battleBy : r.ctrl, fallen: fallen.has(c.name) }));
+    // A city's output goes to whoever holds it, so its share is of that country's economy
+    return list.map((c) => {
+      const holder = fallen.has(c.name) ? r.battleBy : r.ctrl;
+      const national = this.state.countries[holder]?.gdp ?? this.state.minors?.[holder]?.gdp ?? null;
+      return { ...c, output: c.share * r.gdp, national: national ? (c.share * r.gdp) / national : null, holder, fallen: fallen.has(c.name) };
+    });
   }
 
   #drawCities() {
-    if (this.view2 !== 'cities' || !this.state) { this.gCities.replaceChildren(); return; }
+    if (!this.cityShown || !this.state) { this.gCities.replaceChildren(); return; }
     const unit = this.#unit();
     const rect = this.el.getBoundingClientRect();
     const vbW = W / this.view.k;
@@ -159,8 +189,10 @@ export class WorldMap {
         if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
         const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
         const color = politicalColor(this.state, c.holder);
-        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[this.#region(id).owner]?.name ?? 'its country'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}`;
+        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}`;
         out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}`, 'data-id': id },
+          // The city's built-up area, in the colour of whoever holds it
+          svg('circle', { class: 'city-area', 'data-id': id, cx: c.x, cy: c.y, r: r * 2.6, fill: color }),
           c.capital
             ? svg('rect', { 'data-id': id, x: c.x - r, y: c.y - r, width: r * 2, height: r * 2, fill: color, stroke: '#fff', 'stroke-width': 1.2 / unit, transform: `rotate(45 ${c.x} ${c.y})` })
             : svg('circle', { 'data-id': id, cx: c.x, cy: c.y, r, fill: color, stroke: c.fallen ? '#ff5a5a' : '#0b0f1a', 'stroke-width': (c.fallen ? 1.4 : 1) / unit }),
@@ -310,16 +342,19 @@ export class WorldMap {
       const p = sh.x != null ? [sh.x, sh.y] : at(r, (sh.total - sh.left) / Math.max(1, sh.total));
       let n = this.tradeShips.get(sh.id);
       if (!n) {
-        n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}` });
+        n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}`, 'data-cargo': sh.id });
         this.tradeShips.set(sh.id, n);
       }
+      n.classList.toggle('hunted', Boolean(sh.hunter));
       const jump = n.dataset.x != null && Math.abs(Number(n.dataset.x) - wrap(p[0])) > W / 2;
       n.style.transition = jump || n.dataset.x == null ? 'none' : `transform ${Math.round((this.tickMs ?? 9000) * 0.9)}ms linear`;
       n.style.transform = `translate(${wrap(p[0])}px, ${p[1]}px)`;
       n.dataset.x = wrap(p[0]);
       n.replaceChildren(
+        ours ? null : svg('circle', { r: 9 / unit, fill: 'transparent' }), // easier to click
+        sh.hunter ? svg('circle', { class: 'hunt-ring', r: 7 / unit, fill: 'none', stroke: '#ff5a5a', 'stroke-width': 1.4 / unit }) : null,
         svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
-        svg('title', {}, title));
+        svg('title', {}, `${title}${sh.hunter ? ` · ${sh.hunter.name} is after it` : ours ? '' : ' · click to stop it'}`));
     }
     for (const [id, n] of this.tradeShips) if (!seen.has(id)) { n.remove(); this.tradeShips.delete(id); }
     // Our standing resource deals: the lanes their cargoes use
@@ -520,7 +555,7 @@ export class WorldMap {
       return amp * (wave + salient);
     };
     const at = (t, u) => [t * dx + u * nx, t * dy + u * ny];
-    if (this.view2 === 'cities') {
+    if (this.cityShown) {
       // Close up: street by street. Many more kinks, and around each city near the line a pocket: still held
       // (the line bends back around it) or taken (the line pushes out past it)
       const pockets = [];
@@ -948,6 +983,7 @@ export class WorldMap {
     this.el.classList.toggle('zoomed', this.#unit() >= 2.4);
     if (this.state) {
       cancelAnimationFrame(this.raf);
+      this.#syncView();
       this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
     }
   }
@@ -1073,6 +1109,8 @@ export class WorldMap {
       }
       if (fleetEl) return this.onFleet?.(fleetEl.dataset.fleet);
       if (armyEl) return this.onArmy?.(armyEl.dataset.army);
+      const cargoEl = d.target.closest?.('[data-cargo]');
+      if (cargoEl && this.onCargo) return this.onCargo(cargoEl.dataset.cargo);
       if (nodeEl) return;
       this.onRegion?.(id ?? null);
     };

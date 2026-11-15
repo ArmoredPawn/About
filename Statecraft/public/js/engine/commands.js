@@ -24,7 +24,7 @@ import {
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
 import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, interceptProblem } from './trade.js';
-import { huntCargo } from './shipping.js';
+import { huntCargo, callOffHunt } from './shipping.js';
 import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
@@ -380,6 +380,7 @@ const HANDLERS = {
     if (why) return why;
     return huntCargo(s, c, sh, s.fleets?.[fleet], how === 'sink' ? 'sink' : 'seize');
   },
+  huntCancel(s, c, { fleet }) { return callOffHunt(s, c, { fleet }); },
   toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
   straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
   // Patrols and blockades are fleets now; these call them off

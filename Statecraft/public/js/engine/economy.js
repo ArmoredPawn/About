@@ -181,7 +181,8 @@ const EFFICIENCY = { oil: 0.015, gas: 0.012, coal: 0.02, iron: 0.008, food: 0, r
 export function regionEfficiency(reg, holder) {
   // A province being fought over works at half pace, and the cities already lost to the attack not at all
   const battle = reg.battle ? Math.max(0.1, 0.5 - 0.6 * (reg.battle.fallenShare ?? 0)) : 1;
-  return (1 - reg.dmg) * (reg.owner === holder ? 1 : 0.5) * battle * (1 - reg.unrest / 200);
+  // Whoever holds a province takes all it produces; an occupied people's unrest and the war damage cut it
+  return (1 - reg.dmg) * battle * (1 - reg.unrest / 200);
 }
 
 function demand(s, n, r) {
@@ -364,12 +365,9 @@ export function economyTick(s, world) {
     let gdp = 0;
     let pop = 0;
     for (const reg of Object.values(s.regions)) {
-      if (reg.owner !== m.id) continue;
-      reg.gdp *= 1 + 2.5 / 5200;
+      if (reg.owner === m.id && reg.ctrl === m.id) reg.gdp *= 1 + 2.5 / 5200;
+      // Whatever it holds, home ground or occupied, works for it
       if (reg.ctrl === m.id) { gdp += reg.gdp * (1 - 0.8 * reg.dmg); pop += reg.pop; }
-    }
-    for (const reg of Object.values(s.regions)) {
-      if (reg.owner !== m.id && reg.ctrl === m.id) pop += reg.pop;
     }
     m.gdp = gdp;
     m.pop = pop;
@@ -382,8 +380,9 @@ function output(s, c, mods) {
   let pop = 0;
   for (const reg of Object.values(s.regions)) {
     if (reg.ctrl !== c.id) continue;
-    const own = reg.owner === c.id;
-    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1)
+    // An occupied province works for its occupier, not its home country: all its output counts here, cut
+    // only by the damage, the unrest of a conquered people, and any uprising
+    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1)
       // Cities already lost to an attack still in progress produce nothing for us
       * (1 - (reg.battle?.fallenShare ?? 0));
     pop += reg.pop;
