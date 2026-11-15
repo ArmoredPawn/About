@@ -18,7 +18,7 @@ import { debtRatio, debtLimit, perCapita } from './economy.js';
 import { register, ask } from './decisions.js';
 
 export const RATINGS = [[85, 'AAA'], [75, 'AA'], [65, 'A'], [55, 'BBB'], [45, 'BB'], [35, 'B'], [20, 'CCC'], [-Infinity, 'D']];
-const ratingOf = (score) => RATINGS.find(([min]) => score >= min)[1];
+const ratingOf = (score) => (RATINGS.find(([min]) => score >= min) ?? RATINGS[RATINGS.length - 1])[1];
 export const investmentGrade = (r) => ['AAA', 'AA', 'A', 'BBB'].includes(r);
 
 const noise = (s) => (rand(s) + rand(s) + rand(s) - 1.5) * 1.15; // roughly a standard normal

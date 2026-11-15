@@ -418,9 +418,10 @@ register('famineAid', {
 });
 
 export function sendFamineAid(s, c, crisisId, size) {
-  const x = s.crises.find((y) => y.id === crisisId);
+  const x = s.crises.find((y) => y.id === crisisId && y.kind === 'famine');
   if (!x) return 'That famine is over.';
   if (size === 'none') return null;
+  x.aid ??= {};
   const amount = aidSize(c, size);
   if (c.treasury < amount) return 'Not enough in the treasury.';
   c.treasury -= amount;
@@ -501,7 +502,7 @@ register('terror', {
     if (option === 'strike' && haven && s.countries[haven]) {
       addRel(s, c.id, haven, -40);
       c.rally = (c.rally ?? 0) + 6;
-      c.warCases = { ...(c.warCases ?? {}), [haven]: s.week + 26 };
+      c.warCases = { ...(c.warCases ?? {}), [haven]: { ready: s.week, until: s.week + 26, since: s.week } };
       news(s, `${c.name} holds ${nameOf(s, haven)} responsible for the attack and vows to respond.`, 'war', [c.id, haven]);
       alert(s, haven, `${c.name} blames us for the terror attack it suffered and is threatening us.`, 'bad', { country: c.id });
     }

@@ -5,7 +5,8 @@
 import { h, regionName, nationName, troops } from './dom.js';
 import { modal } from './dialogs.js';
 import { GEO } from '../engine/data/geo.js';
-import { route, hypotheticalWar, landingProblem, blockers, noRouteReason } from '../engine/military.js';
+import { route, hypotheticalWar, landingProblem, blockers, noRouteReason, distanceKm, terrainOf } from '../engine/military.js';
+import { barrels } from './panels/military.js';
 import { atWar, friendlyGround } from '../engine/core.js';
 import { fauxState } from './map.js';
 
@@ -94,42 +95,82 @@ function accessDialog(ctx, army, target) {
   return true;
 }
 
-// Has the leader made the case for war against this country recently?
-export const caseMade = (s, foe) => (s.you?.warCases?.[foe] ?? -1) >= s.week;
+// Where our case for a war on `foe` stands: { state: 'none' | 'pending' | 'ready', secs (until ready), until }.
+// The case is prepared in secret and takes about 45 seconds at normal speed.
+export function warCaseStatus(ctx, foe) {
+  const s = ctx.state;
+  const raw = s.you?.warCases?.[foe];
+  if (raw == null) return { state: 'none' };
+  const w = typeof raw === 'number' ? { ready: 0, until: raw } : raw;
+  if (w.until < s.week) return { state: 'none' };
+  const now = s.week + Math.min(0.999, ctx.tickAge?.() ?? 0);
+  if (w.ready <= now + 1e-6) return { state: 'ready', until: w.until };
+  return { state: 'pending', secs: Math.max(1, Math.ceil(((w.ready - now) * (ctx.tickMs?.() ?? 9000)) / 1000)), until: w.until };
+}
+export const caseMade = (ctx, foe) => warCaseStatus(ctx, foe).state === 'ready';
 
-// The warnings and the "address the nation" choice shown before declaring war. Returns { el, justify() }.
+// No case yet: offer to start preparing one. Returns true if it was started.
+export async function justifyDialog(ctx, foe, then = '') {
+  const s = ctx.state;
+  const st = warCaseStatus(ctx, foe);
+  if (st.state === 'pending') {
+    ctx.hint(`The case for war against ${nationName(s, foe)} is still being prepared: ready in about ${st.secs} seconds.`, 'warn', 6000);
+    return false;
+  }
+  return new Promise((resolve) => {
+    modal({
+      title: `Justify a war on ${nationName(s, foe)}?`,
+      body: h('div.stack',
+        h('p', `No country can be attacked without a case for war. Our staff will build one (the grievances, the legal grounds, the story for the public) in about 45 seconds. ${then}`),
+        h('p.muted.small', 'It is prepared in secret: no one is told. Only a country with a deep, well-established spy network inside our government will find out before we declare war; everyone else learns of it when war comes. Once ready, the case stands for six months.')),
+      actions: [
+        { label: 'Not now', kind: 'ghost', onClick: () => resolve(false) },
+        { label: 'Start preparing the case', kind: 'danger', onClick: async () => {
+          const err = await ctx.send({ type: 'warCase', target: foe });
+          if (!err) ctx.toast(`The case for war against ${nationName(s, foe)} is being prepared in secret: ready in about 45 seconds.`, 'info');
+          resolve(!err);
+          return !err || false;
+        } },
+      ],
+      onClose: () => resolve(false),
+    });
+  });
+}
+
+// The warnings shown before declaring war. Returns { el, justify() } (justify() is kept for older callers).
 export function warNotice(ctx, foe, shared = []) {
   const s = ctx.state;
   const defenders = new Set();
   for (const al of s.alliances) if (al.kind === 'military' && al.members.includes(foe)) for (const m of al.members) if (m !== foe && m !== s.me) defenders.add(m);
   const g = s.minors[foe]?.guarantor;
   if (g && g !== s.me) defenders.add(g);
-  const made = caseMade(s, foe);
-  const wait = (s.you?.cooldown?.warCase ?? -1) - s.week;
-  const box = h('input', { type: 'checkbox', checked: !made && wait <= 0, disabled: made || wait > 0 });
   const nap = s.treaties.some((t) => t.kind === 'nap' && [t.a, t.b].includes(s.me) && [t.a, t.b].includes(foe));
   const el = h('div.stack',
     h('div.warning.bad', h('span', h('b', `This declares war on ${nationName(s, foe)}. `),
       shared.length ? `You leave ${shared.map((al) => al.name).join(' and ')}. ` : '',
       defenders.size ? `Its allies may join in: ${[...defenders].map((d) => nationName(s, d)).join(', ')}.` : 'It has no allies bound to defend it.')),
     nap ? h('div.warning.bad', 'You have a non-aggression pact with them. Breaking it badly damages your standing.') : null,
-    made
-      ? h('div.warning.info', 'You have already made the case for this war to the nation: the public is behind you.')
-      : h('label.row.gap', { style: { alignItems: 'flex-start', cursor: wait > 0 ? 'default' : 'pointer' } }, box,
-        h('span', h('b', 'Address the nation first'), h('span.muted.small', { style: { display: 'block' } },
-          wait > 0 ? `You addressed the nation recently; possible again in ${wait} weeks.`
-            : 'Explain why this war is necessary. Far less public outcry, fewer anti-war protests, and a smaller hit to your standing.'))),
+    h('div.warning.info', 'Our case for this war is ready: the public is behind us.'),
   );
-  return {
-    el,
-    justify: async () => {
-      if (!box.checked || box.disabled) return true;
-      return !(await ctx.send({ type: 'warCase', target: foe }));
-    },
-  };
+  return { el, justify: async () => true };
 }
 
-// Sends the order. Asks first only when the order means declaring war.
+// How long a march takes and the oil it burns (plus two weeks of fighting if it ends in an attack)
+export function marchEstimate(ctx, army, path, attack) {
+  if (!army.speed || !army.fuel || !path?.length) return null;
+  let km = 0;
+  let from = army.region;
+  for (const id of path) {
+    const infra = ctx.state.regions[ctx.regionIndex[id]]?.[3] ?? 0;
+    km += distanceKm(from, id) * terrainOf(id).move * (1 - 0.04 * infra);
+    from = id;
+  }
+  const weeks = km / Math.max(50, army.speed);
+  return { weeks, oil: weeks * army.fuel.march + (attack ? 2 * army.fuel.fight : 0) };
+}
+const estimateText = (e) => (e ? ` About ${e.weeks < 1 ? 'a week' : `${Math.round(e.weeks * 10) / 10} weeks`} and ${barrels(e.oil)} of oil.` : '');
+
+// Sends the order. Asks first only when the order means declaring war (and that needs a case for it).
 export async function sendArmy(ctx, army, target) {
   const s = ctx.state;
   const why = goBlocker(ctx, army, target);
@@ -140,16 +181,21 @@ export async function sendArmy(ctx, army, target) {
   }
   const o = goOptions(ctx, army, target);
   const verb = o.friendly ? 'moving to' : o.ground ? 'attacking' : 'landing at';
+  const est = o.ground ? marchEstimate(ctx, army, o.path, !o.friendly) : null;
   const go = async () => {
     const err = await ctx.send({ type: 'armyOrder', id: army.id, kind: 'go', target, declare: true });
-    if (!err) ctx.hint(`${army.name}: ${verb} ${regionName(target)}.`, 'good', 3500);
+    if (!err) ctx.hint(`${army.name}: ${verb} ${regionName(target)}.${estimateText(est)}`, 'good', 5000);
     return !err;
   };
   if (!o.declare) return go();
+  if (!caseMade(ctx, o.foe)) {
+    await justifyDialog(ctx, o.foe, `When it is ready, send ${army.name} again.`);
+    return false;
+  }
   const notice = warNotice(ctx, o.foe, o.shared);
   modal({
     title: `War with ${nationName(s, o.foe)}?`,
-    body: h('div.stack', h('p.small', `${army.name} (${troops(army.troops)} troops) will ${o.ground ? 'attack' : 'land at'} ${regionName(target)} as soon as war is declared.`), notice.el),
+    body: h('div.stack', h('p.small', `${army.name} (${troops(army.troops)} troops) will ${o.ground ? 'attack' : 'land at'} ${regionName(target)} as soon as war is declared.${estimateText(est)}`), notice.el),
     actions: [{ label: 'Cancel', kind: 'ghost' }, {
       label: 'Declare war & send', kind: 'danger', onClick: async () => {
         if (!(await notice.justify())) return false;
@@ -172,6 +218,9 @@ export function attackDialog(ctx, { army, target }) {
     return accessDialog(ctx, best, target) || ctx.hint(goBlocker(ctx, best, target) ?? `None of our army groups can reach ${regionName(target)}.`, 'bad');
   }
   if (candidates.length === 1) return sendArmy(ctx, candidates[0], target);
+  // A war still needs its case first
+  const o = goOptions(ctx, candidates[0], target);
+  if (o.declare && !caseMade(ctx, o.foe)) return justifyDialog(ctx, o.foe, 'When it is ready, send the armies again.');
   return multiAttack(ctx, candidates, target);
 }
 

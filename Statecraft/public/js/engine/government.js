@@ -8,7 +8,11 @@
 import { GEO } from './data/geo.js';
 import { PROVINCES } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
-import { clamp, news, alert, chance, rand, enemiesOf, nextId, rel, money, troopsLabel, alive, nameOf, warsAccepted } from './core.js';
+import {
+  clamp, news, alert, chance, rand, enemiesOf, nextId, rel, money, troopsLabel, alive, nameOf, warsAccepted,
+  atWar, nowWeeks, warCaseMade, warCasePending, JUSTIFY_WEEKS, WAR_CASE_WEEKS,
+} from './core.js';
+import { leakWarCase } from './spies.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 const CAPITALS = Object.fromEntries(PROVINCES.filter((p) => p.capital).map((p) => [p.country, p.id]));
@@ -151,6 +155,7 @@ export const CAUSES = {
   rights: { name: 'Repression and censorship', crowd: 'Students, journalists and the opposition', fix: 'Ease the security forces and free the press' },
   opposition: { name: 'Opposition campaign', crowd: 'Opposition supporters', fix: 'Negotiate, or wait for it to run out of money' },
   occupation: { name: 'Occupation and annexation', crowd: 'People in newly taken provinces', fix: 'Garrison them, grant amnesty, or let them go' },
+  rebellion: { name: 'The unchecked uprising', crowd: 'Sympathisers of the rebels, and people who think the government has lost control', fix: 'Crush the uprising, send an army to hold the province, or offer an amnesty' },
 };
 
 // How strongly each grievance is felt right now, 0-100
@@ -177,6 +182,8 @@ function pressures(s, c) {
   let occupied = 0;
   for (const reg of Object.values(s.regions)) if (reg.ctrl === c.id && reg.unrest > 30) occupied += (reg.unrest - 30) * Math.min(1, reg.pop / 5);
   p.occupation = Math.min(80, occupied * 0.3);
+  // An uprising left to burn draws more and more people onto the streets
+  p.rebellion = Math.min(100, (c.neglect ?? 0) * 2.5);
   return p;
 }
 
@@ -266,6 +273,18 @@ function revoltsTick(s, gar) {
     if (army > 0) for (const a of Object.values(s.armies)) if (a.region === reg.id && a.owner === holder) a.troops = Math.max(1, a.troops - Math.min(a.troops * 0.01, rv.rebels * 0.01));
     reg.unrest = Math.max(reg.unrest, 60);
     reg.dmg = Math.min(0.9, reg.dmg + 0.002);
+    // Left alone (no army holding it, no crackdown or amnesty in two months), an uprising festers: every week
+    // it goes unanswered it grows bolder and may spread to the next province
+    const answered = army >= rv.rebels * 0.5 || (rv.acted ?? -99) >= s.week - 8;
+    rv.neglect = answered ? Math.max(0, (rv.neglect ?? 0) - 2) : (rv.neglect ?? 0) + 1;
+    if (c && rv.neglect >= 6 && chance(s, Math.min(0.12, rv.neglect * 0.006))) {
+      const next = GEO[reg.id].adj.map((x) => s.regions[x]).find((r) => r && r.ctrl === holder && !r.revolt && !(r.fallout?.until > s.week));
+      if (next) {
+        next.unrest = Math.max(next.unrest, 70);
+        startRevolt(s, next, `the uprising in ${regionName(reg.id)} spreads, unchecked`);
+        next.revolt.rebels = Math.max(next.revolt.rebels, rv.rebels * 0.3);
+      }
+    }
     if (rv.rebels < 0.5) {
       reg.revolt = null;
       reg.unrest = Math.max(30, reg.unrest - 25);
@@ -288,6 +307,13 @@ function revoltsTick(s, gar) {
     const was = c.civilWar;
     c.civilWar = n >= 2 || capital || rebels > Math.max(20, c.troops * 0.1);
     c.rebels = rebels;
+    // How long the uprisings have gone unanswered, weighted by their size: it fills the streets and makes the
+    // generals wonder whether the government can still rule
+    let neglect = 0;
+    for (const reg of Object.values(s.regions)) if (reg.ctrl === c.id && reg.revolt) neglect += Math.min(30, reg.revolt.neglect ?? 0) * clamp(reg.revolt.rebels / 20, 0.3, 1.5);
+    const before = c.neglect ?? 0;
+    c.neglect = neglect;
+    if (before < 12 && neglect >= 12) alert(s, c.id, 'The uprisings are going unanswered. Protests are spreading and the officers are asking whether this government can still rule. Crush them, hold the provinces with an army, or offer an amnesty.', 'bad');
     if (c.civilWar && !was) {
       news(s, `${c.name} slides into civil war.`, 'unrest', [c.id]);
       alert(s, c.id, 'Civil war: rebels hold out in several provinces. Crush them, or end foreign wars to bring troops home, as Russia did at Brest-Litovsk in 1918.', 'bad');
@@ -321,20 +347,19 @@ export function governmentTick(s, gar) {
 
 /* ---------- Commands ---------- */
 
-export const WAR_CASE_WEEKS = 26;
+export { WAR_CASE_WEEKS, JUSTIFY_WEEKS };
 
-// A national address making the case for war on one country. For half a year a war on it is one the public
-// understands: little outcry when it starts, few anti-war protests, and a draft people accept.
+// Justify a war: the leader's staff build the case (the grievances, the legal grounds, the story for the
+// public) in secret. It is ready in about 45 seconds at normal speed; only then can war be declared. No one is
+// told: only a country with a deep, well-established spy network inside ours finds out before the declaration.
 export function makeWarCase(s, c, target) {
-  if (!target || target === c.id || !(s.countries[target] || s.minors[target])) return 'Pick the country you want to make the case against.';
-  if ((c.cooldown.warCase ?? -1) > s.week) return `You addressed the nation recently. Try again in ${c.cooldown.warCase - s.week} weeks.`;
-  c.warCases = { ...(c.warCases ?? {}), [target]: s.week + WAR_CASE_WEEKS };
-  c.cooldown.warCase = s.week + 4;
-  c.boost += 2;
-  c.rally += 3;
-  addRelSafe(s, c.id, target, -8);
-  news(s, `${c.name}'s leader addresses the nation, laying out the case against ${nameOf(s, target)}.`, 'war', [c.id, target]);
-  alert(s, target, `${c.name}'s leader has made a televised case against us. War may be coming.`, 'warn');
+  if (!target || target === c.id || !(s.countries[target] || s.minors[target])) return 'Pick the country you want to justify a war against.';
+  if (atWar(s, c.id, target)) return `You are already at war with ${nameOf(s, target)}.`;
+  if (warCaseMade(s, c, target)) return `The case against ${nameOf(s, target)} is ready: you can declare war.`;
+  if (warCasePending(s, c, target)) return `The case against ${nameOf(s, target)} is still being prepared.`;
+  const now = nowWeeks(s);
+  c.warCases = { ...(c.warCases ?? {}), [target]: { ready: now + JUSTIFY_WEEKS, until: s.week + JUSTIFY_WEEKS + WAR_CASE_WEEKS, since: now } };
+  leakWarCase(s, c, target);
   return null;
 }
 
@@ -352,6 +377,8 @@ export function setConscription(s, c, level) {
   const up = want.level > CONSCRIPTION[c.conscription].level;
   c.conscription = level;
   if (up) {
+    // How the public sees it right now (a war declared this week counts already)
+    c.threat = threatTo(s, c);
     const justified = c.threat.value;
     // A sudden, unexplained call-up brings people onto the streets
     c.recentDraft = (c.recentDraft ?? 0) + (1 - justified) * (c.gov === 'democracy' ? 40 : 22);

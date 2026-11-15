@@ -79,35 +79,42 @@ export const CHOKEPOINTS = {
     name: 'Strait of Hormuz', regions: ['irn-hz', 'm-oman'],
     note: 'A fifth of the world\'s oil leaves the Gulf through it.',
     exportCut: { nations: ['sau', 'are', 'irq', 'irn', 'm-kuwait', 'm-qatar', 'm-bahrain'], res: ['oil', 'gas'], factor: 0.35 },
+    users: ['jpn', 'kor', 'chn', 'ind', 'twn', 'pak', 'tha', 'sgp', 'sau', 'are', 'irq', 'irn'], userDrag: 1.2,
   },
   malacca: {
     name: 'Strait of Malacca', regions: ['sgp-sg', 'idn-sm', 'mys-kl'],
     note: 'East Asia\'s oil and trade with Europe and the Gulf passes through it.',
     importCut: { nations: ['chn', 'jpn', 'kor', 'twn'], factor: 0.25 },
+    users: ['chn', 'jpn', 'kor', 'twn', 'vnm', 'phl', 'sgp', 'mys', 'idn', 'tha', 'ind', 'aus'], userDrag: 1.0,
   },
   suez: {
     name: 'Suez Canal', regions: ['egy-sz'],
     note: 'The short route between Europe and Asia.',
     priceShock: 0.12, growthDrag: 0.3,
+    users: ['deu', 'ita', 'fra', 'gbr', 'nld', 'esp', 'bel', 'grc', 'tur', 'isr', 'chn', 'ind', 'jpn', 'kor', 'sgp', 'sau', 'are'], userDrag: 0.8, transit: 9,
   },
   bab: {
     name: 'Bab el-Mandeb', regions: ['m-yemen', 'm-djibouti'],
     note: 'The Red Sea\'s southern gate, on the way to Suez.',
     priceShock: 0.08, growthDrag: 0.15,
+    users: ['deu', 'ita', 'fra', 'gbr', 'nld', 'esp', 'egy', 'sau', 'isr', 'chn', 'ind'], userDrag: 0.6,
   },
   bosporus: {
     name: 'Turkish Straits', regions: ['tur-is'],
     note: 'The Black Sea\'s only way out: Russian and Ukrainian grain and oil.',
     exportCut: { nations: ['rus', 'm-ukraine', 'm-georgia', 'rou'], res: ['food', 'oil'], factor: 0.5 },
+    users: ['rus', 'rou', 'm-ukraine', 'm-georgia', 'm-bulgaria', 'egy'], userDrag: 0.8,
   },
   panama: {
     name: 'Panama Canal', regions: ['m-panama'],
     note: 'Links the Atlantic and the Pacific.',
-    priceShock: 0.04, growthDrag: 0.15,
+    priceShock: 0.06, growthDrag: 0.15,
+    users: ['usa', 'chl', 'per', 'col', 'mex', 'can', 'jpn', 'chn', 'kor', 'm-ecuador', 'm-guatemala', 'm-costa-rica'], userDrag: 0.9, transit: 5,
   },
   gibraltar: {
     name: 'Strait of Gibraltar', regions: ['esp-an', 'm-morocco'],
     note: 'The Mediterranean\'s western gate.',
     priceShock: 0.05, growthDrag: 0.1,
+    users: ['ita', 'fra', 'esp', 'tur', 'isr', 'egy', 'grc', 'gbr', 'm-algeria', 'm-libya'], userDrag: 0.6,
   },
 };

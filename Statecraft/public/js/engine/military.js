@@ -8,11 +8,13 @@ import { GEO } from './data/geo.js';
 import { TERRAIN } from './data/regions.js';
 import { REGION_NAMES, MINOR_TERRAIN, MINOR_QUALITY } from './names.js';
 import {
-  clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround,
-  onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted,
+  clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround, fuelCut,
+  onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted, rel,
 } from './core.js';
 import { navyStep, navyTick, landingControl, crossingOdds } from './navy.js';
-import { gpsCoverage, commsReady } from './space.js';
+import { shippingStep } from './shipping.js';
+import { fallenCities } from './cities.js';
+import { gpsCoverage, commsReady, satSees } from './space.js';
 import { PROVINCES } from './data/regions.js';
 import { NATIONS as COUNTRIES } from './data/nations.js';
 import { surpriseFeature } from './terrain.js';
@@ -90,11 +92,19 @@ export function garrisons(s) {
   return out;
 }
 
-// Fighting strength. Numbers count most: an exhausted army still fights at 60% and one cut off from supply at
-// 55%, so three million tired, hungry men are still worth more than a million fresh ones on open ground.
+// Fighting strength. Numbers count most: an exhausted army still fights at 75% and one short of supply at 70%,
+// so three million tired, hungry men are worth far more than a million fresh ones.
 function power(troops, tanks, qual, org, supply, terrain) {
-  return (troops + tanks * 0.05 * terrain.armor) * qual * (0.6 + 0.4 * org / 100) * (0.55 + 0.45 * supply);
+  return (troops + tanks * 0.05 * terrain.armor) * qual * (0.75 + 0.25 * org / 100) * (0.7 + 0.3 * supply);
 }
+
+// What ground and fortifications add to a defence. They help, but they can't make up for being outnumbered
+// three to one: mountains count about 1.55 times, a fully fortified line half as much again.
+export const holdFactor = (terrain, fort = 0) => terrain.defend ** 0.75 * (1 + 0.1 * fort);
+
+// Sheer mass: a side with two, three, four times the men can attack everywhere at once, feed in fresh units and
+// outflank. Worth nothing at even numbers, about +15% at 2:1, +33% at 3:1 and +45% at 4:1 or more.
+export const massBonus = (mine, theirs) => 1 + 0.3 * clamp(Math.log2(Math.max(1, mine) / Math.max(1, theirs)) - 0.5, 0, 1.5);
 
 function genBonus(gen, role) {
   let m = 1 + 0.04 * (gen.skill - 1);
@@ -112,14 +122,58 @@ export function defenceEstimate(s, regionId, gar = garrisons(s)) {
   let p = power(g.troops, g.tanks, quality(s, reg.ctrl), 80, 1, terrain);
   for (const a of Object.values(s.armies)) {
     if (a.region === regionId && !a.sea && onSameSide(s, a.owner, reg.ctrl)) {
-      p += power(a.troops, a.tanks, quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend');
+      p += power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend');
     }
   }
-  return p * terrain.defend * (1 + 0.15 * reg.fort);
+  return p * holdFactor(terrain, reg.fort);
 }
 
+// Tanks without fuel are only pillboxes
+const runningTanks = (s, a) => a.tanks * (1 - fuelCut(s.countries[a.owner]));
+
 export function armyAttackEstimate(s, a, regionId) {
-  return power(a.troops, a.tanks, quality(s, a.owner), a.org, a.supply, terrainOf(regionId)) * genBonus(a.gen, 'attack');
+  return power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrainOf(regionId)) * genBonus(a.gen, 'attack');
+}
+
+/* ---------- Fuel ---------- */
+
+// Oil burned per week, in millions of barrels a day (the market's unit), per thousand troops and per tank.
+// Fighting burns the most: tanks, trucks, generators and artillery tractors all running. About 0.3 barrels per
+// soldier a day in battle, as in modern campaigns.
+export const FUEL = { hold: [0.00005, 0.000001], march: [0.0002, 0.000006], fight: [0.0003, 0.00001] };
+export const AIR_FUEL = 0.00003; // per aircraft flying a campaign
+export const SHIP_FUEL = { underway: 0.0006, idle: 0.0001 }; // per warship (a carrier counts as eight)
+export const armyMode = (a) => (a.attacking || a.landing ? 'fight' : a.path?.length || a.sea ? 'march' : 'hold');
+export const armyFuel = (a, mode = armyMode(a)) => a.troops * FUEL[mode][0] + a.tanks * FUEL[mode][1];
+
+// Weeks to march along a path, and the oil it burns (plus a fortnight of fighting if it ends in an attack)
+export function orderFuel(s, a, path, attack = false) {
+  let km = 0;
+  let from = a.region;
+  for (const id of path ?? []) { km += moveCost(s, from, id); from = id; }
+  const weeks = km / Math.max(50, marchSpeed(s, a));
+  const oil = weeks * armyFuel(a, 'march') + (attack ? 2 * armyFuel(a, 'fight') : 0);
+  return { weeks, oil };
+}
+
+// What a country's forces burn this week: { armies, garrisons, air, navy, total }
+export function forcesFuel(s, c) {
+  let armies = 0;
+  let inArmies = 0;
+  for (const a of Object.values(s.armies)) {
+    if (a.owner !== c.id) continue;
+    armies += armyFuel(a);
+    inArmies += a.troops;
+  }
+  const garrisons = Math.max(0, c.troops - inArmies) * FUEL.hold[0] + c.aircraft * 0.000004 + Math.max(0, c.tanks) * FUEL.hold[1] * 0.5;
+  const air = (c.airOps ?? []).reduce((t, o) => t + o.aircraft * AIR_FUEL, 0);
+  let navy = 0;
+  for (const f of Object.values(s.fleets ?? {})) {
+    if (f.owner !== c.id) continue;
+    const ships = f.ships + (f.carriers ?? 0) * 8;
+    navy += ships * (f.route?.length || f.mission === 'blockade' || f.mission === 'patrol' ? SHIP_FUEL.underway : SHIP_FUEL.idle);
+  }
+  return { armies, garrisons, air, navy, total: armies + garrisons + air + navy };
 }
 
 /* ---------- Routes ---------- */
@@ -279,13 +333,107 @@ export function hypotheticalWar(s, me, foe) {
 }
 
 // Why a landing from `from` on `target` can't go ahead, or null if it can. `c` needs an id. A landing needs a
-// fleet of ours (or an ally's) in the sea off the target's coast, at least as strong as the enemy's there.
-export function landingProblem(s, c, from, target) {
+// fleet of ours (or an ally's) in the sea off the target's coast, at least as strong as the enemy's there, or a
+// prepared build-up (landing craft, transports, stores: the months before D-Day) for a crossing within range.
+export const LANDING_RANGE = 2000; // km a prepared landing can cross
+export function landingProblem(s, c, from, target, prepared = false) {
   if (!GEO[from].coast || s.regions[from].ctrl !== c.id) return 'The army isn\'t in a coastal province you hold, so it has no port to sail from.';
   if (!GEO[target].coast) return `${regionName(target)} is landlocked: there is no water to land from.`;
+  if (prepared) {
+    if (distanceKm(from, target) > LANDING_RANGE) return `${regionName(target)} is beyond the reach of our landing craft (${Math.round(distanceKm(from, target)).toLocaleString('en')} km; ${LANDING_RANGE.toLocaleString('en')} km at most).`;
+    return null;
+  }
   const sea = landingControl(s, c.id, target);
-  if (sea) return `No landing at ${regionName(target)}: ${sea}.`;
+  if (sea) return `No landing at ${regionName(target)}: ${sea}. Or prepare a landing (the army's card) to cross without command of the sea.`;
   return null;
+}
+
+/* ---------- Preparing a landing ---------- */
+
+// The build-up for a crossing: landing craft, transports, beach engineers, stores. Weeks of work in plain sight.
+export const buildupCost = (c, a) => (a.troops * 0.006 + a.tanks * 0.003) * (0.45 + 0.55 * Math.min(1.2, (c.gdp / Math.max(0.01, c.pop)) / 60));
+export const buildupWeeks = (c) => Math.max(4, 8 - Math.floor((c.tech?.naval ?? 4) / 3));
+export const landingReady = (s, a) => Boolean(a.buildup && a.buildup.ready <= s.week && a.buildup.region === a.region);
+
+export function prepareLanding(s, c, a) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  if (a.sea) return 'The army is already at sea.';
+  if (!GEO[a.region].coast || s.regions[a.region].ctrl !== c.id) return 'The army must be in a coastal province we hold.';
+  if (a.buildup?.region === a.region) return landingReady(s, a) ? 'The landing force is ready.' : `The build-up is under way: ready in week ${a.buildup.ready}.`;
+  const cost = buildupCost(c, a);
+  if (cost > c.milFunds + c.treasury) return `The build-up costs ${money(cost)}; you have ${money(c.milFunds + c.treasury)}.`;
+  const fromFunds = Math.min(c.milFunds, cost);
+  c.milFunds -= fromFunds;
+  c.treasury -= cost - fromFunds;
+  a.buildup = { region: a.region, since: s.week, ready: s.week + buildupWeeks(c), cost };
+  a.status = `Preparing a landing at ${regionName(a.region)}`;
+  // Hundreds of landing craft and a port full of troops can't be hidden: spy networks inside us and anyone
+  // with reconnaissance satellites see it
+  for (const o of Object.values(s.countries)) {
+    if (o.id === c.id || !alive(s, o.id)) continue;
+    const spies = (o.spies?.[c.id]?.agents ?? 0) >= 2 && s.week - (o.spies[c.id].since ?? s.week) >= 4;
+    const eyes = satSees(s, o.id) && (enemiesOf(s, c.id).has(o.id) || rel(s, o.id, c.id) < 0);
+    if (!spies && !eyes) continue;
+    briefing(s, o.id, `${eyes && !spies ? 'Our satellites show' : 'Our agents report'} a massive build-up at ${regionName(a.region)} (${c.name}): landing craft, transports and about ${troopsLabel(Math.round(a.troops / 10) * 10)} troops. An invasion across the sea is being prepared, ready in about ${buildupWeeks(c)} weeks.`, 'war', { region: a.region });
+  }
+  return null;
+}
+
+/* ---------- Automatic capture ---------- */
+
+const CAPITAL_IDS = new Set(PROVINCES.filter((p) => p.capital).map((p) => p.id));
+
+// The nearest province held by a country at war with this army's owner that it can reach over land, or null
+function nextConquest(s, a) {
+  const owner = a.owner;
+  const dist = new Map([[a.region, 0]]);
+  const open = [[0, a.region]];
+  const done = new Set();
+  while (open.length) {
+    open.sort((x, y) => x[0] - y[0]);
+    const [d, id] = open.shift();
+    if (done.has(id)) continue;
+    done.add(id);
+    if (id !== a.region && atWar(s, owner, s.regions[id].ctrl)) return id;
+    for (const next of GEO[id].adj) {
+      const reg = s.regions[next];
+      if (!reg) continue;
+      let cost;
+      if (friendlyGround(s, owner, reg.ctrl)) cost = 0.5 * moveCost(s, id, next) / 600;
+      else if (atWar(s, owner, reg.ctrl)) cost = 2 * terrainOf(next).move * terrainOf(next).defend + 1 - (CAPITAL_IDS.has(next) ? 1 : 0);
+      else continue;
+      const nd = d + Math.max(0.1, cost);
+      if (nd < (dist.get(next) ?? Infinity)) { dist.set(next, nd); open.push([nd, next]); }
+    }
+  }
+  return null;
+}
+
+export function setAuto(s, c, a, on) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  a.auto = Boolean(on);
+  a.autoAt = 0;
+  if (a.auto) briefing(s, c.id, `${a.gen.name} has orders to keep attacking: ${a.name} will take one enemy province after another until no enemy is left within reach, or it is destroyed.`, 'info');
+  return null;
+}
+
+// An army on automatic capture with nothing to do picks its next objective
+function autoCapture(s, a) {
+  if (!a.auto || a.sea) return;
+  const busy = a.path.length && (a.op.kind !== 'attack' || atWar(s, a.owner, s.regions[a.op.target]?.ctrl));
+  if (busy || (a.autoAt ?? 0) > (s.stepNo ?? 0)) return;
+  const next = enemiesOf(s, a.owner).size ? nextConquest(s, a) : null;
+  if (!next) {
+    a.autoAt = (s.stepNo ?? 0) + 8;
+    if (a.op.kind === 'attack' && a.region !== a.op.target) a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
+    a.status = enemiesOf(s, a.owner).size ? 'Automatic capture: no enemy within reach over land' : 'Automatic capture: no enemies left';
+    return;
+  }
+  const path = route(s, a.owner, a.region, next, { offensive: true, maneuver: a.gen.trait === 'maneuver' });
+  if (!path) { a.autoAt = (s.stepNo ?? 0) + 8; return; }
+  a.op = { kind: 'attack', target: next, aggr: a.op.aggr ?? 'balanced' };
+  a.path = path;
+  a.status = `Automatic capture: advancing on ${regionName(next)}`;
 }
 
 // Works out an order without carrying it out: { error } or the new operation
@@ -327,10 +475,11 @@ function planOrder(s, c, army, { kind, target, aggr = 'balanced', through = fals
     return { op: { kind, target, aggr }, path, status: `Advancing on ${regionName(target)}` };
   }
   if (kind === 'invade') {
-    const problem = landingProblem(s, c, army.region, target);
+    const prepared = landingReady(s, army);
+    const problem = landingProblem(s, c, army.region, target, prepared && Boolean(landingControl(s, c.id, target)));
     if (problem) return { error: problem };
     const km = distanceKm(army.region, target);
-    return { op: { kind, target, aggr }, path: [], sea: { from: army.region, to: target, left: Math.ceil(km / 1500) + 1 }, status: `At sea, bound for ${regionName(target)}` };
+    return { op: { kind, target, aggr }, path: [], sea: { from: army.region, to: target, left: Math.ceil(km / 1500) + 1, prepared }, status: `At sea, bound for ${regionName(target)}` };
   }
   return { error: 'Unknown order.' };
 }
@@ -350,7 +499,11 @@ export function orderArmy(s, c, army, order) {
   army.path = plan.path;
   // A fresh order: the army sets off on the very next step
   army.mv = Math.max(army.mv ?? 0, 1.2);
-  if (plan.sea) army.sea = plan.sea;
+  if (plan.sea) {
+    army.sea = plan.sea;
+    // The build-up is spent on this crossing
+    if (plan.sea.prepared) { army.prepared = true; army.buildup = null; }
+  }
   army.status = plan.status;
   return null;
 }
@@ -462,6 +615,9 @@ export function interceptRate(s, c, defender) {
   return def ? clamp(0.055 * def.tech.missile - 0.02 * ((c.tech?.missile ?? 6) - 6), 0, 0.75) : 0.05;
 }
 
+export const FALLOUT_WEEKS = 260;
+export const inFallout = (s, reg) => (reg?.fallout?.until ?? -1) > s.week;
+
 export function nuclearStrike(s, c, target, retaliation = false) {
   const reg = s.regions[target];
   if (!reg) return 'Pick a province.';
@@ -472,11 +628,19 @@ export function nuclearStrike(s, c, target, retaliation = false) {
   const victim = reg.ctrl;
   c.nukes -= 1;
   s.nukesUsed++;
-  const deaths = reg.pop * 0.25;
-  reg.pop *= 0.75;
-  reg.gdp *= 0.3;
-  reg.dmg = 0.92;
+  // The blast and firestorm kill a third of the province; most of the rest flee the fallout. For five years
+  // nothing can be mined, pumped or farmed there, and nothing rebuilt.
+  const deaths = reg.pop * 0.35;
+  reg.pop *= 0.4;
+  reg.gdp *= 0.15;
+  reg.dmg = 0.95;
   reg.unrest = 90;
+  reg.infra = 0;
+  reg.fort = 0;
+  for (const r of Object.values(reg.res)) r[0] = 0;
+  reg.fallout = { until: s.week + FALLOUT_WEEKS, by: c.id, since: s.week };
+  reg.battle = null;
+  if (s.countries[reg.owner]) s.countries[reg.owner].refugees = (s.countries[reg.owner].refugees ?? 0) + reg.pop * 0.4;
   for (const a of Object.values(s.armies)) {
     if (a.region === target) { a.troops *= 0.25; a.tanks *= 0.25; a.org = 5; }
   }
@@ -540,7 +704,7 @@ function airPower(s, c, op, reg) {
   const defAir = def ? def.aircraft * airQuality(def) * 0.3 / Math.max(1, enemiesOf(s, reg.ctrl).size) : 5;
   const adf = def ? def.tech.missile * 15 : 10;
   const mine = op.aircraft * airQuality(c);
-  const eff = (mine / (mine + defAir + adf)) * (1 - 0.7 * (c.short?.oil ?? 0)) * (1 + 0.2 * gpsCoverage(s, c.id));
+  const eff = (mine / (mine + defAir + adf)) * (1 - 0.9 * fuelCut(c)) * (1 + 0.2 * gpsCoverage(s, c.id));
   return { eff, power: eff * Math.min(1.5, op.aircraft / 60), defAir };
 }
 export const airEstimate = (s, c, op, regionId) => airPower(s, c, op, s.regions[regionId]);
@@ -561,7 +725,7 @@ export function marchSpeed(s, a) {
   if (!c) return 300;
   const base = 40 + 55 * c.tech.army + 35 * c.tech.industry;
   const mech = 0.8 + 0.4 * Math.min(1, a.tanks / Math.max(1, a.troops) / 3);
-  const fuel = 1 - 0.5 * (c.short?.oil ?? 0);
+  const fuel = 1 - 0.85 * fuelCut(c);
   const factories = 0.7 + 0.3 * (c.logistics?.factories ?? 1);
   return base * mech * fuel * factories * (a.gen.trait === 'maneuver' ? 1.3 : 1);
 }
@@ -583,6 +747,7 @@ export function militaryStep(s, dt) {
     else march(s, a, c, dt, gar, fights);
   }
   navyStep(s, dt);
+  shippingStep(s);
   const battled = new Set();
   for (const [regionId, attackers] of fights) {
     battle(s, regionId, attackers, gar, dt);
@@ -612,6 +777,7 @@ function sail(s, a, c, dt, fights) {
     a.region = a.sea.from;
     a.sea = null;
     a.landing = false;
+    a.prepared = false;
     a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
     a.status = 'Withdrawn after a failed landing';
     alert(s, a.owner, `${a.gen.name} reports: the landing has been thrown back. ${a.name} has re-embarked for ${regionName(a.region)}.`, 'bad');
@@ -637,6 +803,7 @@ function sail(s, a, c, dt, fights) {
 
 function march(s, a, c, dt, gar, fights) {
   const maneuver = a.gen.trait === 'maneuver';
+  autoCapture(s, a);
   // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
   if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
     a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver }) ?? [];
@@ -702,6 +869,12 @@ export function militaryTick(s) {
       a.troops *= 0.99;
       a.org = Math.max(0, a.org - 5);
     }
+    // Radiation sickness in a contaminated province
+    if (inFallout(s, s.regions[a.region])) {
+      a.troops *= 0.97;
+      a.org = Math.max(0, a.org - 4);
+      if (!a.irradiated) { a.irradiated = true; briefing(s, a.owner, `${a.name} is in a contaminated zone: radiation sickness is spreading through the ranks. Move it out.`, 'bad'); }
+    } else a.irradiated = false;
   }
   airAndSea(s);
 }
@@ -734,7 +907,7 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   let attackTroops = 0;
   for (const a of attackers) {
     let p = armyAttackEstimate(s, a, regionId) * (1 + 0.05 * gpsCoverage(s, a.owner)) * (knowsPlans(s, a.owner, holder) ? 1.08 : 1);
-    if (a.landing) p *= 0.5;
+    if (a.landing) p *= a.prepared ? 0.75 : 0.5;
     attack += p;
     attackTroops += a.troops;
   }
@@ -746,10 +919,13 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   let defence = power(g.troops, g.tanks, quality(s, holder), 80, 1, terrain);
   let defendTroops = g.troops;
   for (const a of defenders) {
-    defence += power(a.troops, a.tanks, quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend') * (a.op.kind === 'hold' ? 1.1 : 1);
+    defence += power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend') * (a.op.kind === 'hold' ? 1.1 : 1);
     defendTroops += a.troops;
   }
-  defence *= terrain.defend * (1 + 0.15 * reg.fort) * (1 - 0.2 * airEdge) * (knowsPlans(s, holder, lead) ? 1.08 : 1);
+  defence *= holdFactor(terrain, reg.fort) * (1 - 0.2 * airEdge) * (knowsPlans(s, holder, lead) ? 1.08 : 1);
+  // Whoever has far more men gets the edge of mass
+  attack *= massBonus(attackTroops, defendTroops);
+  defence *= massBonus(defendTroops, attackTroops);
   defence = Math.max(defence, 0.5);
 
   const fresh = !(reg.battle && reg.battle.by === lead);
@@ -781,13 +957,13 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   const step = (ratio >= 1 ? Math.min(95, 25 + 35 * (ratio - 1)) * tempo : ratio >= 0.8 ? 10 * (ratio - 0.8) / 0.2 : -40 * (0.8 - ratio) / 0.8) / size(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step * dt, 0, 100);
   // Beaten back with nothing gained, the defenders counter-attack into the ground the attack came from
-  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / (terrain.defend * (1 + 0.15 * reg.fort)), gar, dt);
+  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / holdFactor(terrain, reg.fort), gar, dt);
 
   // Losses
   let attackLoss = 0;
   for (const a of attackers) {
     const style = AGGRESSION[a.op.aggr].losses * (a.gen.trait === 'aggressive' ? 1.2 : a.gen.trait === 'cautious' ? 0.75 : 1);
-    const rate = 0.016 * dt * clamp(1 / ratio, 0.35, 2.5) * style * (a.landing ? 1.8 : 1);
+    const rate = 0.016 * dt * clamp(1 / ratio, 0.35, 2.5) * style * (a.landing ? (a.prepared ? 1.4 : 1.8) : 1);
     const lost = a.troops * rate;
     a.troops -= lost;
     a.tanks *= 1 - rate * 1.4;
@@ -826,6 +1002,21 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   }
   reg.dmg = Math.min(0.9, reg.dmg + 0.006 * dt);
 
+  // Cities fall one by one as the front passes them
+  if (reg.battle.prog < 100) {
+    const fallen = fallenCities(s, reg);
+    reg.battle.fallen ??= [];
+    reg.battle.fallenShare = fallen.share;
+    for (const city of fallen.cities ?? []) {
+      if (reg.battle.fallen.includes(city.name)) continue;
+      reg.battle.fallen.push(city.name);
+      if (city.share < 0.04 && !city.capital) continue;
+      const pct = Math.round(city.share * 100);
+      news(s, `${city.name} falls to ${nameOf(s, lead)}${city.capital ? `: ${nameOf(s, holder)}'s capital is lost` : ''}.`, 'war', [lead, holder]);
+      briefing(s, holder, `${city.name} has fallen to ${nameOf(s, lead)}. We have lost its factories and workers (about ${pct}% of ${regionName(regionId)}'s output).`, 'bad', { region: regionId, front: true });
+      briefing(s, lead, `Our troops have taken ${city.name} (about ${pct}% of ${regionName(regionId)}'s output).`, 'good', { region: regionId, front: true });
+    }
+  }
   if (reg.battle.prog >= 100) capture(s, regionId, lead, attackers);
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
 }
@@ -943,6 +1134,7 @@ export function capture(s, regionId, by, attackers = []) {
       a.region = regionId;
       a.sea = null;
       a.landing = false;
+      a.prepared = false;
     } else if (a.path[0] === regionId) {
       a.region = regionId;
       a.path.shift();
@@ -1047,6 +1239,14 @@ function logistics(s) {
     const guards = rear > 0 ? Math.min(1, free / rear) : 1;
     const funds = c.readiness ?? 1;
     c.logistics = { cost: cost * 52, capacity, demand, factories, rear, free, guards, ratio: (0.55 + 0.45 * factories) * (0.6 + 0.4 * guards) * funds };
+    // The week's fuel bill, which the country must buy on the market if it doesn't pump enough itself
+    c.fuel = forcesFuel(s, c);
+    const cut = fuelCut(c);
+    if (cut >= 0.25 && !c.fuelCrisis) {
+      c.fuelCrisis = true;
+      briefing(s, c.id, `Fuel crisis: our forces are getting only ${Math.round((1 - cut) * 100)}% of the oil they burn. Tanks are stalling, aircraft are grounded and the advance is slowing. Buy oil (Economy, Market), seize oil fields, or halt operations.`, 'bad');
+      if (mine.length) news(s, `${c.name}'s war machine is running out of fuel.`, 'war', [c.id]);
+    } else if (cut < 0.1) c.fuelCrisis = false;
     for (const a of mine) if (!a.sea) a.supply *= c.logistics.ratio;
   }
 }
@@ -1071,7 +1271,7 @@ function supplyAll(s) {
     // Bombed roads and depots
     if (reg.interdict && reg.interdict.until > s.week && atWar(s, reg.interdict.by, a.owner)) supply *= 1 - 0.4 * Math.min(1, reg.interdict.power);
     if (a.gen.trait === 'logistician') supply = Math.min(1, supply + 0.15);
-    a.supply = supply * (1 - 0.6 * (c.short?.oil ?? 0));
+    a.supply = supply * (1 - 0.6 * fuelCut(c));
   }
 }
 

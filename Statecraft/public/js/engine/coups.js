@@ -42,8 +42,13 @@ export function coupsTick(s) {
     revolution(s, c);
     backing(s, c);
     patronage(s, c);
+    if (c.army.guard) c.treasury -= guardCost(c);
   }
 }
+
+// A presidential guard: elite units paid and picked for loyalty. Coups rarely succeed against one, but the
+// regular army resents the favouritism.
+export const guardCost = (c) => c.gdp * 0.0003;
 
 function loyalty(s, c) {
   const a = c.army;
@@ -55,7 +60,10 @@ function loyalty(s, c) {
     + (c.regime?.kind === 'junta' ? 10 : 0)
     + ((a.purgedUntil ?? -1) > s.week ? 18 : 0)
     + ((a.paidUntil ?? -1) > s.week ? 12 : 0)
-    + (c.gov === 'democracy' && perCapita(c) > 25 ? 10 : 0);
+    + (c.gov === 'democracy' && perCapita(c) > 25 ? 10 : 0)
+    - Math.min(20, (c.neglect ?? 0) * 0.6)
+    - (a.guard ? 4 : 0)
+    + ((c.powerSharing ?? -1) > s.week ? 10 : 0);
   a.loyalty = clamp(a.loyalty + (clamp(target, 0, 100) - a.loyalty) * 0.05, 0, 100);
 }
 
@@ -75,8 +83,11 @@ function risk(s, c) {
   if (c.civilWar) r += add(10, 'civil war');
   if (c.regime && s.week - c.regime.since < 52) r += add(10, 'a recent change of government');
   if (c.backing && c.backing.until > s.week) r += add(c.backing.power, 'foreign money for the plotters');
+  if ((c.neglect ?? 0) > 2) r += add(Math.min(35, c.neglect * 1.2), 'uprisings left unchecked: the government looks like it has lost control');
+  if (c.army.guard) r += add(-8, 'a loyal presidential guard');
+  if ((c.powerSharing ?? -1) > s.week) r += add(-10, 'the generals share power');
+  if ((c.army.purgedUntil ?? -1) > s.week) r += add(-30, `the officer corps was purged (quiet until week ${c.army.purgedUntil})`);
   if (c.regime?.kind === 'junta') r += add(-6, 'the generals already rule (but rivals among them may strike)');
-  if (purged(s, c)) r += add(-30, `the officer corps was purged (quiet until week ${c.army.purgedUntil})`);
   c.coup.risk = Math.round(clamp(r, 0, 100));
   c.coup.why = why.sort((a, b) => Math.abs(b[0]) - Math.abs(a[0]));
 }
@@ -112,10 +123,16 @@ function plots(s, c) {
     return;
   }
   if (k.risk < 30) { k.plot = null; return; }
+  if (k.underway) return;
   if (s.week - k.plot.since >= 3 && chance(s, 0.12 + (k.risk - 40) / 200)) attempt(s, c);
 }
 
 const money = (b) => (b >= 1 ? `$${Math.round(b * 10) / 10}B` : `$${Math.round(b * 1000)}M`);
+
+register('coup', {
+  ai: () => 'fight',
+  apply: (s, c, d, option) => { resolveCoup(s, c, option, c.coup.underway?.backer ?? null); return null; },
+});
 
 register('plot', {
   // Governments often misjudge a plot, or can't afford to act on it
@@ -136,6 +153,46 @@ export function payGenerals(s, c) {
   return null;
 }
 
+// Commanders moved around so none builds a following: milder than a purge, and it can break a plot up
+export function rotateCommanders(s, c) {
+  initCoups(c);
+  if ((c.cooldown.rotate ?? -1) > s.week) return `Commanders were reshuffled recently. Again in ${c.cooldown.rotate - s.week} weeks.`;
+  c.cooldown.rotate = s.week + 13;
+  c.army.loyalty = Math.min(100, c.army.loyalty + 6);
+  if (c.coup.plot && chance(s, 0.5)) endPlot(c);
+  for (const a of Object.values(s.armies)) if (a.owner === c.id) a.org = Math.max(10, a.org - 8);
+  return null;
+}
+
+export function setGuard(s, c, on) {
+  initCoups(c);
+  on = Boolean(on);
+  if (on && !c.army.guard) news(s, `${c.name} forms an elite presidential guard answerable only to its leader.`, 'unrest', [c.id]);
+  c.army.guard = on;
+  return null;
+}
+
+// Emergency powers: the leader suspends elections and rules by decree, with the army's blessing (a self-coup)
+export function emergencyPowers(s, c) {
+  initCoups(c);
+  if (c.gov === 'autocracy') return 'You already rule without elections.';
+  if (c.army.loyalty < 65) return `The generals won't back you (army loyalty ${Math.round(c.army.loyalty)}, 65 needed).`;
+  c.gov = 'autocracy';
+  c.electionWeek = null;
+  c.press = 'state';
+  c.security = 'firm';
+  c.base.press = c.press;
+  c.base.security = c.security;
+  c.rep = Math.max(0, c.rep - 20);
+  c.army.loyalty = Math.min(100, c.army.loyalty + 5);
+  c.opposition = (c.opposition ?? 0) + 60;
+  c.massacre = (c.massacre ?? 0) + 15;
+  c.regime = { kind: 'decree', since: s.week, before: c.regime?.before ?? null, patron: c.regime?.patron ?? null };
+  for (const o of Object.values(s.countries)) if (o.gov === 'democracy' && o.id !== c.id) addRel(s, o.id, c.id, -20);
+  news(s, `${c.name}'s leader suspends elections and assumes emergency powers, with the army's backing.`, 'unrest', [c.id]);
+  return null;
+}
+
 export function purge(s, c) {
   initCoups(c);
   if (purged(s, c)) return `The officer corps was purged recently. No one will move against us until week ${c.army.purgedUntil}.`;
@@ -143,20 +200,73 @@ export function purge(s, c) {
   c.army.loyalty = Math.min(100, c.army.loyalty + 15);
   endPlot(c);
   risk(s, c);
-  for (const a of Object.values(s.armies)) if (a.owner === c.id) a.org = Math.max(10, a.org - 25);
+  // Experienced commanders go to prison with the plotters: some armies get less able generals
+  for (const a of Object.values(s.armies)) {
+    if (a.owner !== c.id) continue;
+    a.org = Math.max(10, a.org - 25);
+    if (chance(s, 0.5)) a.gen.skill = Math.max(1, a.gen.skill - 1);
+  }
   if (c.gov === 'democracy') c.approval = Math.max(0, c.approval - 3);
   news(s, `${c.name} arrests dozens of senior officers accused of plotting a coup.`, 'unrest', [c.id]);
   return null;
 }
 
+function coupOdds(s, c, backer) {
+  return clamp(0.35 + (55 - c.army.loyalty) / 100 + (35 - c.approval) / 150 - (SECURITY_POWER[c.security] ?? 0) - (c.army.guard ? 0.18 : 0) + (backer ? 0.15 : 0), 0.06, 0.85);
+}
+
+// The coup begins. A leader gets one chance to answer it; the computer fights it out.
 function attempt(s, c) {
   const k = c.coup;
   const backer = c.backing && c.backing.until > s.week ? c.backing.by : null;
-  const odds = clamp(0.35 + (55 - c.army.loyalty) / 100 + (35 - c.approval) / 150 - (SECURITY_POWER[c.security] ?? 0) + (backer ? 0.15 : 0), 0.08, 0.85);
   k.plot = null;
+  if (c.human) {
+    k.underway = { since: s.week, backer };
+    const odds = Math.round(coupOdds(s, c, backer) * 100);
+    news(s, `Tanks in the streets: a coup attempt is under way in ${c.name}.`, 'unrest', [c.id]);
+    ask(s, c, 'coup', {
+      title: 'Coup: tanks in the streets',
+      text: `Army units have surrounded the government buildings and seized the state broadcaster. The plotters ${odds >= 50 ? 'look likely to win' : 'may yet fail'} (about ${odds}% if we fight). Decide now.`,
+      options: [
+        { id: 'fight', label: 'Call out the loyal units', note: `Security forces${c.army.guard ? ' and the presidential guard' : ''} fight the plotters. Blood in the streets; if we win, the plotters hang.`, tone: 'warn' },
+        { id: 'people', label: 'Appeal to the people', note: `Go on air and call the nation into the streets to stop the tanks. Works for a popular leader (approval ${Math.round(c.approval)}%).` },
+        { id: 'deal', label: 'Cut a deal with the generals', note: 'We stay in office, but the generals share power for a year: a bigger defence budget, a tighter grip on the press, and less standing abroad.' },
+        { id: 'flee', label: 'Give in', note: 'Avoid bloodshed. The generals take over and we lead the military council they set up.', tone: 'danger' },
+      ],
+      weeks: 1,
+    });
+    return null;
+  }
+  return resolveCoup(s, c, 'fight', backer);
+}
+
+function resolveCoup(s, c, how, backer) {
+  const k = c.coup;
+  k.underway = null;
+  if (how === 'deal') {
+    c.powerSharing = s.week + 52;
+    c.spend.defence = Math.round((c.spend.defence + 2) * 10) / 10;
+    c.army.loyalty = Math.max(c.army.loyalty, 75);
+    if (c.press === 'free') c.press = 'limited';
+    c.rep = Math.max(0, c.rep - 6);
+    news(s, `${c.name}'s government survives a coup by agreeing to share power with the generals.`, 'unrest', [c.id]);
+    alert(s, c.id, 'We stay in office, but the generals now share power for a year: defence spending is up by 2% of GDP and the press is reined in.', 'warn');
+    return false;
+  }
+  if (how === 'flee') {
+    regimeChange(s, c, { kind: 'junta', patron: backer });
+    return true;
+  }
+  let odds = coupOdds(s, c, backer);
+  if (how === 'people') odds = clamp(odds + (45 - c.approval) / 90 + (c.gov === 'democracy' ? -0.08 : 0.08), 0.04, 0.92);
+  if (how === 'fight') c.stability = Math.max(0, c.stability - 5);
   if (chance(s, odds)) {
     regimeChange(s, c, { kind: 'junta', patron: backer });
     return true;
+  }
+  if (how === 'people') {
+    c.approval = Math.min(100, c.approval + 8);
+    news(s, `Crowds pour into the streets of ${c.name} and stop the tanks: the coup collapses.`, 'unrest', [c.id]);
   }
   c.army.loyalty = Math.min(100, c.army.loyalty + 12);
   c.stability = Math.max(0, c.stability - 6);
@@ -349,6 +459,8 @@ export function coupOwn(s, c) {
   return {
     loyalty: Math.round(c.army.loyalty), risk: c.coup.risk, why: c.coup.why, plot: c.coup.plot?.known ? { since: c.coup.plot.since } : null,
     paidUntil: c.army.paidUntil ?? null, purgedUntil: c.army.purgedUntil ?? null, regime: c.regime ?? null,
+    guard: Boolean(c.army.guard), guardCost: guardCost(c), rotateAt: c.cooldown?.rotate ?? null, powerSharing: (c.powerSharing ?? -1) > 0 ? c.powerSharing : null,
+    underway: Boolean(c.coup.underway), neglect: Math.round(c.neglect ?? 0),
     backing: Object.values(s.countries).filter((t) => t.backing?.by === c.id && t.backing.until > s.week).map((t) => ({ target: t.id, until: t.backing.until, power: Math.round(t.backing.power) })),
   };
 }

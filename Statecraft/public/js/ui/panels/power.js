@@ -9,6 +9,7 @@ const REGIME = {
   revolution: ['Revolutionary government', 'The people brought down the old regime. Elections are coming.'],
   installed: ['Installed government', 'A foreign power put this government in place after a war.'],
   civilian: ['Civilian rule restored', 'The generals handed power back.'],
+  decree: ['Rule by decree', 'Elections are suspended under emergency powers, with the army’s backing.'],
 };
 
 export function power(ctx) {
@@ -20,6 +21,9 @@ export function power(ctx) {
   const reg = p.regime ? REGIME[p.regime.kind] : null;
   return h('div',
     p.plot ? h('div.warning.bad', { style: { marginTop: '10px' } }, h('b', 'A plot. '), `Our security services say officers have been plotting since week ${p.plot.since}. Buy them off or purge them, before they move.`) : null,
+    p.underway ? h('div.warning.bad', { style: { marginTop: '10px' } }, h('b', 'Coup under way. '), 'Tanks are in the streets. Answer it in the Cabinet before the plotters win by default.') : null,
+    (p.neglect ?? 0) >= 6 ? h('div.warning.bad', { style: { marginTop: '10px' } }, h('b', 'Uprisings unanswered. '), 'Rebels go unchecked: protests are spreading and the officers are losing faith. Hold the provinces with an army, crush the uprisings or offer an amnesty (click the province).') : null,
+    p.powerSharing ? h('div.warning.warn', { style: { marginTop: '10px' } }, h('b', 'The generals share power '), `until week ${p.powerSharing}.`) : null,
     reg ? h('div.warning', { class: p.regime.kind === 'junta' ? 'warn' : 'info', style: { marginTop: '10px' } }, h('b', `${reg[0]}. `), reg[1],
       p.regime.patron ? ` It owes its place to ${nationName(s, p.regime.patron)}.` : '') : null,
     h('div.kpis', { style: { marginTop: '10px' } },
@@ -36,6 +40,9 @@ export function power(ctx) {
       h('div.actions',
         h('button.btn.small.primary', { disabled: (p.paidUntil ?? -1) > s.week, onclick: () => pay(ctx) }, (p.paidUntil ?? -1) > s.week ? `Paid until week ${p.paidUntil}` : `Pay the generals (${money(me.gdp * 0.004)})…`),
         h('button.btn.small.warn', { disabled: (p.purgedUntil ?? -1) > s.week, onclick: () => purge(ctx) }, (p.purgedUntil ?? -1) > s.week ? `Purged: quiet until week ${p.purgedUntil}` : 'Purge the officer corps…'),
+        h('button.btn.small', { disabled: (p.rotateAt ?? -1) > s.week, title: 'Move commanders around so none builds a following: loyalty up a little, a plot may break up, armies lose a little organisation.', onclick: () => ctx.send({ type: 'rotateCommanders' }) }, (p.rotateAt ?? -1) > s.week ? `Reshuffled (again in ${p.rotateAt - s.week} wk)` : 'Rotate commanders'),
+        h('button.btn.small', { class: p.guard ? 'primary' : '', title: `Elite units picked for loyalty: a coup rarely succeeds against them, but the regular army resents it. ${money(p.guardCost)} a week.`, onclick: () => ctx.send({ type: 'coupGuard', on: !p.guard }) }, p.guard ? 'Presidential guard: on' : `Presidential guard (${money(p.guardCost)}/wk)`),
+        me.gov !== 'autocracy' ? h('button.btn.small.danger', { onclick: () => emergency(ctx) }, 'Assume emergency powers…') : null,
         p.regime?.kind === 'junta' ? h('button.btn.small', { onclick: () => civilian(ctx) }, 'Hand power back to civilians…') : null)),
     p.backing.length ? h('div.section', h('h3', 'Plotters we are funding'),
       h('div.list', p.backing.map((b) => h('div.item', h('div.item-head', flag(b.target), h('span.name', nationName(s, b.target)), h('span.muted.small', { style: { marginLeft: 'auto' } }, `until week ${b.until}`)),
@@ -52,6 +59,10 @@ async function purge(ctx) {
   if (await confirmBox('Purge the officer corps?', 'Arrest suspect officers and promote loyalists. No one will dare move for six months, but our armies lose a quarter of their organisation, and in a democracy it is unpopular.', { danger: true, ok: 'Purge' })) {
     if (!(await ctx.send({ type: 'purge' }))) ctx.hint('The officer corps has been purged. No plots for six months.', 'good', 4000);
   }
+}
+
+async function emergency(ctx) {
+  if (await confirmBox('Assume emergency powers?', 'Suspend elections and rule by decree with the army’s backing (it needs army loyalty of 65). The press comes under state control. Democracies turn on us, our standing falls sharply, and the opposition takes to the streets.', { danger: true, ok: 'Suspend elections' })) ctx.send({ type: 'emergencyPowers' });
 }
 
 async function civilian(ctx) {

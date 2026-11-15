@@ -1,5 +1,6 @@
 // The treasury and the economy: budget, central bank, resources, projects and trade.
 
+import { barrels } from './military.js';
 import { h, flag, money, pct, nationName, regionName, spark, bar, RES_COLORS, RES_LETTERS } from '../dom.js';
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { modal, numberField, confirmBox } from '../dialogs.js';
@@ -153,15 +154,17 @@ function resources(ctx) {
     const weeks = dem > 0 ? (me.stock[r] ?? 0) / dem : null;
     const short = me.short[r] ?? 0;
     const price = s.market.price[r];
+    const held = r === 'oil' ? barrels(me.stock[r]) : `${fmt(me.stock[r] ?? 0)}`;
     return h('tr.clickable', { onclick: () => ctx.mapMode('resources', r), title: `Show ${info.name.toLowerCase()} on the map` },
       h('td', h('span.res-dot', { style: { background: RES_COLORS[r], display: 'inline-grid', width: '16px', height: '16px', marginRight: '6px', verticalAlign: 'middle' } }, RES_LETTERS[r]), info.name, h('div.tiny.faint', info.unit)),
-      h('td.num', fmt(prod)), h('td.num', fmt(dem)),
+      h('td.num', fmt(prod)), h('td.num', fmt(dem)), h('td.num', held),
       h('td.num', { class: short > 0.02 ? 'bad' : weeks != null && weeks < 4 ? 'warn' : '' }, short > 0.02 ? `short ${Math.round(short * 100)}%` : weeks == null ? '—' : `${weeks.toFixed(0)} wk`),
       h('td.num', { class: price > 1.3 ? 'bad' : price < 0.8 ? 'good' : '' }, `${Math.round(price * 100)}`));
   });
   return h('div',
-    h('p.muted.small', 'Yearly rates. Reserves are counted in weeks of demand. Prices are an index (2025 = 100). Click a row to see where the resource is on the map.'),
-    h('table.tbl', { style: { marginTop: '10px' } }, h('thead', h('tr', h('th', 'Resource'), h('th.num', 'Output'), h('th.num', 'Need'), h('th.num', 'Reserves'), h('th.num', 'Price'))), h('tbody', rows)),
+    h('p.muted.small', 'Output and need are rates (oil in millions of barrels a day). Stock is what we hold (oil in barrels); it lasts as many weeks as shown at the current rate of use. Prices are an index (2025 = 100). Click a row to see where the resource is on the map.'),
+    warFuel(me),
+    h('table.tbl', { style: { marginTop: '10px' } }, h('thead', h('tr', h('th', 'Resource'), h('th.num', 'Output'), h('th.num', 'Need'), h('th.num', 'Stock'), h('th.num', 'Lasts'), h('th.num', 'Price'))), h('tbody', rows)),
     h('div.section',
       h('h3', 'Buy or sell'),
       h('p.muted.small', 'Buy from the country of your choice, or sell your surplus, in the Market. Cargoes travel by sea or land and can be stopped on the way.'),
@@ -170,6 +173,23 @@ function resources(ctx) {
       h('h3', 'World prices (two years)'),
       h('div.list', ['oil', 'gas', 'food', 'chip', 'rare'].map((r) => h('div', h('div.row.between.small', h('span', RESOURCE_INFO[r].name), h('span.mono', `${Math.round(s.market.price[r] * 100)}`)), spark(s.market.history[r], RES_COLORS[r]))))),
   );
+}
+
+// What the armed forces burn in oil each week, and how long the stock lasts at that rate
+function warFuel(me) {
+  const f = me.fuel;
+  if (!f) return null;
+  const cut = Math.max(me.fuelShort ?? 0, (me.short?.oil ?? 0) * 0.4);
+  const stock = me.stock?.oil ?? 0;
+  const net = (me.prod?.oil ?? 0) - (me.demand?.oil ?? 0);
+  const parts = [['armies in the field', f.armies], ['garrisons', f.garrisons], ['air campaigns', f.air], ['fleets', f.navy]].filter(([, v]) => v > 0.0005);
+  return h('div.item', { style: { marginTop: '10px' }, class: cut >= 0.25 ? 'urgent' : '' },
+    h('div.item-head', h('span.name', '⛽ Oil for the war machine'), h('span.mono', `${barrels(f.total)} a week`)),
+    h('div.meta', parts.map(([k, v]) => `${k} ${barrels(v)}`).join(' · ')),
+    h('div.meta', net >= 0
+      ? `We pump more oil than we use (${barrels(net)} a week to spare). Stock: ${barrels(stock)}.`
+      : `We use ${barrels(-net)} a week more than we pump: the difference has to be bought abroad. Stock: ${barrels(stock)}, about ${Math.max(0, Math.round(stock / Math.max(1e-6, -net)))} weeks if imports stop.`),
+    cut >= 0.05 ? h('div.warning.bad', { style: { marginTop: '6px' } }, `Fuel crisis: our forces are getting ${Math.round((1 - cut) * 100)}% of the oil they need. Tanks stall, aircraft are grounded, armies crawl. Buy oil in the Market, take oil fields, or halt operations.`) : null);
 }
 
 function fmt(v) {

@@ -290,10 +290,10 @@ export function fmtQty(r, qty) {
 
 /* ---------- Shipments ---------- */
 
-export function ship(s, { seller, buyer, res, qty, cost, covert = false, route }) {
+export function ship(s, { seller, buyer, res, qty, cost, covert = false, secret = false, deal = null, payment = 0, route }) {
   s.shipments ??= [];
   const sh = {
-    id: nextId(s, 'sh'), seller, buyer, res, qty, cost, covert, mode: route.mode, straits: route.straits, transit: route.transit,
+    id: nextId(s, 'sh'), seller, buyer, res, qty, cost, covert, secret, deal, payment, mode: route.mode, straits: route.straits, transit: route.transit,
     left: route.weeks, total: route.weeks, since: s.week,
   };
   s.shipments.push(sh);
@@ -322,21 +322,22 @@ function shipmentReach(s, c, sh) {
   return points.some((p) => nearestCoastKm(s, c.id, p) <= seaReach(c));
 }
 
-// Why this leader can't stop a cargo, or null if they can try
+// Why this leader can't stop a cargo, or null if they can try. At sea it takes a fleet sent to meet it.
 export function interceptProblem(s, c, sh) {
-  if (!sh) return 'That shipment has arrived or been stopped.';
+  if (!sh || sh.done) return 'That shipment has arrived or been stopped.';
   if (sh.seller === c.id || sh.buyer === c.id) return 'That is your own trade.';
   if (allied(s, c.id, sh.buyer) || allied(s, c.id, sh.seller)) return 'You can\'t seize an ally\'s cargo.';
-  if (sh.mode === 'sea' && c.ships < 3) return 'You need at least 3 warships.';
-  if (!shipmentReach(s, c, sh)) return sh.mode === 'land' ? 'It doesn\'t cross your territory.' : 'Your navy can\'t reach its route. Carriers and more warships extend your reach.';
+  if (sh.mode === 'sea' && !Object.values(s.fleets ?? {}).some((f) => f.owner === c.id)) return 'You need a fleet at sea to go after it.';
+  if (sh.mode === 'land' && !shipmentReach(s, c, sh)) return 'It doesn\'t cross your territory.';
   return null;
 }
 
-export function orderIntercept(s, c, { id, how }) {
+export function orderIntercept(s, c, { id, how, fleet }) {
   const sh = (s.shipments ?? []).find((x) => x.id === id);
   const why = interceptProblem(s, c, sh);
   if (why) return why;
   if (!['seize', 'sink'].includes(how)) how = 'seize';
+  if (sh.mode === 'sea') return 'At sea, send a fleet after it.';
   sh.hunted ??= [];
   if (sh.hunted.some((x) => x.by === c.id)) return 'Your navy is already hunting it.';
   sh.hunted.push({ by: c.id, how });
@@ -348,7 +349,7 @@ function navalStrength(c) {
 }
 
 // Escorts: the buyer's and seller's patrols at the straits on the route, plus a share of their navies
-function escortPower(s, sh) {
+export function escortPower(s, sh) {
   let p = 0;
   for (const id of [sh.buyer, sh.seller]) {
     const c = s.countries[id];
@@ -363,10 +364,12 @@ function escortPower(s, sh) {
   return p;
 }
 
+export function stopShipment(s, sh, by, how, where) { return stop(s, sh, by, how, where); }
+
 function stop(s, sh, by, how, where) {
   const what = RESOURCE_INFO[sh.res].name.toLowerCase();
   const buyer = s.countries[sh.buyer];
-  if (buyer) buyer.treasury += sh.cost; // the escrow comes back
+  if (buyer && !sh.deal) buyer.treasury += sh.cost; // the escrow comes back
   const seized = how === 'seize';
   const taker = nation(s, by);
   if (seized && taker) taker.stock[sh.res] = (taker.stock[sh.res] ?? 0) + sh.qty;
@@ -405,7 +408,7 @@ export function setToll(s, c, key, rate) {
   if (!TOLLS.includes(rate)) return 'Pick a toll.';
   const st = s.chokepoints[key];
   const before = st.toll?.rate ?? 0;
-  st.toll = rate ? { by: c.id, rate } : null;
+  st.toll = rate ? { by: c.id, rate, since: st.toll?.by === c.id ? st.toll.since ?? s.week : s.week } : null;
   if (rate > before) {
     news(s, `${c.name} demands a ${rate}% toll from every ship passing through the ${cp.name}.`, 'trade', [c.id]);
     c.rep = Math.max(0, c.rep - rate / 5);
@@ -453,7 +456,7 @@ export function tradeTick(s) {
     // Orders to hunt it
     for (const h of sh.hunted ?? []) {
       const c = s.countries[h.by];
-      if (!c || sh.done) continue;
+      if (!c || sh.done || sh.mode !== 'land') continue;
       if (interceptProblem(s, c, sh)) continue;
       const mine = sh.mode === 'land' ? 10 : navalStrength(c) * 0.3;
       const p = sh.mode === 'land' ? 0.95 : clamp(mine / (mine + escortPower(s, sh) + 0.5), 0.15, 0.95);
@@ -471,15 +474,8 @@ export function tradeTick(s) {
         if ((sanctioning(s, t, sh.buyer) || sanctioning(s, t, sh.seller)) && chance(s, sh.covert ? 0.08 : 0.4)) { stop(s, sh, t, 'seize', 'at customs'); break; }
       }
     } else {
-      // Blockades of the buyer or the seller
-      for (const end of [sh.buyer, sh.seller]) {
-        if (sh.done) break;
-        for (const c of Object.values(s.countries)) {
-          const ships = c.blockades?.[end];
-          if (!ships || !atWar(s, c.id, end)) continue;
-          if (chance(s, 0.35 * Math.min(1, ships / 20) / sh.total)) { stop(s, sh, c.id, 'seize', `off the coast of ${nameOf(s, end)}`); break; }
-        }
-      }
+      // Blockading fleets and patrols meet the cargo where it actually is (shipping.js); the guns on a strait's
+      // shores are another matter
       for (const cp of sh.straits) {
         if (sh.done) break;
         const st = s.chokepoints[cp];
@@ -487,14 +483,6 @@ export function tradeTick(s) {
         if (st.policy) {
           const by = st.policy.by;
           if ((atWar(s, by, sh.buyer) || atWar(s, by, sh.seller)) && chance(s, 0.55 / sh.total)) { stop(s, sh, by, st.policy.kind, where(cp)); break; }
-        }
-        // Patrolling navies
-        for (const [owner, pt] of Object.entries(st.patrols)) {
-          if (pt.mode === 'escort' || owner === sh.buyer || owner === sh.seller) continue;
-          const target = [sh.buyer, sh.seller].some((x) => !allied(s, owner, x) && (pt.mode === 'all' || atWar(s, owner, x) || sanctioning(s, owner, x)));
-          if (!target) continue;
-          const mine = navalStrength({ ...s.countries[owner], ships: pt.ships, carriers: pt.carriers ?? 0 });
-          if (chance(s, clamp(mine / (mine + escortPower(s, sh) + 1), 0.1, 0.9) / sh.total * 1.6)) { stop(s, sh, owner, 'seize', where(cp)); break; }
         }
       }
       // Sanctions-busting cargoes can be exposed
@@ -528,6 +516,12 @@ function deliver(s, sh) {
     if (t) { t.treasury += fee; t.tollIncome = (t.tollIncome ?? 0) + fee; }
   }
   const seller = s.countries[sh.seller];
+  if (sh.deal) {
+    // Paid for on arrival, under the deal's terms
+    paid = sh.payment ?? 0;
+    const b = s.countries[sh.buyer];
+    if (b) b.treasury -= paid;
+  }
   if (seller) seller.treasury += paid;
   sh.done = true;
   if (s.countries[sh.buyer]?.human) alert(s, sh.buyer, `Delivered: ${fmtQty(sh.res, sh.qty)} of ${RESOURCE_INFO[sh.res].name.toLowerCase()} from ${nameOf(s, sh.seller)}.`, 'good');
@@ -535,6 +529,12 @@ function deliver(s, sh) {
 
 function straitsTick(s) {
   for (const [key, st] of Object.entries(s.chokepoints)) {
+    // A canal earns its holder dues in normal times; closing it forgoes them
+    const dues = CHOKEPOINTS[key].transit;
+    if (dues) {
+      const holder = s.countries[CHOKEPOINTS[key].regions.map((r) => s.regions[r]?.ctrl).find(Boolean)];
+      if (holder && !st.closedBy) holder.treasury += dues / 52;
+    }
     const holders = straitHolders(s, key);
     if (st.toll && !holders.includes(st.toll.by)) { news(s, `The toll on the ${CHOKEPOINTS[key].name} ends: ${nameOf(s, st.toll.by)} no longer holds its shores.`, 'trade'); st.toll = null; }
     if (st.policy && !holders.includes(st.policy.by)) st.policy = null;

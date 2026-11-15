@@ -10,7 +10,7 @@ import {
   clamp, rand, chance, pick, alive, atWar, allied, enemiesOf, rel, nameOf, nation, alliancesOf, treaty, addRel, news,
   sanctioning, warBetween, friendlyGround,
 } from './core.js';
-import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower, upkeep } from './economy.js';
+import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower, upkeep, lineProblem, hasLine, LINE_SETUP } from './economy.js';
 import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor } from './military.js';
 import { aiNavy } from './navy.js';
 import { aiPeoples } from './peoples.js';
@@ -19,7 +19,7 @@ import { aiEnergy } from './energy.js';
 import { aiClimate } from './climate.js';
 import { aiSpace } from './space.js';
 import { respond, propose, makePeace, setTariff, setChokepoint, declareWar, createAlliance } from './diplomacy.js';
-import { CONSCRIPTION, setConscription, handleProtest, handleUprising, neighbours } from './government.js';
+import { CONSCRIPTION, setConscription, handleProtest, handleUprising, neighbours, makeWarCase } from './government.js';
 import { plant, initSpies } from './spies.js';
 import { startResearch, projectCost, maxResearch } from './science.js';
 import { setStraitPolicy } from './trade.js';
@@ -125,11 +125,14 @@ function economy(s, c) {
   const roomToGrow = upkeepShare < c.spend.defence * 0.8;
   if (c.milFunds > c.gdp * 0.004 && c.queue.length < maxOrders(c) && (roomToGrow || atWar_)) {
     const options = (atWar_ ? ['tanks', 'tanks', 'troops', 'aircraft', 'missiles'] : ['tanks', 'aircraft', 'missiles', 'ships', 'troops'])
-      .filter((k) => k !== 'troops' || BUILD.troops.batch <= Math.max(5, c.troops * 0.2));
+      .filter((k) => k !== 'troops' || BUILD.troops.batch <= Math.max(5, c.troops * 0.2))
+      // Only what its factories can make (or can be tooled up to make)
+      .filter((k) => !lineProblem(c, k, Object.values(s.regions).some((r) => r.ctrl === c.id && GEO[r.id]?.coast)));
     const kind = pick(s, options);
-    const cost = BUILD[kind].cost * costFactor(c);
+    const cost = kind ? BUILD[kind].cost * costFactor(c) * (hasLine(c, kind) ? 1 : LINE_SETUP) : Infinity;
     if (c.milFunds >= cost) {
       c.milFunds -= cost;
+      if (!hasLine(c, kind)) c.lines = { ...(c.lines ?? {}), [kind]: true };
       c.queue.push({ id: `q${s.nextId++}`, kind, qty: BUILD[kind].batch, left: BUILD[kind].weeks, total: BUILD[kind].weeks });
     }
   }
@@ -176,7 +179,8 @@ function judge(s, c, p) {
       const dislike = al.members.some((m) => rel(s, c.id, m) < -20 || atWar(s, c.id, m));
       // Countries don't sign up to every pact going
       if (al.kind === 'military' && alliancesOf(s, c.id, 'military').length >= 2) return false;
-      return !dislike && r >= (al.kind === 'military' ? 45 : 20);
+      // Neighbours band together in their own region's trade bloc from neutral terms; anything else needs friendship
+      return !dislike && r >= (al.kind === 'military' ? 45 : al.name === c.bloc ? 0 : 20);
     }
     case 'fta': return r >= 5 && !sanctioning(s, c.id, p.from) && !sanctioning(s, p.from, c.id) && !(c.minor && s.treaties.filter((t) => t.kind === 'fta' && (t.a === c.id || t.b === c.id)).length >= 4);
     case 'nap': return r >= -30;
@@ -423,16 +427,45 @@ function homeFront(s, c) {
 
 const AGGRESSIVE = { autocracy: 1, hybrid: 0.55, democracy: 0.1 };
 
+// The strait this country most needs that someone has shut (or tolls at 25% or more) for two months: the
+// closer, if we can beat its navy
+function straitGrievance(s, c) {
+  for (const [key, st] of Object.entries(s.chokepoints)) {
+    const cp = CHOKEPOINTS[key];
+    if (!cp.users?.includes(c.id)) continue;
+    const closer = st.closedBy ?? (st.toll && st.toll.rate >= 25 ? st.toll.by : null);
+    if (!closer || closer === c.id || allied(s, closer, c.id) || atWar(s, closer, c.id) || !alive(s, closer)) continue;
+    if (s.week - (st.closedBy ? st.closedAt ?? 0 : st.toll?.since ?? 0) < 8) continue;
+    const them = s.countries[closer];
+    if (them && navalPower(c, c.ships, c.carriers) < navalPower(them, them.ships, them.carriers) * 1.2) continue;
+    return closer;
+  }
+  return null;
+}
+
 function ambition(s, c, gar) {
   if (s.week < 20 || c.stability < 40 || c.civilWar) return;
+  // A strait we live on has been shut: open it by force
+  if (!c.ai.plan && !c.minor) {
+    const closer = straitGrievance(s, c);
+    if (closer && chance(s, 0.15)) {
+      c.ai.plan = closer;
+      c.ai.planAt = s.week;
+      c.ai.planWhy = 'strait';
+      makeWarCase(s, c, closer);
+      news(s, `${c.name} warns it will use force to reopen the shipping lanes ${nameOf(s, closer)} has shut.`, 'war', [c.id, closer]);
+      return;
+    }
+  }
   const quota = c.minor ? (s.smallWars ??= []) : (s.aiWars ??= []);
   const plan = c.ai.plan;
   if (plan) {
     // A plan made weeks ago: strike if it still makes sense, else shelve it
-    const ok = targetScore(s, c, plan) > 0;
+    const ok = c.ai.planWhy === 'strait' || targetScore(s, c, plan) > 0;
     if (!ok) { c.ai.plan = null; return; }
     if (s.week - c.ai.planAt >= 6) {
       c.ai.plan = null;
+      c.ai.planWhy = null;
       if (quota.filter((w) => w > s.week - 52).length >= 2) return;
       if (!declareWar(s, c, plan, 'conquest')) {
         quota.push(s.week);
@@ -461,6 +494,8 @@ function ambition(s, c, gar) {
   if (best && chance(s, Math.min(0.5, 0.06 * aggression * best[1]))) {
     c.ai.plan = best[0];
     c.ai.planAt = s.week;
+    // The case for the war is prepared in secret while the troops gather
+    makeWarCase(s, c, best[0]);
   }
 }
 

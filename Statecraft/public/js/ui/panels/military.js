@@ -2,10 +2,11 @@
 // campaigns, and wars.
 
 import { h, flag, money, nationName, regionName, troops, bar, num } from '../dom.js';
-import { BUILD } from '../../engine/economy.js';
-import { TRAITS, AGGRESSION, MIN_ARMY, draftCost } from '../../engine/military.js';
+import { BUILD, lineProblem, hasLine, LINE_SETUP } from '../../engine/economy.js';
+import { TRAITS, AGGRESSION, MIN_ARMY, draftCost, buildupCost, buildupWeeks, LANDING_RANGE } from '../../engine/military.js';
+import { BARRELS } from '../../engine/core.js';
 import { CAPITALS } from '../map.js';
-import { GEO } from '../../engine/data/geo.js';
+import { GEO, ORDER } from '../../engine/data/geo.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { peaceDialog } from './diplomacy.js';
 import { CONSCRIPTION } from '../../engine/government.js';
@@ -159,12 +160,45 @@ export function armyCard(ctx, a, compact = false) {
     a.speed != null && !a.sea ? h('div.meta', { title: 'Over open plains. Faster with Land warfare and Industry research, more tanks per thousand men, enough oil, and factories that keep up with the war. Hills, forests and mountains slow it; good roads speed it up.' }, `Marches about ${a.speed.toLocaleString('en-US')} km a week`) : null,
     h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span.muted', 'Organisation'), h('div.grow', bar(a.org, 100, a.org < 30 ? 'bad' : a.org < 60 ? 'warn' : 'good')), h('span.mono', `${a.org}%`)),
     h('div.meta', { style: { color: 'var(--ink)' } }, a.status),
+    a.fuel ? h('div.meta', { title: 'Oil burned each week. Fighting burns the most (tanks, trucks, generators); holding a province very little. Without the oil, tanks stall and the army slows to a crawl.' },
+      `⛽ ${barrels(a.fuel.now)} of oil a week now`, h('span.faint', ` · holding ${barrels(a.fuel.hold)}, marching ${barrels(a.fuel.march)}, fighting ${barrels(a.fuel.fight)}`)) : null,
+    a.buildup ? h('div.meta', { class: a.buildup.ready <= s.week ? 'good' : '' }, a.buildup.ready <= s.week
+      ? `⚓ Landing force ready at ${regionName(a.buildup.region)}: it can cross to any coast within ${LANDING_RANGE.toLocaleString('en')} km, even without command of the sea.`
+      : `⚓ Building up for a landing: ready in week ${a.buildup.ready}.`) : null,
+    a.sea ? null : h('div.row.gap.small', { style: { marginTop: '6px' }, onclick: (e) => e.stopPropagation() },
+      h('label.row.gap', { style: { cursor: 'pointer', alignItems: 'center' }, title: 'The army takes one enemy province after another, nearest first, until no country at war with us holds ground within reach, or it is destroyed.' },
+        h('input', { type: 'checkbox', checked: Boolean(a.auto), onchange: (e) => ctx.send({ type: 'armyAuto', id: a.id, on: e.target.checked }) }),
+        h('span', h('b', 'Automatic capture'), h('span.muted', a.auto ? ': on. It will keep attacking.' : ': off')))),
     a.sea ? null : h('div.actions', { onclick: (e) => e.stopPropagation() },
       h('button.btn.small.primary', { onclick: () => ctx.selectArmy(a.id, true) }, 'Send…'),
+      canPrepareLanding(ctx, a) ? h('button.btn.small.ghost', { onclick: () => prepareLanding(ctx, a) }, 'Prepare a landing…') : null,
       h('button.btn.small.ghost', { onclick: () => reinforce(ctx, a) }, 'Reinforce'),
       others.length ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'armyMerge', ids: [a.id, ...others.map((o) => o.id)] }) }, 'Merge here') : null,
       h('button.btn.small.ghost', { onclick: () => rename(ctx, a) }, 'Rename'),
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Disband ${a.name}?`, 'Its troops return to the home garrisons.')) ctx.send({ type: 'armyDisband', id: a.id }); } }, 'Disband')));
+}
+
+// Oil in millions of barrels (the market counts it in millions of barrels a day; a week of that is 7 million)
+export function barrels(q) {
+  const m = (q ?? 0) * BARRELS;
+  return m >= 10 ? `${Math.round(m)}M bbl` : m >= 0.1 ? `${m.toFixed(1)}M bbl` : `${Math.round(m * 1000)}K bbl`;
+}
+
+function canPrepareLanding(ctx, a) {
+  const s = ctx.state;
+  return !a.buildup && GEO[a.region]?.coast && s.regions[ctx.regionIndex[a.region]]?.[1] === s.me;
+}
+
+async function prepareLanding(ctx, a) {
+  const me = ctx.state.you;
+  const cost = buildupCost(me, a);
+  const weeks = buildupWeeks(me);
+  if (await confirmBox(`Prepare ${a.name} for a landing?`, h('div.stack',
+    h('p', `Landing craft, transports, beach engineers and stores for ${troops(a.troops)} troops: ${money(cost)} from defence funds, ready in ${weeks} weeks.`),
+    h('p.muted.small', `Once ready, the army can land on any coast within ${LANDING_RANGE.toLocaleString('en')} km, even if we don't control the sea (enemy warships on the way will sink some transports), and it hits the beaches far harder than a hasty landing. A build-up this size can't be hidden: any country with spies inside ours, or spy satellites, will see it coming.`)), { ok: 'Start the build-up' })) {
+    const err = await ctx.send({ type: 'armyLanding', id: a.id });
+    if (!err) ctx.toast(`${a.name} is building up for a landing: ready in ${weeks} weeks.`, 'info');
+  }
 }
 
 // Provinces we hold, front lines first (then the capital), for choosing where an army forms
@@ -303,10 +337,15 @@ function build(ctx) {
   return h('div.section', h('h3', 'Production'),
     h('p.muted.small', `Paid from defence funds (${money(me.milFunds)}), then reserves (${money(me.treasury)}). Your industry can run ${limit} orders at once. Shortages of the listed resources slow production. New weapons are built in secret: only spies inside your government see them.`),
     h('div.list', { style: { marginTop: '10px' } }, Object.entries(BUILD).map(([kind, b]) => {
-      const locked = (kind === 'nukes' && me.nukes <= 0) || (b.tech && me.tech[b.tech[0]] < b.tech[1]);
+      const coast = ORDER.some((id) => GEO[id]?.coast && s.regions[ctx.regionIndex[id]]?.[1] === s.me);
+      const noLine = lineProblem(me, kind, coast);
+      const locked = (kind === 'nukes' && me.nukes <= 0) || (b.tech && me.tech[b.tech[0]] < b.tech[1]) || Boolean(noLine);
+      const tooling = !noLine && !hasLine(me, kind);
       return h('div.item',
         h('div.item-head', h('span.name', b.name), h('span.mono.small', money(b.cost * cf))),
-        h('div.meta', `${b.batch} ${b.unit} per order · ${b.weeks} weeks${b.needs.length ? ` · needs ${b.needs.join(', ')}` : ''}${locked ? (kind === 'nukes' ? ' · needs a nuclear weapon first' : ` · needs ${b.tech[0]} level ${b.tech[1]}`) : ''}`),
+        h('div.meta', `${b.batch} ${b.unit} per order · ${b.weeks} weeks${b.needs.length ? ` · needs ${b.needs.join(', ')}` : ''}${(kind === 'nukes' && me.nukes <= 0) ? ' · needs a nuclear weapon first' : b.tech && me.tech[b.tech[0]] < b.tech[1] ? ` · needs ${b.tech[0]} level ${b.tech[1]}` : ''}`),
+        noLine ? h('div.meta.warn', noLine) : null,
+        tooling ? h('div.meta', `We have never built these: the first order sets up the factories and costs ${LINE_SETUP} times as much (${money(b.cost * cf * LINE_SETUP)}).`) : null,
         h('div.actions', [1, 5].map((n) => h('button.btn.small', { disabled: locked, onclick: () => ctx.send({ type: 'build', kind, batches: n }) }, `Order ${n}`))));
     })),
     h('div.section', h('h3', `Queue (${me.queue.length}/${limit})`),

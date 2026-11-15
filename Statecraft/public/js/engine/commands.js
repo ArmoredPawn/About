@@ -2,12 +2,13 @@
 // couldn't. A command returns null when it worked, or a message saying why not.
 
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
+import { GEO } from './data/geo.js';
 import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, news, alert, alive, nameOf, money, nextId, atWar, friendlyGround } from './core.js';
-import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor } from './economy.js';
+import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, lineProblem, hasLine, LINE_SETUP } from './economy.js';
 import {
-  createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike,
+  createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setAuto, prepareLanding,
   setAirCampaign, settleMinor, checkOrder,
 } from './military.js';
 import { formFleet, fleetOrder, reinforceFleet, mergeFleets, disbandFleet, renameFleet, recallFleets } from './navy.js';
@@ -22,14 +23,15 @@ import {
 } from './diplomacy.js';
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
-import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy } from './trade.js';
+import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, interceptProblem } from './trade.js';
+import { huntCargo } from './shipping.js';
 import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
 import { decide } from './decisions.js';
 import { intervene, capitalControls, requestImf } from './finance.js';
 import { setPandemicPolicy, fundVaccine, sendFamineAid } from './crises.js';
-import { payGenerals, purge, civilianRule, backCoup } from './coups.js';
+import { payGenerals, purge, civilianRule, backCoup, rotateCommanders, setGuard, emergencyPowers } from './coups.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 export const SPEND_KEYS = ['defence', 'infra', 'edu', 'health', 'research', 'welfare'];
@@ -44,8 +46,16 @@ export function runCommand(s, cid, cmd) {
   if (!alive(s, cid)) return 'Your government is in exile.';
   const handler = HANDLERS[cmd.type];
   if (!handler) return 'Unknown command.';
+  // A blank or half-typed number box arrives as NaN: one of those in the books turns every figure to NaN
+  if (!finiteThroughout(cmd)) return 'Enter a valid number.';
   const result = handler(s, c, cmd);
   return result ?? null;
+}
+
+function finiteThroughout(v, depth = 0) {
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (!v || typeof v !== 'object' || depth > 6) return true;
+  return Object.values(v).every((x) => finiteThroughout(x, depth + 1));
 }
 
 const HANDLERS = {
@@ -106,6 +116,7 @@ const HANDLERS = {
     const reg = s.regions[region];
     if (!reg || reg.owner !== c.id || reg.ctrl !== c.id) return 'You can only develop provinces you own and hold.';
     const r = reg.res[res];
+    if ((reg.fallout?.until ?? -1) > s.week) return `${regionName(region)} is contaminated by fallout until week ${reg.fallout.until}. Nothing can be built there.`;
     if (!r || r[1] <= r[0]) return 'There is nothing more to develop there.';
     if (c.projects.some((p) => p.region === region && p.res === res)) return 'That project is already under way.';
     if (c.projects.length >= maxProjects(c)) return `You can run ${maxProjects(c)} projects at once.`;
@@ -119,6 +130,7 @@ const HANDLERS = {
   infra(s, c, { region }) {
     const reg = s.regions[region];
     if (!reg || reg.owner !== c.id || reg.ctrl !== c.id) return 'You can only build in provinces you own and hold.';
+    if ((reg.fallout?.until ?? -1) > s.week) return `${regionName(region)} is contaminated by fallout until week ${reg.fallout.until}.`;
     if (reg.infra >= 10) return 'Infrastructure there is already at its best.';
     if (c.projects.some((p) => p.region === region && p.kind === 'infra')) return 'Construction is already under way there.';
     if (c.projects.length >= maxProjects(c)) return `You can run ${maxProjects(c)} projects at once.`;
@@ -132,6 +144,7 @@ const HANDLERS = {
   fortify(s, c, { region }) {
     const reg = s.regions[region];
     if (!reg || reg.ctrl !== c.id) return 'You can only fortify provinces you hold.';
+    if ((reg.fallout?.until ?? -1) > s.week) return `${regionName(region)} is contaminated by fallout until week ${reg.fallout.until}.`;
     if (reg.fort >= 5) return 'Those defences are as strong as they get.';
     if (c.projects.some((p) => p.region === region && p.kind === 'fort')) return 'Work is already under way there.';
     if (c.projects.length >= maxProjects(c)) return `You can run ${maxProjects(c)} projects at once.`;
@@ -216,10 +229,19 @@ const HANDLERS = {
     if (!(batches >= 1 && batches <= 20)) return 'Order 1 to 20 batches.';
     if (b.tech && c.tech[b.tech[0]] < b.tech[1]) return `Carriers need ${TECH_FIELDS[b.tech[0]].name} level ${b.tech[1]}.`;
     if (kind === 'nukes' && c.nukes <= 0) return 'You need a working nuclear weapon first: start a weapons programme.';
+    const coast = Object.values(s.regions).some((r) => r.ctrl === c.id && GEO[r.id]?.coast);
+    const noLine = lineProblem(c, kind, coast);
+    if (noLine) return noLine;
     if (c.queue.length + batches > maxOrders(c)) return `Your industry can handle ${maxOrders(c)} orders at once (${c.queue.length} running).`;
-    const cost = b.cost * costFactor(c) * batches;
+    // A brand-new production line: the first batch pays for the tooling
+    const tooling = hasLine(c, kind) ? 0 : b.cost * costFactor(c) * (LINE_SETUP - 1);
+    const cost = b.cost * costFactor(c) * batches + tooling;
     if (cost > c.milFunds + c.treasury) return `That costs ${money(cost)}; you have ${money(c.milFunds)} in defence funds and ${money(c.treasury)} in reserves.`;
     pay(c, cost);
+    if (tooling) {
+      c.lines = { ...(c.lines ?? {}), [kind]: true };
+      news(s, `${c.name} opens its first ${b.name.toLowerCase()} factories.`, 'war', [c.id]);
+    }
     for (let i = 0; i < batches; i++) c.queue.push({ id: nextId(s, 'q'), kind, qty: b.batch, left: b.weeks, total: b.weeks, cost: cost / batches });
     return null;
   },
@@ -260,6 +282,8 @@ const HANDLERS = {
     return null;
   },
   armyDisband(s, c, { id }) { return disbandArmy(s, c, s.armies[id]); },
+  armyAuto(s, c, { id, on }) { return setAuto(s, c, s.armies[id], on); },
+  armyLanding(s, c, { id }) { return prepareLanding(s, c, s.armies[id]); },
   armyReinforce(s, c, { id, troops, tanks }) { return reinforceArmy(s, c, s.armies[id], { troops, tanks }); },
   armyMerge(s, c, { ids }) { return Array.isArray(ids) ? mergeArmies(s, c, ids) : 'Pick armies to merge.'; },
   armyRename(s, c, { id, name }) {
@@ -348,7 +372,14 @@ const HANDLERS = {
   marketBuy(s, c, { res, qty, from, covert }) { return buy(s, c, { res, qty, from, covert: Boolean(covert) }); },
   marketSell(s, c, { res, qty }) { return sellToWorld(s, c, { res, qty }); },
   marketOffer(s, c, { res, qty, markup }) { return setOffer(s, c, { res, qty, markup }); },
-  intercept(s, c, { id, how }) { return orderIntercept(s, c, { id, how }); },
+  // At sea a fleet has to sail out and meet the cargo; overland, a country it crosses seizes it at the border
+  intercept(s, c, { id, how, fleet }) {
+    const sh = (s.shipments ?? []).find((x) => x.id === id);
+    if (sh?.mode !== 'sea') return orderIntercept(s, c, { id, how });
+    const why = interceptProblem(s, c, sh);
+    if (why) return why;
+    return huntCargo(s, c, sh, s.fleets?.[fleet], how === 'sink' ? 'sink' : 'seize');
+  },
   toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
   straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
   // Patrols and blockades are fleets now; these call them off
@@ -377,6 +408,9 @@ const HANDLERS = {
   famineAid(s, c, { crisis, size }) { return sendFamineAid(s, c, crisis, ['small', 'large'].includes(size) ? size : 'small'); },
   payGenerals(s, c) { return payGenerals(s, c); },
   purge(s, c) { return purge(s, c); },
+  rotateCommanders(s, c) { return rotateCommanders(s, c); },
+  coupGuard(s, c, { on }) { return setGuard(s, c, on); },
+  emergencyPowers(s, c) { return emergencyPowers(s, c); },
   civilianRule(s, c) { return civilianRule(s, c); },
   backCoup(s, c, { target, amount }) { return backCoup(s, c, target, amount); },
 };

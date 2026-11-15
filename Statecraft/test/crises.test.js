@@ -7,6 +7,12 @@ import { startPandemic, startCrash, startFamine, startTerrorIn } from '../public
 import { regimeChange } from '../public/js/engine/coups.js';
 import { rel } from '../public/js/engine/core.js';
 
+// A war now needs a case prepared in advance (in secret, about 45 seconds); the tests skip the wait
+function justify(g, a, b) {
+  const c = (g.s ?? g).countries[a];
+  c.warCases = { ...(c.warCases ?? {}), [b]: { ready: 0, until: 99999, since: 0 } };
+}
+
 function game(seed = 1, leader = 'usa') {
   const g = Game.create({ seed });
   g.setLeader(leader, 'Tester');
@@ -125,6 +131,7 @@ test('famines and terror attacks: aid saves lives and wins friends; an attack ca
   assert.ok(x.deaths > 0 && x.severity < 0.6);
 
   // An attack in France by a group sheltered in a country at war with it
+  justify(g, 'fra', 'm-libya');
   g.command('fra', { type: 'war', target: 'm-libya' });
   startTerrorIn(s, 'fra');
   const t = decisionFor(g, 'fra', 'terror');
@@ -198,6 +205,7 @@ test('leaders can buy off or purge their generals, back coups abroad through the
 test('a peace treaty can install a friendly government in the beaten country', () => {
   const g = game(13, 'usa');
   const s = g.s;
+  justify(g, 'usa', 'm-cuba');
   g.command('usa', { type: 'war', target: 'm-cuba' });
   // Cuba accepts only when beaten: occupy it first
   s.regions['m-cuba'].ctrl = 'usa';
@@ -247,4 +255,45 @@ test('a purge stops plots for six months and can\'t be repeated in that time', (
   }
   assert.ok(g.s.week < until);
   assert.ok(c.coup.why.some(([, t]) => /purged/.test(t)), 'the purge shows among the reasons');
+});
+
+test('an uprising left unanswered spreads, fills the streets and pushes the army toward a coup', () => {
+  const g = Game.create({ seed: 8 });
+  g.setLeader('mex', 'Tester');
+  const s = g.s;
+  const c = s.countries.mex;
+  g.tick();
+  const reg = s.regions['mex-so'];
+  reg.unrest = 80;
+  reg.revolt = { rebels: 40, since: s.week, why: 'test' };
+  const risk0 = c.coup.risk;
+  for (let w = 0; w < 30; w++) g.tick();
+  assert.ok(c.neglect > 12, `neglect builds up (${c.neglect})`);
+  assert.ok(c.protests.some((p) => p.cause === 'rebellion'), 'sympathy protests');
+  assert.ok(c.coup.why.some(([, t]) => /unchecked/.test(t)) && c.coup.risk > risk0, 'coup risk rises');
+  assert.ok(Object.values(s.regions).filter((r) => r.ctrl === 'mex' && r.revolt).length >= 2, 'it spread');
+});
+
+test('a coup against a leader is a decision: fight, rally the people, share power, or give in', () => {
+  const g = Game.create({ seed: 9 });
+  g.setLeader('tha', 'Tester');
+  const s = g.s;
+  const c = s.countries.tha;
+  g.tick();
+  c.coup.plot = { since: s.week - 5, known: true };
+  c.coup.risk = 90;
+  c.stability = 5; c.approval = 5; c.army.loyalty = 5;
+  // Force the attempt
+  for (let i = 0; i < 40 && !c.coup.underway; i++) { c.coup.plot ??= { since: s.week - 5, known: true }; c.stability = 5; c.army.loyalty = 5; g.tick(); }
+  assert.ok(c.coup.underway, 'a coup is under way');
+  const d = c.decisions.find((x) => x.key === 'coup');
+  assert.ok(d && d.options.length === 4);
+  const defence = c.spend.defence;
+  assert.equal(g.command('tha', { type: 'decide', id: d.id, option: 'deal' }), null);
+  assert.equal(c.coup.underway, null);
+  assert.ok(c.powerSharing > s.week && c.spend.defence > defence, 'the generals share power');
+  assert.equal(g.command('tha', { type: 'coupGuard', on: true }), null);
+  assert.ok(c.coup.why.length >= 0);
+  assert.equal(g.command('tha', { type: 'rotateCommanders' }), null);
+  assert.match(g.command('tha', { type: 'rotateCommanders' }), /recently/);
 });

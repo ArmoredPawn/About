@@ -6,7 +6,7 @@ import { PROVINCES, RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { MINORS } from './data/minors.js';
 import { NATIONS, NPC_IDS, NPC_RELATIONS } from './data/nations.js';
 import { GEO, ORDER, EXTRA_MINORS } from './data/geo.js';
-import { START_FRIENDS, START_RELATIONS, START_SANCTIONS, ELECTIONS, TECH_FIELDS, DEMAND_TILT, CHOKEPOINTS } from './data/world.js';
+import { ELECTIONS, TECH_FIELDS, DEMAND_TILT, CHOKEPOINTS } from './data/world.js';
 import { setRel, rel } from './core.js';
 import { START_FORTS } from './names.js';
 
@@ -67,8 +67,6 @@ export function createState({ seed = Date.now() % 2147483647 } = {}) {
 
   /* ---------- Countries: the 50 playable ones, and every other nation, run by the computer ---------- */
   for (const id of [...COUNTRY_IDS, ...NPC_IDS]) s.countries[id] = country(s, NATIONS[id]);
-  // Old protectors (the United States and Kuwait) start on warm terms, though no one is bound to anyone
-  for (const m of Object.values(minors)) if (m.guarantor && s.countries[m.guarantor]) setRel(s, m.id, m.guarantor, 45);
 
   // The smaller nations' forces come from their head counts; their budgets are set to pay for them, as their
   // governments do, without running a bigger deficit (civil spending makes room). Forces beyond what a tenth of
@@ -76,21 +74,9 @@ export function createState({ seed = Date.now() % 2147483647 } = {}) {
   for (const c of Object.values(s.countries)) if (c.minor) balanceDefence(s, c); else calibrateUpkeep(s, c);
 
   /* ---------- Diplomacy ---------- */
-  // No alliances exist at the start; leaders found their own during the game.
-  for (const [pair, value] of Object.entries(START_RELATIONS)) {
-    const [a, b] = pair.split(' ');
-    if (s.countries[a] && s.countries[b]) setRel(s, a, b, value);
-  }
-  for (const al of START_FRIENDS) {
-    for (const a of al.members) for (const b of al.members) {
-      if (a < b) setRel(s, a, b, Math.max(rel(s, a, b), al.kind === 'military' ? 55 : 35));
-    }
-  }
-  // Neighbours in the same part of the world get on, and old feuds and friendships carry on
-  const npcs = NPC_IDS.map((id) => NATIONS[id]);
-  for (const a of npcs) for (const b of npcs) if (a.id < b.id && a.bloc && a.bloc === b.bloc) setRel(s, a.id, b.id, 25);
-  for (const [a, b, v] of NPC_RELATIONS) if (s.countries[a] && s.countries[b]) setRel(s, a, b, v);
-  for (const [a, b] of START_SANCTIONS) s.sanctions[`${a}>${b}`] = true;
+  // Every game starts from scratch: no alliances, no sanctions, no guarantees and no old friendships or feuds.
+  // Every relationship is built (or broken) by the leaders during the game.
+  for (const n of [...Object.values(s.countries), ...Object.values(s.minors)]) n.guarantor = null;
   for (const [id, fort] of Object.entries(START_FORTS)) if (s.regions[id]) s.regions[id].fort = fort;
 
   /* ---------- World market: demand is calibrated so the world starts in balance ---------- */

@@ -10,6 +10,7 @@ import { route } from '../engine/military.js';
 import { NODES, PORTS, seaRoute, mapDistance } from '../engine/navy.js';
 import { PIPELINES, PIPELINE_PROJECTS } from '../engine/data/energy.js';
 import { riskOf } from '../engine/climate.js';
+import { citiesIn, cityDepths, CITIES_OF } from '../engine/cities.js';
 
 const PIPE_DEFS = Object.fromEntries([...PIPELINES, ...PIPELINE_PROJECTS].map((p) => [p.id, p]));
 import { svg, colorOf, RES_COLORS, RES_LETTERS, regionName } from './dom.js';
@@ -36,6 +37,8 @@ export class WorldMap {
     this.selectedFleet = null;
     // What the map shows on top of the land: switched in the map tools
     this.layers = { armies: true, fleets: true, pipelines: true, trade: true };
+    // 'strategic': provinces and armies; 'cities': every city with its output, and a ragged, close-up front
+    this.view2 = 'strategic';
     this.tradeShips = new Map();
     this.fronts = new Map();
     this.samples = new Map();
@@ -68,6 +71,7 @@ export class WorldMap {
     this.gSel = svg('g', { 'pointer-events': 'none' });
     this.gRes = svg('g');
     this.gLabels = svg('g');
+    this.gCities = svg('g', { class: 'cities' });
     this.gArrows = svg('g');
     this.gBattles = svg('g');
     this.gArmies = svg('g');
@@ -76,7 +80,7 @@ export class WorldMap {
     this.gTrade = svg('g', { class: 'trade' });
     this.gFleets = svg('g');
     this.gPreview = svg('g', { 'pointer-events': 'none' });
-    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gLines, this.gTrade, this.gRes, this.gSeas, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview);
+    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gLines, this.gTrade, this.gRes, this.gSeas, this.gCities, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview);
     for (const id of ORDER) {
       const u = svg('path', { d: this.d[id], class: 'region', 'data-id': id, fill: NEUTRAL });
       this.uses.set(id, u);
@@ -100,9 +104,91 @@ export class WorldMap {
     this.#drawFleets();
     this.#drawPipelines();
     if (!live) this.#drawTrade();
+    else this.#moveShips();
     this.#drawBattles();
     this.#drawOverlays();
+    this.#drawCities();
     this.#animate();
+  }
+
+  // Strategic or city view
+  setView(view) {
+    this.view2 = view === 'cities' ? 'cities' : 'strategic';
+    this.el.classList.toggle('city-view', this.view2 === 'cities');
+    if (this.state) { this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); }
+  }
+
+  /* ---------- Cities (the close-up view) ---------- */
+
+  // The cities of a province as the map sees them: output ($B a year), share of the nation's output, and who
+  // holds each (in a battle, the cities the front has passed belong to the attacker)
+  #cityInfo(id) {
+    const r = this.#region(id);
+    if (!r) return [];
+    const list = citiesIn(id, r.pop);
+    if (!list.length) return [];
+    const fallen = new Set();
+    if (r.battleBy && r.prog > 0) {
+      const f = this.fronts.get(id);
+      const origin = f?.origin ?? (r.from ? GEO[r.from] : null);
+      const depth = cityDepths(id, origin, list);
+      const shown = (f?.shown ?? r.prog) / 100;
+      list.forEach((c, i) => { if (depth[i] <= shown) fallen.add(c.name); });
+    }
+    const national = this.state.countries[r.owner]?.gdp ?? null;
+    return list.map((c) => ({ ...c, output: c.share * r.gdp, national: national ? (c.share * r.gdp) / national : null, holder: fallen.has(c.name) ? r.battleBy : r.ctrl, fallen: fallen.has(c.name) }));
+  }
+
+  #drawCities() {
+    if (this.view2 !== 'cities' || !this.state) { this.gCities.replaceChildren(); return; }
+    const unit = this.#unit();
+    const rect = this.el.getBoundingClientRect();
+    const vbW = W / this.view.k;
+    const vbH = vbW * (rect.height / Math.max(1, rect.width));
+    const x0 = this.view.cx - vbW / 2 - 10;
+    const x1 = this.view.cx + vbW / 2 + 10;
+    const y0 = this.view.cy - vbH / 2 - 10;
+    const y1 = this.view.cy + vbH / 2 + 10;
+    const money = (v) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}T` : v >= 1 ? `$${Math.round(v)}B` : `$${Math.round(v * 1000)}M`);
+    const out = [];
+    const labels = [];
+    for (const [id] of CITIES_OF) {
+      const g = GEO[id];
+      if (!g || g.x < x0 - 60 || g.x > x1 + 60 || g.y < y0 - 60 || g.y > y1 + 60) continue;
+      for (const c of this.#cityInfo(id)) {
+        if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
+        const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
+        const color = politicalColor(this.state, c.holder);
+        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[this.#region(id).owner]?.name ?? 'its country'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}`;
+        out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}`, 'data-id': id },
+          c.capital
+            ? svg('rect', { 'data-id': id, x: c.x - r, y: c.y - r, width: r * 2, height: r * 2, fill: color, stroke: '#fff', 'stroke-width': 1.2 / unit, transform: `rotate(45 ${c.x} ${c.y})` })
+            : svg('circle', { 'data-id': id, cx: c.x, cy: c.y, r, fill: color, stroke: c.fallen ? '#ff5a5a' : '#0b0f1a', 'stroke-width': (c.fallen ? 1.4 : 1) / unit }),
+          svg('title', {}, title)));
+        // Names (and output) once there is room for them
+        const big = c.pop >= 4000 || c.capital;
+        if (unit >= 3.2 || (unit >= 1.6 && big) || (unit >= 2.3 && c.pop >= 1500)) {
+          labels.push(svg('text', { class: 'city-label', x: c.x + r + 2 / unit, y: c.y, 'font-size': 8.5 / unit, 'stroke-width': 2.4 / unit },
+            c.name, unit >= 2.3 ? svg('tspan', { class: 'city-output', dx: 3 / unit }, money(c.output)) : null));
+        }
+      }
+    }
+    this.gCities.replaceChildren(...out, ...labels);
+  }
+
+  /* ---------- Cargo ships between weekly updates ---------- */
+
+  #moveShips() {
+    const s = this.state;
+    for (const sh of s.shipments ?? []) {
+      const n = this.tradeShips.get(sh.id);
+      if (!n || sh.x == null) continue;
+      const x = ((sh.x % W) + W) % W;
+      const jump = n.dataset.x != null && Math.abs(Number(n.dataset.x) - x) > W / 2;
+      n.style.transition = jump ? 'none' : `transform ${Math.round((this.stepMs ?? 1000) * 1.05)}ms linear`;
+      n.style.transform = `translate(${x}px, ${sh.y}px)`;
+      n.dataset.x = x;
+    }
   }
 
   // Oil (amber) and gas (blue) pipelines; dashed while shut, cut by war, wrecked or still being built
@@ -192,21 +278,36 @@ export class WorldMap {
       }, svg('title', {}, `${s.countries[from]?.name ?? from} → ${s.countries[to]?.name ?? to}: ${RESOURCE_INFO[res]?.name ?? res}, about ${money(value)} a year`)));
     }
     const seen = new Set();
+    // A cargo's own lane, as the game sails it (its ports), else the lane between the two countries
+    const ownLane = (sh) => {
+      if (!sh.lane) return lane(sh.seller, sh.buyer);
+      const key = `${sh.lane.from}>${sh.lane.to}`;
+      if (!this.tradeRoutes.has(key)) {
+        const from = PORTS[sh.lane.from];
+        const way = from && PORTS[sh.lane.to] ? seaRoute(from, PORTS[sh.lane.to]) : null;
+        if (!way) { this.tradeRoutes.set(key, null); return lane(sh.seller, sh.buyer); }
+        const pts = [from, ...way];
+        const cum = [0];
+        for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        this.tradeRoutes.set(key, { pts, cum });
+      }
+      return this.tradeRoutes.get(key) ?? lane(sh.seller, sh.buyer);
+    };
     for (const sh of s.shipments) {
       if (sh.mode !== 'sea') continue;
-      const r = lane(sh.seller, sh.buyer);
+      const r = ownLane(sh);
       if (!r) continue;
       const ours = sh.buyer === s.me || sh.seller === s.me;
       const color = RES_COLORS[sh.res] ?? '#9aa4b8';
       const info = RESOURCE_INFO[sh.res];
-      const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.covert ? ' (covert)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
+      const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.covert ? ' (covert)' : ''}${sh.secret ? ' (secret deal)' : sh.deal ? ' (deal convoy)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
       lines.push(svg('path', {
         class: `trade-lane${ours ? ' ours' : ''}`, d: path(r), stroke: color, 'stroke-width': (ours ? 1.8 : 1.1) / unit,
         'stroke-dasharray': sh.covert ? `${2 / unit} ${3 / unit}` : `${5 / unit} ${4 / unit}`,
       }, svg('title', {}, title)));
       // The ship, gliding along the route over the week
       seen.add(sh.id);
-      const p = at(r, (sh.total - sh.left) / Math.max(1, sh.total));
+      const p = sh.x != null ? [sh.x, sh.y] : at(r, (sh.total - sh.left) / Math.max(1, sh.total));
       let n = this.tradeShips.get(sh.id);
       if (!n) {
         n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}` });
@@ -249,7 +350,7 @@ export class WorldMap {
 
   #region(id) {
     const row = this.state.regions[INDEX[id]];
-    return row && { owner: row[0], ctrl: row[1], dmg: row[2], infra: row[3], fort: row[4], battleBy: row[5], prog: row[6], unrest: row[7], gar: row[8], gdp: row[9], pop: row[10], rebels: row[11] ?? 0, from: row[12] || null, loyalty: row[13] ?? 50, policy: row[14] ?? 'integrate', people: row[15] ?? row[0] };
+    return row && { owner: row[0], ctrl: row[1], dmg: row[2], infra: row[3], fort: row[4], battleBy: row[5], prog: row[6], unrest: row[7], gar: row[8], gdp: row[9], pop: row[10], rebels: row[11] ?? 0, from: row[12] || null, loyalty: row[13] ?? 50, policy: row[14] ?? 'integrate', people: row[15] ?? row[0], fallout: row[16] ?? 0 };
   }
 
   #paint() {
@@ -419,6 +520,25 @@ export class WorldMap {
       return amp * (wave + salient);
     };
     const at = (t, u) => [t * dx + u * nx, t * dy + u * ny];
+    if (this.view2 === 'cities') {
+      // Close up: street by street. Many more kinks, and around each city near the line a pocket: still held
+      // (the line bends back around it) or taken (the line pushes out past it)
+      const pockets = [];
+      for (const c of this.#cityInfo(id)) {
+        const t = c.x * dx + c.y * dy;
+        if (Math.abs(t - front) > depthT * 0.35) continue;
+        pockets.push({ u: c.x * nx + c.y * ny, w: width * (0.05 + Math.min(0.08, c.pop / 60000)), sign: t < front ? 1 : -1, near: 1 - Math.abs(t - front) / (depthT * 0.35) });
+      }
+      const fine = (u) => {
+        const x = (u - wlo) / width * Math.PI * 2;
+        let v = 0.5 * Math.sin(x * 2.3 + ph(1) + p * 4.4) + 0.3 * Math.sin(x * 5.2 + ph(2) - p * 6.1) + 0.18 * Math.sin(x * 11.7 + ph(3) + p * 9.3)
+          + 0.1 * Math.sin(x * 23.3 + ph(4) - p * 13) + 0.06 * Math.sin(x * 41.9 + ph(5) + p * 17) + 0.035 * Math.sin(x * 77.1 + ph(6));
+        v += 0.7 * Math.exp(-(((u - mid) / (width * 0.22)) ** 2));
+        for (const k of pockets) v -= k.sign * 1.1 * k.near * Math.exp(-(((u - k.u) / k.w) ** 2));
+        return depthT * 0.08 * edge * v;
+      };
+      return { dx, dy, nx, ny, lo, hi, wlo, whi, front, mid, jag: fine, at, depth: depthT, fine: true };
+    }
     return { dx, dy, nx, ny, lo, hi, wlo, whi, front, mid, jag, at, depth: depthT };
   }
 
@@ -427,7 +547,7 @@ export class WorldMap {
     const { lo, wlo, whi, front, at, jag, mid, hi } = F;
     const pad = (hi - lo) + (whi - wlo) + 10;
     const line = [];
-    const n = 36;
+    const n = F.fine ? 160 : 36;
     for (let i = 0; i <= n; i++) {
       const u = wlo - 2 + ((whi - wlo + 4) * i) / n;
       line.push(at(front + jag(u), u));
@@ -739,6 +859,15 @@ export class WorldMap {
           svg('title', {}, `${regionName(id)}: ${amt[0]} now${amt[1] > amt[0] ? `, ${amt[1]} possible` : ''}`)));
       }
     }
+    // Provinces poisoned by fallout
+    for (const id of ORDER) {
+      const r = this.#region(id);
+      if (!r.fallout) continue;
+      const g = GEO[id];
+      out.push(svg('g', { class: 'fallout', 'pointer-events': 'none' },
+        svg('circle', { cx: g.x, cy: g.y, r: 9 / unit, fill: 'rgb(214 236 64 / 0.85)', stroke: '#1a1f10', 'stroke-width': 1 / unit }),
+        svg('text', { x: g.x, y: g.y + 0.5 / unit, 'font-size': 11 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#1a1f10' }, '☢')));
+    }
     for (const [key, cp] of Object.entries(CHOKEPOINTS)) {
       const g = NODES[key] ?? GEO[cp.regions[0]];
       if (!g) continue;
@@ -819,7 +948,7 @@ export class WorldMap {
     this.el.classList.toggle('zoomed', this.#unit() >= 2.4);
     if (this.state) {
       cancelAnimationFrame(this.raf);
-      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawBattles(); this.#drawOverlays(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
+      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
     }
   }
 

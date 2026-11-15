@@ -13,7 +13,7 @@ import { CHOKEPOINTS } from './data/world.js';
 import { SEA_GRID, SEA_KEYS, SEA_RLE, PORTS } from './data/seas.js';
 import { MAP_SIZE } from './data/geo.js';
 import { SEA_NAMES, PATROL_MODES, basinsOf } from './trade.js';
-import { chance, rand, news, alert, nameOf, alive, atWar, allied, enemiesOf, nextId, addRel } from './core.js';
+import { chance, rand, news, alert, nameOf, alive, atWar, allied, enemiesOf, nextId, addRel, fuelCut } from './core.js';
 import { commsReady } from './space.js';
 import { REGION_NAMES } from './names.js';
 
@@ -212,7 +212,7 @@ export const IN_PORT = 12; // close enough to a port to take on or send home shi
 
 const navalTech = (s, owner) => s.countries[owner]?.tech?.naval ?? 5;
 // How fast a fleet sails: km a week, from naval research (about 2,000 to 2,800)
-export const fleetSpeed = (s, owner) => (0.9 + 0.1 * navalTech(s, owner)) * 1500;
+export const fleetSpeed = (s, owner) => (0.9 + 0.1 * navalTech(s, owner)) * 1500 * (1 - 0.7 * fuelCut(s.countries[owner]));
 const speedPx = (s, owner) => fleetSpeed(s, owner) / KM_PER_PX;
 
 export function fleetStrength(s, f) {
@@ -663,7 +663,7 @@ export function navyTick(s) {
     const fighting = f.battle === s.week;
     const port = nearestPort(s, f.owner, f.x, f.y);
     const home = port && mapDistance(f.x, f.y, port.x, port.y) <= OFF_COAST;
-    if (!fighting) f.org = Math.min(100, f.org + (home ? 10 : 4) * (1 - 0.6 * (c.short?.oil ?? 0)) * (commsReady(s, f.owner) ? 1.25 : 1));
+    if (!fighting) f.org = Math.min(100, f.org + (home ? 10 : 4) * (1 - 0.6 * fuelCut(c)) * (commsReady(s, f.owner) ? 1.25 : 1));
     // Shore missiles and aircraft from a hostile shore
     if (isStrait(f.at)) {
       for (const h of shoreHolders(s, f.at)) {

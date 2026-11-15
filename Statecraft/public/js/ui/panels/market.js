@@ -5,7 +5,7 @@ import { h, flag, money, nationName, spark, RES_COLORS, RES_LETTERS, num } from 
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { CHOKEPOINTS } from '../../engine/data/world.js';
 import { fmtQty, TOLLS, STRAIT_POLICIES, PATROL_MODES } from '../../engine/trade.js';
-import { modal, numberField, confirmBox } from '../dialogs.js';
+import { modal, numberField, confirmBox, selectField } from '../dialogs.js';
 import { myFleets, patrolDialog } from './navy.js';
 import { energy } from './energy.js';
 
@@ -157,6 +157,7 @@ function ships(ctx) {
   others.sort((a, b) => (enemies.has(b.buyer) || enemies.has(b.seller)) - (enemies.has(a.buyer) || enemies.has(a.seller)) || b.cost - a.cost);
   const card = (x, canStop) => h('div.item',
     h('div.item-head', resDot(x.res), h('span.name', `${nationName(s, x.seller)} → ${nationName(s, x.buyer)}`), x.covert ? h('span.chip.warn', 'covert') : null,
+      x.secret ? h('span.chip.warn', 'secret deal') : x.deal ? h('span.chip', 'deal convoy') : null,
       enemies.has(x.buyer) || enemies.has(x.seller) ? h('span.chip.bad', 'enemy trade') : null, h('span.muted.small', { style: { marginLeft: 'auto' } }, `${x.left} wk left`)),
     h('div.meta', `${fmtQty(x.res, x.qty)} of ${RESOURCE_INFO[x.res].name.toLowerCase()} worth ${money(x.cost)} · ${x.mode === 'land' ? `overland${x.transit?.length ? ` through ${x.transit.map((t) => nationName(s, t)).join(', ')}` : ''}` : `by sea${x.straits?.length ? ` through the ${x.straits.map((k) => CHOKEPOINTS[k].name).join(', ')}` : ''}`}`),
     canStop ? h('div.actions',
@@ -165,16 +166,34 @@ function ships(ctx) {
   return h('div',
     h('div.section', h('h3', 'Our cargoes'), mine.length ? h('div.list', mine.map((x) => card(x, false))) : h('div.empty', 'Nothing in transit. Buy something under Buy.')),
     h('div.section', h('h3', 'Shipping lanes'),
-      h('p.muted.small', `Cargoes our intelligence can see. Stopping one takes warships within reach of its route (yours: ${num(me.ships)} warships${me.carriers ? `, ${me.carriers} carriers` : ''}), or control of the land it crosses. In peacetime it is piracy: both countries will be furious.`),
-      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : me.ships >= 3)))) : h('div.empty', 'No cargoes in sight.')));
+      h('p.muted.small', `Cargoes our intelligence can see. At sea, stopping one takes a fleet that sails out and meets it before it docks; if its escorts (the buyer's, the seller's or their allies' warships near it) are stronger, it gets through. Overland, it can be seized where it crosses our territory. In peacetime it is piracy: both countries will be furious. Fleets at war with the buyer or seller, blockading fleets, and patrols stop cargoes on their own.`),
+      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : myFleets(s).length > 0)))) : h('div.empty', 'No cargoes in sight.')));
 }
 
 async function stop(ctx, x, how) {
   const s = ctx.state;
   const atWar = s.wars.some((w) => [w.a, w.b].includes(s.me) && [w.a, w.b].some((n) => n === x.buyer || n === x.seller));
   if (!atWar && !(await confirmBox('Stop a cargo in peacetime?', `We are not at war with ${nationName(s, x.seller)} or ${nationName(s, x.buyer)}. Both will be told it was us, and the world will call it piracy.`, { ok: how === 'sink' ? 'Sink it' : 'Seize it', danger: true }))) return;
-  const err = await ctx.send({ type: 'intercept', id: x.id, how });
-  if (!err) ctx.toast('Orders sent. The navy will try to stop it this week.', 'info');
+  if (x.mode !== 'sea') {
+    const err = await ctx.send({ type: 'intercept', id: x.id, how });
+    if (!err) ctx.toast('Orders sent: it will be stopped where it crosses our territory.', 'info');
+    return;
+  }
+  // At sea: a fleet has to sail out to meet it. Nearest first.
+  const fleets = myFleets(s).filter((f) => !f.moving || f.mission !== 'intercept')
+    .map((f) => ({ f, d: x.x != null ? Math.hypot(f.x - x.x, f.y - x.y) * 20 : null }))
+    .sort((a, b) => (a.d ?? 0) - (b.d ?? 0));
+  if (!fleets.length) return ctx.hint('We have no fleet to send.', 'bad');
+  const pick = selectField('Send', fleets.map(({ f, d }) => [f.id, `${f.name}: ${f.ships} warships${f.carriers ? `, ${f.carriers} carriers` : ''}${d != null ? `, about ${Math.round(d / 100) * 100} km away` : ''}`]));
+  modal({
+    title: `${how === 'sink' ? 'Sink' : 'Seize'} the ${RESOURCE_INFO[x.res].name.toLowerCase()} cargo`,
+    body: h('div.stack', pick.el, h('p.muted.small', `The fleet sails to meet it on its way to ${nationName(s, x.buyer)}, ${x.left} week${x.left === 1 ? '' : 's'} from port. If it can't get there in time, you'll be told; if the cargo's escorts are stronger, it gets through.`)),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send the fleet', kind: how === 'sink' ? 'danger' : 'primary', onClick: async () => {
+      const err = await ctx.send({ type: 'intercept', id: x.id, fleet: pick.input.value, how });
+      if (!err) ctx.toast('The fleet is on its way to intercept.', 'info');
+      return !err || false;
+    } }],
+  });
 }
 
 /* ---------- Straits ---------- */

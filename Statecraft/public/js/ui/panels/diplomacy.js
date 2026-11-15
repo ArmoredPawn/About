@@ -6,7 +6,7 @@ import { TECH_FIELDS, CHOKEPOINTS } from '../../engine/data/world.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
 import { proposalCard } from './overview.js';
 import { describeProposal } from '../describe.js';
-import { warNotice } from '../attack.js';
+import { warNotice, caseMade, justifyDialog } from '../attack.js';
 import { armAndFund, aidDialog as armDialog } from './proxy.js';
 
 const TARIFFS = [0, 10, 25, 50, 100];
@@ -161,6 +161,7 @@ function minorDossier(ctx, id, back) {
 // One click: any alliance or trade bloc we share with them is left as part of declaring war
 export async function declareWar(ctx, id) {
   const s = ctx.state;
+  if (!caseMade(ctx, id)) { await justifyDialog(ctx, id, 'When it is ready, declare war from here.'); return; }
   const shared = s.alliances.filter((al) => al.members.includes(s.me) && al.members.includes(id));
   const claim = s.you.claims.some((rid) => s.regions[ctx.regionIndex[rid]]?.[1] === id);
   const notice = warNotice(ctx, id, shared);
@@ -193,16 +194,22 @@ function dealDialog(ctx, id) {
     if (!qty.input.dataset.touched) qty.input.value = Math.max(0.01, Math.abs(surplus) > 0 ? Math.round(Math.abs(surplus) * 0.25 * 100) / 100 : 1);
     const value = Number(qty.input.value) * info.value * s.market.price[r];
     if (!price.input.dataset.touched) price.input.value = Math.round(value * 10) / 10;
-    hint.textContent = `World market value: ${money(value)} a year. We produce ${fmt(me.prod[r])} and need ${fmt(me.demand[r])} ${info.unit}. Deliveries come from stocks each week.`;
+    hint.textContent = `World market value: ${money(value)} a year. We produce ${fmt(me.prod[r])} and need ${fmt(me.demand[r])} ${info.unit}. A convoy sails every two weeks from the seller's stocks: it can be seen at sea, escorted, and attacked. The buyer pays as each one arrives.`;
   };
   qty.input.addEventListener('input', () => { qty.input.dataset.touched = '1'; suggest(); });
   price.input.addEventListener('input', () => { price.input.dataset.touched = '1'; });
   res.input.addEventListener('change', () => { delete qty.input.dataset.touched; delete price.input.dataset.touched; suggest(); });
   suggest();
+  const option = (label, note) => {
+    const box = h('input', { type: 'checkbox' });
+    return { box, el: h('label.row.gap', { style: { alignItems: 'flex-start', cursor: 'pointer' } }, box, h('span', h('b', label), h('span.muted.small', { style: { display: 'block' } }, note))) };
+  };
+  const secret = option('Secret deal', 'No announcement. Only spies deep inside either government learn of it, and its convoys sail unflagged.');
+  const exclusive = option('Exclusive', 'The seller sells this resource to no one else while the deal lasts: its whole surplus waits for these convoys (as Romania’s oil went only to Germany).');
   modal({
     title: `Resource deal with ${nationName(s, id)}`,
-    body: h('div.stack', who.el, res.el, qty.el, price.el, weeks.el, hint),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Propose', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'deal', terms: { seller: who.input.value, res: res.input.value, qty: Number(qty.input.value), price: Number(price.input.value), weeks: Number(weeks.input.value) } })) || false }],
+    body: h('div.stack', who.el, res.el, qty.el, price.el, weeks.el, secret.el, exclusive.el, hint),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Propose', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'deal', terms: { seller: who.input.value, res: res.input.value, qty: Number(qty.input.value), price: Number(price.input.value), weeks: Number(weeks.input.value), secret: secret.box.checked, exclusive: exclusive.box.checked } })) || false }],
   });
 }
 

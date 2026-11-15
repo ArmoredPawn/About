@@ -2,6 +2,7 @@
 // Yearly figures (GDP, spending as % of GDP) are applied a week (1/52) at a time.
 
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
+import { GEO } from './data/geo.js';
 import { CHOKEPOINTS, TECH_FIELDS } from './data/world.js';
 import { demandWeight, STOCK_WEEKS } from './setup.js';
 import { clamp, news, alert, alive, atWar, allied, enemiesOf, alliancesOf, treaty, chance, rand, money, nameOf, isMinor } from './core.js';
@@ -27,6 +28,29 @@ export const BUILD = {
   missiles: { name: 'Missiles', batch: 50, unit: 'missiles', cost: 0.2, weeks: 16, needs: ['chip', 'rare'] },
   nukes: { name: 'Nuclear warheads', batch: 10, unit: 'warheads', cost: 0.8, weeks: 26, needs: ['uran'] },
 };
+
+// A country that has never had tanks, combat aircraft, warships, carriers or missiles has no factories for them.
+// It can set up a production line once its industry (and the field's own technology) is advanced enough; the
+// first order then costs LINE_SETUP times as much, for the tooling. Ships need a coast to be built on.
+export const NEW_LINE = {
+  tanks: { needs: [['industry', 6]] },
+  aircraft: { needs: [['industry', 6], ['air', 4]] },
+  ships: { needs: [['industry', 5], ['naval', 3]], coast: true },
+  carriers: { needs: [['industry', 8], ['naval', 7]], coast: true },
+  missiles: { needs: [['industry', 5], ['missile', 4]] },
+};
+export const LINE_SETUP = 3;
+export const hasLine = (c, kind) => !NEW_LINE[kind] || (c[kind] ?? 0) > 0 || Boolean(c.lines?.[kind]);
+// Why this country can't build `kind` yet, or null. `coast`: whether it holds a coastal province.
+export function lineProblem(c, kind, coast) {
+  const line = NEW_LINE[kind];
+  if (!line) return null;
+  if (line.coast && !coast) return `You have no coast to build ${BUILD[kind].name.toLowerCase()}s on.`;
+  if (hasLine(c, kind)) return null;
+  const missing = line.needs.filter(([f, level]) => (c.tech?.[f] ?? 0) < level);
+  if (!missing.length) return null;
+  return `We have never built ${BUILD[kind].name.toLowerCase()}, so there are no factories for them. Setting them up needs ${missing.map(([f, level]) => `${TECH_FIELDS[f].name} level ${level} (we have ${c.tech?.[f] ?? 0})`).join(' and ')}.`;
+}
 
 export const PROJECT_WEEKS = { oil: 52, gas: 52, coal: 52, iron: 78, food: 26, rare: 78, uran: 78, metal: 78, chip: 104 };
 
@@ -95,9 +119,30 @@ export function blockadeEffect(s, target) {
     const ships = c.blockades[target];
     if (!ships || !atWar(s, c.id, target)) continue;
     const p = navalPower(c, ships, c.blockadeCarriers?.[target] ?? 0);
-    open *= 1 - (p / (p + defence * 1.2 + 0.01)) * 0.8;
+    // A navy that rules the waters off the coast stops nearly every ship; a contested one, far fewer
+    open *= 1 - (p / (p + defence * 1.2 + 0.01)) * 0.97;
   }
   return 1 - open;
+}
+
+// How much of a country's trade can still come overland if its ports are closed: through each land
+// neighbour that is not at war with it and not blockaded itself (Germany got Romanian oil by rail through
+// the British blockade). An island gets nothing this way.
+export function overlandShare(s, id) {
+  const near = new Set();
+  for (const reg of Object.values(s.regions)) {
+    if (reg.ctrl !== id) continue;
+    for (const n of GEO[reg.id]?.adj ?? []) {
+      const h = s.regions[n]?.ctrl;
+      if (h && h !== id && !atWar(s, h, id)) near.add(h);
+    }
+  }
+  let share = 0;
+  for (const h of near) {
+    const open = 1 - (Object.values(s.countries).some((c) => c.blockades?.[h] && atWar(s, c.id, h)) ? 0.7 : 0);
+    share += 0.15 * open;
+  }
+  return Math.min(0.45, share);
 }
 
 function closedChokepoints(s, id) {
@@ -113,8 +158,9 @@ function closedChokepoints(s, id) {
 function access(s, id, world) {
   const share = sanctionShare(s, id, world);
   const blockade = blockadeEffect(s, id);
-  // Sanctioned goods still find buyers (at a discount); blockades physically stop ships
-  const base = (1 - 0.08 * share) * (1 - 0.75 * blockade);
+  // Sanctioned goods still find buyers (at a discount); blockades physically stop ships, so only what comes
+  // overland gets through
+  const base = (1 - 0.08 * share) * (1 - blockade * (1 - (blockade > 0 ? overlandShare(s, id) : 0)));
   return { imp: base, exp: base, discount: 0.35 * share, share };
 }
 
@@ -133,17 +179,17 @@ export function production(s, nationId, r, index) {
 const EFFICIENCY = { oil: 0.015, gas: 0.012, coal: 0.02, iron: 0.008, food: 0, rare: 0.004, uran: 0, metal: 0.006, chip: 0 };
 
 export function regionEfficiency(reg, holder) {
-  return (1 - reg.dmg) * (reg.owner === holder ? 1 : 0.5) * (reg.battle ? 0.5 : 1) * (1 - reg.unrest / 200);
+  // A province being fought over works at half pace, and the cities already lost to the attack not at all
+  const battle = reg.battle ? Math.max(0.1, 0.5 - 0.6 * (reg.battle.fallenShare ?? 0)) : 1;
+  return (1 - reg.dmg) * (reg.owner === holder ? 1 : 0.5) * battle * (1 - reg.unrest / 200);
 }
 
 function demand(s, n, r) {
   let d = demandWeight(s, n, r) * s.intensity[r] * Math.pow(1 - EFFICIENCY[r], s.week / 52) * Math.pow(s.market.price[r], -0.2);
   const c = s.countries[n.id];
   if (c) {
-    if (r === 'oil') {
-      const military = c.troops * 0.00008 + c.tanks * 0.00001 + c.aircraft * 0.00006 + c.ships * 0.0003 + c.carriers * 0.001;
-      d += military * (enemiesOf(s, c.id).size ? 3 : 1);
-    }
+    // What the armed forces burn: worked out each week from what every army, air campaign and fleet is doing
+    if (r === 'oil') d += c.fuel?.total ?? (c.troops * 0.00005 + c.aircraft * 0.000004 + c.ships * 0.0001);
     if (c.ration && (r === 'oil' || r === 'gas' || r === 'food')) d *= 0.85;
     // A carbon tax moves people and firms off fossil fuels over a few years
     if (r === 'oil' || r === 'gas' || r === 'coal') d *= 1 - 0.07 * (c.carbonEffect ?? 0) * (r === 'coal' ? 1.4 : 1);
@@ -169,6 +215,7 @@ export function marketTick(s) {
     (index.get(reg.ctrl) ?? index.set(reg.ctrl, []).get(reg.ctrl)).push(reg);
   }
 
+  const exclusives = new Set(s.treaties.filter((t) => t.kind === 'deal' && t.exclusive).map((t) => `${t.a}>${t.res}`));
   for (const r of RESOURCES) {
     const rows = [];
     let offers = 0;
@@ -191,8 +238,10 @@ export function marketTick(s) {
       const net = prod - dem;
       const stock = n.stock[r] ?? 0;
       const target = dem * STOCK_WEEKS;
-      let offer = net > 0 ? net * exp : 0;
-      if (stock > target * 1.5) offer += (stock - target * 1.5) * 0.1 * exp;
+      // Bound by an exclusive deal: its surplus waits for the buyer's convoys instead of going to market
+      const promised = exclusives.has(`${n.id}>${r}`);
+      let offer = net > 0 && !promised ? net * exp : 0;
+      if (stock > target * 1.5 && !promised) offer += (stock - target * 1.5) * 0.1 * exp;
       // A strategic reserve being released goes onto the market a quarter at a time
       const released = Math.min(n.releasing?.[r] ?? 0, Math.max(0.01, (n.releasing?.[r] ?? 0) / 4), stock);
       if (released > 0) { offer += released; n.releasing[r] -= released; }
@@ -227,6 +276,12 @@ export function marketTick(s) {
       }
       n.stock[r] = Math.min(stock, Math.max(dem, 0.01) * 26);
       n.short[r] = short;
+      // The forces get their fuel first: the civilian economy is squeezed (by up to 40%) before the tanks run dry
+      if (r === 'oil' && s.countries[n.id]) {
+        const need = n.fuel?.total ?? 0;
+        const unmet = short * dem;
+        n.fuelShort = need > 1e-4 ? clamp((unmet - 0.4 * Math.max(0, dem - need)) / need, 0, 1) : 0;
+      }
       if (s.countries[n.id]) {
         const c = n;
         c.prod[r] = prod;
@@ -241,17 +296,39 @@ export function marketTick(s) {
   return world;
 }
 
+/* ---------- Closed straits ---------- */
+
+// Growth lost to closed (or fully blocked) straits: a little for everyone, a lot for the countries whose trade
+// runs through them; heavy tolls cost their users too
+export function straitDrag(s, c) {
+  let drag = 0;
+  for (const [key, st] of Object.entries(s.chokepoints)) {
+    const cp = CHOKEPOINTS[key];
+    const user = cp.users?.includes(c.id);
+    const shut = (st.closedBy && st.closedBy !== c.id && !allied(s, st.closedBy, c.id)) || Boolean(patrolBlocks(s, key, c.id));
+    if (shut) drag += user ? cp.userDrag ?? 0.5 : cp.growthDrag ?? 0;
+    else if (st.toll && st.toll.by !== c.id && !allied(s, st.toll.by, c.id) && user) drag += (cp.userDrag ?? 0.5) * st.toll.rate / 100;
+  }
+  return drag;
+}
+
 /* ---------- Countries, week by week ---------- */
 
 export function economyTick(s, world) {
-  const drag = Object.entries(s.chokepoints).reduce((t, [k, cp]) => t + (cp.closedBy ? CHOKEPOINTS[k].growthDrag ?? 0 : 0), 0);
   for (const c of Object.values(s.countries)) {
     if (!alive(s, c.id)) continue;
     const mods = s.modifiers.filter((m) => m.cid === c.id || m.cid === 'all');
     output(s, c, mods);
+    const drag = straitDrag(s, c);
+    c.straitDrag = drag;
     const g = growthRate(s, c, world, mods, drag);
     for (const reg of Object.values(s.regions)) {
-      if (reg.owner === c.id && reg.ctrl === c.id) {
+      if ((reg.fallout?.until ?? -1) > s.week) {
+        // Fallout: no one goes back, and what little is left keeps shrinking
+        reg.gdp *= 0.997;
+        reg.pop *= 0.998;
+        for (const r of Object.values(reg.res)) r[0] = 0;
+      } else if (reg.owner === c.id && reg.ctrl === c.id) {
         reg.gdp *= 1 + g / 5200;
         reg.pop *= 1 + c.popGrowth / 5200 - (c.short.food > 0.25 ? c.short.food * 0.001 : 0);
       } else if (reg.owner === c.id) {
@@ -306,7 +383,9 @@ function output(s, c, mods) {
   for (const reg of Object.values(s.regions)) {
     if (reg.ctrl !== c.id) continue;
     const own = reg.owner === c.id;
-    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1);
+    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (own ? 1 : 0.3) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1)
+      // Cities already lost to an attack still in progress produce nothing for us
+      * (1 - (reg.battle?.fallenShare ?? 0));
     pop += reg.pop;
   }
   c.pot = pot;

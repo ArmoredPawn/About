@@ -471,3 +471,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .trade-flow:hover { opacity: 0.9; }
 @keyframes trade-flow { to { stroke-dashoffset: calc(var(--dash) * -1); } }
 @media (prefers-reduced-motion: reduce) { .map .trade-flow { animation: none; } }
+
+/* The city view: cities with their output, and a ragged close-up front */
+.map .city { cursor: pointer; }
+.map .city circle, .map .city rect { vector-effect: non-scaling-stroke; }
+.map .city.fallen circle { stroke-dasharray: 2 1.5; }
+.map .city-label { fill: #f1f3f9; font-weight: 600; paint-order: stroke; stroke: rgb(5 8 14 / 0.88); stroke-linejoin: round; dominant-baseline: central; pointer-events: none; }
+.map .city-output { fill: #ffd27a; font-weight: 700; }
+.map.city-view .region { fill-opacity: 0.82; }
+.map.city-view .front-line { stroke-width: 1.6; stroke-dasharray: 3 2; }
+.map .fallout { pointer-events: none; }

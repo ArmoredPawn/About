@@ -10,7 +10,7 @@
 import { GEO } from './data/geo.js';
 import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
-import { clamp, chance, rand, pick, alert, news, nameOf, alive, addRel, allied, troopsLabel, money, rel } from './core.js';
+import { clamp, chance, rand, pick, alert, news, nameOf, alive, addRel, allied, troopsLabel, money, rel, warCaseOf, atWar, nowWeeks } from './core.js';
 import { revealAlliance } from './diplomacy.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
@@ -42,6 +42,21 @@ export function networkStrength(s, c, target) {
 }
 // A network strong enough (and not turned) shows the target's full picture, including army movements
 export const seesInto = (s, c, target) => networkStrength(s, c, target) >= 0.6;
+// Only a very good, well-established network hears of a war being justified in secret
+export const DEEP_NETWORK = 0.9;
+const hearsWarCases = (s, c, target) => !c.spies?.[target]?.turned && networkStrength(s, c, target) >= DEEP_NETWORK;
+
+// A leader has begun justifying a war: anyone with a deep enough network inside hears of it at once
+export function leakWarCase(s, planner, victim) {
+  for (const c of Object.values(s.countries)) {
+    if (c.id === planner.id || !alive(s, c.id) || !hearsWarCases(s, c, planner.id)) continue;
+    const text = `War planning: ${planner.name} has secretly begun building a case for war against ${victim === c.id ? 'us' : nameOf(s, victim)}. It can declare war within weeks.`;
+    const r = report(s, c, planner.id, text, 'plan', { act: 'plan', planner: planner.id, victim });
+    if (!r) continue;
+    alert(s, c.id, `Our agents in ${planner.name}: ${text} Act on it in Spies, Reports.`, 'war');
+    if (!c.human) aiActOnPlan(s, c, r);
+  }
+}
 
 export function plant(s, c, target, agents) {
   initSpies(c);
@@ -239,7 +254,14 @@ function gather(s, c, target) {
   for (const al of Object.values(s.alliances)) {
     if (al.secret && al.members.includes(target) && !al.members.includes(c.id) && !lie) facts.push([`${t.name} belongs to a secret pact, ${al.name}, with ${al.members.filter((m) => m !== target).map((m) => nameOf(s, m)).join(', ')}.`, 'secret', { act: 'pact', alliance: al.id }]);
   }
-  if (t.ai?.plan && !lie) facts.push([`War planning: ${t.name} is preparing to attack ${nameOf(s, t.ai.plan)}, within weeks.`, 'plan', { act: 'plan', planner: target, victim: t.ai.plan }]);
+  // A war being justified in secret: only a deep network hears of it
+  const deepEnough = hearsWarCases(s, c, target);
+  for (const victim of Object.keys(t.warCases ?? {})) {
+    const w = warCaseOf(t, victim);
+    if (!deepEnough || !w || w.until < s.week || atWar(s, target, victim) || victim === t.ai?.plan) continue;
+    facts.push([`War planning: ${t.name} ${w.ready > nowWeeks(s) ? 'is secretly building' : 'has secretly prepared'} a case for war against ${victim === c.id ? 'us' : nameOf(s, victim)}.`, 'plan', { act: 'plan', planner: target, victim }]);
+  }
+  if (t.ai?.plan && !lie && deepEnough) facts.push([`War planning: ${t.name} is preparing to attack ${nameOf(s, t.ai.plan)}, within weeks.`, 'plan', { act: 'plan', planner: target, victim: t.ai.plan }]);
   // A turned network sometimes invents a war plan, to provoke us into a costly mistake
   if (lie && chance(s, 0.12)) {
     const victim = pick(s, Object.keys(s.countries).filter((x) => x !== target && x !== c.id && alive(s, x)));

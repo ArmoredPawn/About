@@ -1,6 +1,7 @@
 // Government: the system you run, conscription, the security forces and the press, protests and uprisings,
 // and the measures of the home front.
 
+import { warCaseStatus, justifyDialog } from '../attack.js';
 import { h, money, pct, regionName, troops, bar, tone, nationName } from '../dom.js';
 import { CONSCRIPTION, SECURITY, PRESS, CAUSES } from '../../engine/government.js';
 import { confirmBox, modal, selectField } from '../dialogs.js';
@@ -157,8 +158,7 @@ function homeFront(ctx) {
   const toggle = (on, cmd, danger) => h('button.btn.small', { class: on ? (danger ? 'danger' : 'primary') : '', onclick: () => ctx.send(cmd(!on)) }, on ? 'On' : 'Off');
   const s = ctx.state;
   const wait = (me.cooldown.propaganda ?? -1) - s.week;
-  const caseWait = (me.cooldown.warCase ?? -1) - s.week;
-  const cases = Object.entries(me.warCases ?? {}).filter(([, until]) => until >= s.week);
+  const cases = Object.keys(me.warCases ?? {}).map((x) => [x, warCaseStatus(ctx, x)]).filter(([, st]) => st.state !== 'none');
   // Rivals worth making a case against: anyone we're not allied to or already fighting
   const atWarWith = (x) => s.wars.some((w) => (w.a === s.me && w.b === x) || (w.b === s.me && w.a === x));
   const allies = (x) => s.alliances.some((al) => al.kind === 'military' && al.members.includes(x) && al.members.includes(s.me));
@@ -169,10 +169,10 @@ function homeFront(ctx) {
   return h('div.list',
     row('Address the nation', 'A national address and media blitz: a short boost to approval.', h('button.btn.small', { disabled: wait > 0, onclick: () => ctx.send({ type: 'propaganda' }) }, wait > 0 ? `ready in ${wait} wk` : 'Launch')),
     h('div.item',
-      h('div.item-head', h('span.name', 'Make the case for war'),
-        h('div.row.gap', pickRival, h('button.btn.small', { disabled: caseWait > 0 || !rivals.length, onclick: () => ctx.send({ type: 'warCase', target: pickRival.value }) }, caseWait > 0 ? `ready in ${caseWait} wk` : 'Address'))),
-      h('div.meta', 'A televised address explaining why a war with them is necessary. For six months, a war you start on them meets far less public outcry and fewer anti-war protests, and costs less standing abroad. They will hear about it.'),
-      cases.length ? h('div.meta.good', `Case made against: ${cases.map(([x, until]) => `${nationName(s, x)} (${until - s.week} wk left)`).join(', ')}`) : null),
+      h('div.item-head', h('span.name', 'Justify a war'),
+        h('div.row.gap', pickRival, h('button.btn.small', { disabled: !rivals.length, onclick: () => justifyDialog(ctx, pickRival.value) }, 'Prepare…'))),
+      h('div.meta', 'No war can be declared without a case for it. It takes about 45 seconds to prepare and is kept secret: only a country with a deep spy network inside our government finds out before the declaration. Once ready, it stands for six months.'),
+      cases.length ? h('div.meta', cases.map(([x, st]) => h('div', { class: st.state === 'ready' ? 'good' : '' }, `${nationName(s, x)}: ${st.state === 'ready' ? `ready (until week ${st.until})` : `being prepared, about ${st.secs} s`}`))) : null),
     row('Martial law', 'Troops on the streets: stability up, approval and world standing down.', toggle(me.martial, (on) => ({ type: 'martial', on }), true)),
     me.gov !== 'autocracy' ? row('Snap election', `Go to the polls in four weeks while you are popular. Approval is ${Math.round(me.approval)}%.`,
       h('button.btn.small', { onclick: async () => { if (await confirmBox('Call a snap election?', `An election will be held in four weeks. Approval is ${Math.round(me.approval)}%.`)) ctx.send({ type: 'snapElection' }); } }, 'Call it')) : null,

@@ -1,5 +1,6 @@
 // The card that opens over the map for a province, an army or a fleet.
 
+import { citiesIn, cityDepths } from '../engine/cities.js';
 import { $, h, flag, money, nationName, regionName, troops, num, people, RES_COLORS, RES_LETTERS, fill } from './dom.js';
 import { RESOURCE_INFO, TERRAIN, PROVINCES } from '../engine/data/regions.js';
 import { GEO } from '../engine/data/geo.js';
@@ -21,6 +22,24 @@ const TERRAIN_OF = Object.fromEntries(PROVINCES.map((p) => [p.id, p.terrain]));
 
 export function closeInspector() {
   $('inspector').hidden = true;
+}
+
+// The cities of a province: output, share of the national economy, and which have fallen in a battle
+function provinceCities(ctx, id, { owner, battleBy, prog, gdp, pop, from }) {
+  const s = ctx.state;
+  const list = citiesIn(id, pop);
+  if (!list.length) return null;
+  const fallen = new Set();
+  if (battleBy && prog > 0 && from && GEO[from]) {
+    const depth = cityDepths(id, GEO[from], list);
+    list.forEach((c, i) => { if (depth[i] <= prog / 100) fallen.add(c.name); });
+  }
+  const national = s.countries[owner]?.gdp;
+  return h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'CITIES'),
+    list.map((c) => h('div.row.between.small', { style: { padding: '2px 0' } },
+      h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${(c.pop / 1000).toFixed(1)}M people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `taken by ${nationName(s, battleBy)}`) : null),
+      h('span.mono', `${money(c.share * gdp)}${national ? ` · ${((c.share * gdp) / national * 100).toFixed(1)}%` : ''}`))),
+    h('p.muted.small', { style: { marginTop: '4px' } }, 'Output a year, and share of the national economy. In a battle the front takes the cities one by one, each lost to the defender as it falls. The Cities view on the map shows them all.'));
 }
 
 export function showRegion(ctx, id) {
@@ -86,9 +105,11 @@ export function showRegion(ctx, id) {
         : h('div.actions', h('button.btn.small', { onclick: () => armDialog(ctx, { rebels: id }) }, 'Arm & fund the rebels…'))) : null,
     h('div.facts',
       fact('Population', people(pop)), fact('Output', money(gdp)),
-      h('div', h('span', 'Terrain'), h('b', `${terrain.name} (×${terrain.defend} defence)`), h('button.btn.small.ghost', { style: { marginTop: '2px', padding: '2px 6px' }, onclick: () => ground(ctx, id) }, 'Ground & passes…')), fact('Garrison', mineHeld || ctrl === me ? troops(gar) : `~${troops(Math.round(gar / 10) * 10)}`),
+      h('div', h('span', 'Terrain'), h('b', `${terrain.name} (×${(terrain.defend ** 0.75).toFixed(2)} defence)`), h('button.btn.small.ghost', { style: { marginTop: '2px', padding: '2px 6px' }, onclick: () => ground(ctx, id) }, 'Ground & passes…')), fact('Garrison', mineHeld || ctrl === me ? troops(gar) : `~${troops(Math.round(gar / 10) * 10)}`),
       fact('Infrastructure', `${infra}/10`), fact('Fortifications', `${fort}/5`),
       fact('War damage', `${dmg}%`), fact('Unrest', `${unrest}%`)),
+    row[16] ? h('div.warning.bad', { style: { marginTop: '10px' } }, `☢ Radioactive fallout until week ${row[16]}: nothing can be mined, farmed or built here, and troops inside sicken.`) : null,
+    provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from: row[12] }),
     provincePeople(ctx, id),
     Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'RESOURCES'), Object.entries(res).map(([r, [cur, pot]]) => {
       const info = RESOURCE_INFO[r];

@@ -4,6 +4,8 @@ import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, rand, chance, pick, news, alert, nameOf, alive, addRel, nextId, enemiesOf } from './core.js';
 import { plant } from './spies.js';
+import { TECH_FIELDS } from './data/world.js';
+import { MAX_TECH } from './science.js';
 import { extremeFactor } from './climate.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
@@ -14,7 +16,7 @@ export const INTEL = {
   spy: { name: 'Plant a spy network', cost: 0.2, note: 'Three agents who, once established, relay their armies, arms, plans and secrets until caught.' },
   sabotage: { name: 'Sabotage', cost: 1, region: true, note: 'Wreck oil fields, mines, fabs or factories in one of their provinces.' },
   cyber: { name: 'Cyberattack', cost: 0.5, note: 'Knock out power grids and banks: their output falls for two months.' },
-  steal: { name: 'Steal technology', cost: 1, note: 'Lift research from a field where they lead you.' },
+  steal: { name: 'Steal technology', cost: 2, note: 'Take a whole level of research in a field where they lead you. Hard: it needs agents inside, and if they are caught we get nothing.' },
   destabilize: { name: 'Fund the opposition', cost: 0.5, note: 'Stir protests: their approval and stability fall.' },
 };
 
@@ -36,8 +38,13 @@ export function covertOp(s, c, op, target, regionId) {
   const edge = c.tech.cyber - t.tech.cyber;
   // Agents already inside make every operation easier and safer
   const inside = Math.min(10, c.spies?.[target]?.agents ?? 0);
-  const success = chance(s, clamp(0.45 + 0.06 * edge + 0.03 * inside, 0.1, 0.95));
-  const caught = chance(s, clamp(0.35 - 0.04 * edge - 0.015 * inside + (success ? 0 : 0.2) + 0.05 * ((t.counterIntel ?? 1) - 1), 0.05, 0.8));
+  // Stealing a whole level of research is far harder than other operations, and riskier: the files are guarded
+  // by the best counter-intelligence a country has
+  const hard = op === 'steal';
+  const success = chance(s, hard
+    ? clamp(0.12 + 0.05 * edge + 0.035 * inside - 0.05 * ((t.counterIntel ?? 1) - 1), 0.03, 0.6)
+    : clamp(0.45 + 0.06 * edge + 0.03 * inside, 0.1, 0.95));
+  const caught = chance(s, clamp((hard ? 0.5 : 0.35) - 0.04 * edge - 0.015 * inside + (success ? 0 : 0.2) + 0.05 * ((t.counterIntel ?? 1) - 1), 0.05, 0.9));
   let result = '';
   if (success) {
     switch (op) {
@@ -61,9 +68,18 @@ export function covertOp(s, c, op, target, regionId) {
       case 'steal': {
         const fields = Object.keys(c.tech).filter((f) => t.tech[f] > c.tech[f]);
         if (!fields.length) { result = `${t.name} has nothing we don't already know.`; break; }
+        // Caught with the files: they are seized, and we gain nothing
+        if (caught) { result = `Our agents got into ${t.name}'s laboratories, but were caught with the files before they could get them out.`; break; }
         const f = pick(s, fields);
-        c.progress[f] += 0.6 * 1.5 * Math.pow(1.55, c.tech[f]);
-        result = `Our agents stole ${f} research from ${t.name}.`;
+        c.tech[f] += 1;
+        c.progress[f] = 0;
+        // A project already working toward that level skips ahead to the next one
+        c.research = (c.research ?? []).flatMap((p) => {
+          if (p.field !== f || p.level > c.tech[f]) return [p];
+          if (c.tech[f] >= MAX_TECH) { c.treasury += p.cost * 0.5; return []; }
+          return [{ ...p, level: c.tech[f] + 1 }];
+        });
+        result = `Our agents stole ${t.name}'s ${TECH_FIELDS[f]?.name ?? f} research. Our scientists are now at level ${c.tech[f]}.`;
         break;
       }
       case 'destabilize':

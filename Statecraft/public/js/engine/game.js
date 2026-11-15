@@ -5,7 +5,7 @@ import { RESOURCES } from './data/regions.js';
 import { createState, promoteMinors, calibrateUpkeep } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news } from './core.js';
 import { marketTick, economyTick, debtRatio, debtLimit, upkeep, blockadeEffect } from './economy.js';
-import { militaryTick, militaryStep, garrisons, marchSpeed } from './military.js';
+import { militaryTick, militaryStep, garrisons, marchSpeed, armyFuel } from './military.js';
 import { diplomacyTick } from './diplomacy.js';
 import { aiTick, militaryPower, lostShare } from './ai.js';
 import { eventsTick } from './events.js';
@@ -25,11 +25,16 @@ import { initCrises, crisesTick, crisesView } from './crises.js';
 import { initCoups, coupsTick, coupView, coupOwn } from './coups.js';
 import { decisionsTick } from './decisions.js';
 
+// Under `node --test`, failures throw instead of being logged, so no bug hides behind the safety nets
+const STRICT = typeof process !== 'undefined' && Boolean(process.env?.NODE_TEST_CONTEXT);
+
 export class Game {
   constructor(state) {
     this.s = state;
     this.cache = null;
     upgrade(state);
+    this.heal();
+    this.good = structuredClone(state);
   }
 
   static create({ seed } = {}) {
@@ -61,8 +66,9 @@ export class Game {
     if (s.over) return;
     dt = Math.min(dt, 1 - (s.stepped ?? 0));
     if (!(dt > 0.0005)) return;
-    militaryStep(s, dt);
+    try { militaryStep(s, dt); } catch (e) { this.fault('march', e); }
     s.stepped = (s.stepped ?? 0) + dt;
+    this.heal();
     this.cache = null;
   }
 
@@ -70,33 +76,82 @@ export class Game {
     const s = this.s;
     if (s.over) return;
     s.week++;
-    aiTick(s);
-    diplomacyTick(s);
-    energyTick(s);
-    const world = marketTick(s);
-    economyTick(s, world);
-    financeTick(s);
-    crisesTick(s);
-    tradeTick(s);
-    climateTick(s);
-    spaceTick(s);
-    // Whatever part of the week the real-time steps didn't cover (all of it, without a running clock)
-    militaryStep(s, Math.max(0, 1 - (s.stepped ?? 0)));
+    // Anything that went wrong since the last week (a command, a real-time step) is put right before it can spread
+    this.heal();
+    let world;
+    // Each part of the week runs on its own: if one fails, it is logged and the rest of the world still moves
+    const phases = [
+      ['ai', () => aiTick(s)],
+      ['diplomacy', () => diplomacyTick(s)],
+      ['energy', () => energyTick(s)],
+      ['market', () => { world = marketTick(s); }],
+      ['economy', () => economyTick(s, world)],
+      ['finance', () => financeTick(s)],
+      ['crises', () => crisesTick(s)],
+      ['trade', () => tradeTick(s)],
+      ['climate', () => climateTick(s)],
+      ['space', () => spaceTick(s)],
+      // Whatever part of the week the real-time steps didn't cover (all of it, without a running clock)
+      ['march', () => militaryStep(s, Math.max(0, 1 - (s.stepped ?? 0)))],
+      ['military', () => { s.stepped = 0; militaryTick(s); }],
+      ['government', () => governmentTick(s, garrisons(s))],
+      ['peoples', () => peoplesTick(s)],
+      ['aid', () => aidTick(s)],
+      ['spies', () => spiesTick(s)],
+      ['coups', () => coupsTick(s)],
+      ['events', () => eventsTick(s)],
+      ['decisions', () => decisionsTick(s)],
+    ];
+    for (const [name, run] of phases) {
+      try { run(); } catch (e) { this.fault(name, e); }
+    }
     s.stepped = 0;
-    militaryTick(s);
-    governmentTick(s, garrisons(s));
-    peoplesTick(s);
-    aidTick(s);
-    spiesTick(s);
-    coupsTick(s);
-    eventsTick(s);
-    decisionsTick(s);
     // Whatever the week's bills left unpaid is borrowed
     for (const c of Object.values(s.countries)) if (c.treasury < 0) { c.debt += -c.treasury; c.treasury = 0; }
     // There is no time limit: the game ends only when one country rules every province in the world
     const conqueror = worldConqueror(s);
     if (conqueror) this.finish(conqueror);
+    this.heal();
+    // The last good state, to put any figure that goes wrong back to
+    this.good = structuredClone(s);
     this.cache = null;
+  }
+
+  // A part of the week failed. In the tests that is a bug to fix at once; in a game being played, the world
+  // carries on and the error is logged.
+  fault(phase, e) {
+    if (STRICT) throw e;
+    this.faults = (this.faults ?? 0) + 1;
+    console.error(`Statecraft: week ${this.s.week}: the ${phase} update failed`, e);
+  }
+
+  // A safety net. A NaN (or an infinity) anywhere in the books spreads to every figure computed from it within
+  // a week, and every number on the screen reads NaN. Any such value is put back to what it was at the end of the
+  // last good week (or 0 if it is new) before anyone sees it, and logged so the cause can be found and fixed.
+  heal() {
+    const fixed = [];
+    const path = [];
+    const walk = (o, good) => {
+      for (const k in o) {
+        const v = o[k];
+        if (typeof v === 'number') {
+          if (Number.isFinite(v)) continue;
+          const was = good?.[k];
+          o[k] = typeof was === 'number' && Number.isFinite(was) ? was : 0;
+          if (fixed.length < 12) fixed.push([...path, k].join('.'));
+        } else if (v && typeof v === 'object') {
+          path.push(k);
+          walk(v, good && typeof good === 'object' ? good[k] : undefined);
+          path.pop();
+        }
+      }
+    };
+    walk(this.s, this.good);
+    if (fixed.length) {
+      this.healed = (this.healed ?? 0) + fixed.length;
+      console.warn(`Statecraft: week ${this.s.week}: repaired ${fixed.length} invalid figure(s): ${fixed.join(', ')}`);
+    }
+    return fixed;
   }
 
   finish(winner) {
@@ -109,7 +164,14 @@ export class Game {
   }
 
   command(cid, cmd) {
-    const err = runCommand(this.s, cid, cmd);
+    let err;
+    try {
+      err = runCommand(this.s, cid, cmd);
+    } catch (e) {
+      this.fault(`"${cmd?.type}" order`, e);
+      err = 'That order could not be carried out.';
+    }
+    this.heal();
     this.cache = null;
     return err;
   }
@@ -140,7 +202,12 @@ export class Game {
     // Only the fleets that are moving or fighting change between weekly updates: [id, x, y, sea, ships, battle].
     const changed = new Set(Object.values(s.fleets ?? {}).filter((f) => f.route?.length || f.reachedStep === s.stepNo).map((f) => f.id));
     const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.x, f.y, f.at, f.ships, f.battle ? 1 : 0]);
-    return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles };
+    // Cargo ships at sea: [id, x, y], for the ones this leader can see
+    const me = s.countries[cid];
+    const sees = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
+    const ships = (s.shipments ?? []).filter((x) => !x.done && x.mode === 'sea' && x.x != null && (!(x.covert || x.secret) || sees(x.buyer) || sees(x.seller)))
+      .map((x) => [x.id, x.x, x.y]);
+    return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles, ships };
   }
 }
 
@@ -155,7 +222,8 @@ function armiesFor(s, cid) {
   return Object.values(s.armies).map((a) => {
     const own = friend(a.owner) || knows(a.owner);
     return own
-      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true }
+      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true,
+        auto: Boolean(a.auto), buildup: a.buildup ?? null, fuel: { now: armyFuel(a), hold: armyFuel(a, 'hold'), march: armyFuel(a, 'march'), fight: armyFuel(a, 'fight') } }
       : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: seen ? r0(a.troops) : approx(a.troops, 5), tanks: seen ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen };
   });
 }
@@ -259,7 +327,7 @@ export function view(s, cid, { gar, ranks }) {
   const regions = ORDER.map((id) => {
     const r = s.regions[id];
     const g = gar.get(id);
-    return [r.owner, r.ctrl, r0(r.dmg * 100), r.infra, r.fort, r.battle?.by ?? 0, r0(r.battle?.prog ?? 0), r0(r.unrest), g ? r0(g.troops) : 0, r1(r.gdp), r1(r.pop), r.revolt ? r1(r.revolt.rebels) : 0, r.battle?.from ?? 0, r0(r.loyalty ?? 50), r.policy ?? 'integrate', r.people ?? r.owner];
+    return [r.owner, r.ctrl, r0(r.dmg * 100), r.infra, r.fort, r.battle?.by ?? 0, r0(r.battle?.prog ?? 0), r0(r.unrest), g ? r0(g.troops) : 0, r1(r.gdp), r1(r.pop), r.revolt ? r1(r.revolt.rebels) : 0, r.battle?.from ?? 0, r0(r.loyalty ?? 50), r.policy ?? 'integrate', r.people ?? r.owner, (r.fallout?.until ?? 0) > s.week ? r.fallout.until : 0];
   });
   const resources = {};
   for (const id of ORDER) {
@@ -286,8 +354,11 @@ export function view(s, cid, { gar, ranks }) {
     un: s.un.map((r) => ({ ...r, votes: r.done ? r.votes : { [cid]: r.votes[cid] ?? null }, count: Object.keys(r.votes).length })),
     market: { price: s.market.price, history: s.market.history, offer: s.market.offer, bid: s.market.bid, sellers: me ? marketView(s, cid) : {} },
     chokepoints: s.chokepoints,
-    shipments: (s.shipments ?? []).filter((x) => !x.covert || x.buyer === cid || x.seller === cid || knows(x.buyer) || knows(x.seller))
-      .map((x) => ({ id: x.id, seller: x.seller, buyer: x.buyer, res: x.res, qty: x.qty, cost: r1(x.cost), mode: x.mode, straits: x.straits, transit: x.transit, left: x.left, total: x.total, covert: x.covert })),
+    shipments: (s.shipments ?? []).filter((x) => !x.done && (!(x.covert || x.secret) || x.buyer === cid || x.seller === cid || knows(x.buyer) || knows(x.seller)))
+      .map((x) => ({
+        id: x.id, seller: x.seller, buyer: x.buyer, res: x.res, qty: x.qty, cost: r1(x.cost || x.payment || 0), mode: x.mode, straits: x.straits, transit: x.transit,
+        left: x.left, total: x.total, covert: x.covert, secret: x.secret, deal: Boolean(x.deal), lane: x.lane ?? null, x: x.x, y: x.y,
+      })),
     rel: me ? Object.fromEntries(Object.keys(s.countries).map((id) => [id, r0(s.rel[id < cid ? `${id}|${cid}` : `${cid}|${id}`] ?? (id === cid ? 100 : 0))])) : {},
     news: s.news.slice(-150),
     winter: s.winterUntil > s.week,
@@ -306,6 +377,7 @@ function own(s, c) {
     'conscription', 'conscripts', 'security', 'press', 'protests', 'threat', 'draftDrag', 'protestDrag', 'strike', 'civilWar', 'rebels',
     'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost', 'warCases', 'blockadeCarriers',
     'refugees', 'refugeeCost', 'refugeesFrom', 'borderClosed', 'refitUntil', 'cartelCheat', 'cartelCaught', 'releasing', 'carbonTax', 'carbonEffect', 'carbonRevenue', 'emissions',
+    'fuel', 'fuelShort', 'fuelCrisis', 'lines', 'neglect', 'powerSharing',
   ]);
   out.spies = Object.fromEntries(Object.entries(c.spies ?? {}).map(([k, n]) => [k, { agents: n.agents, since: n.since }]));
   out.reports = (c.reports ?? []).slice(-120).map(({ turned, ...r }) => r);

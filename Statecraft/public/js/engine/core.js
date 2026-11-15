@@ -73,12 +73,38 @@ export function setRel(s, a, b, value) {
 
 /* ---------- Wars ---------- */
 
+// How badly a country's forces are short of fuel, 0 to 1: the army's own shortfall (it gets fuel before the
+// civilian economy does), or half the country's general oil shortage, whichever is worse
+export const fuelCut = (c) => Math.max(c?.fuelShort ?? 0, (c?.short?.oil ?? 0) * 0.4);
+// Oil is traded in millions of barrels a day; held for a week that is seven million barrels
+export const BARRELS = 7;
+
 export function warBetween(s, a, b) {
   return s.wars.find((w) => (w.a === a && w.b === b) || (w.a === b && w.b === a));
 }
 export const atWar = (s, a, b) => a !== b && Boolean(warBetween(s, a, b));
-// Has this leader made the case for war against `target` to the nation (an address that is still fresh)?
-export const warCaseMade = (s, c, target) => (c?.warCases?.[target] ?? -1) >= s.week;
+// A war has to be justified before it is declared: the case takes JUSTIFY_WEEKS to prepare (about 45 seconds at
+// normal speed), in secret, and once ready it stands for WAR_CASE_WEEKS.
+export const JUSTIFY_WEEKS = 5;
+export const WAR_CASE_WEEKS = 26;
+// The game clock part-way through the week
+export const nowWeeks = (s) => s.week + (s.stepped ?? 0);
+// { ready, until, since } or null (a bare week number from an older save counts as a finished case)
+export function warCaseOf(c, target) {
+  const w = c?.warCases?.[target];
+  if (w == null) return null;
+  return typeof w === 'number' ? { ready: 0, until: w, since: 0 } : w;
+}
+// Is the case against `target` ready, so war can be declared?
+export const warCaseMade = (s, c, target) => {
+  const w = warCaseOf(c, target);
+  return Boolean(w) && w.ready <= nowWeeks(s) + 1e-6 && w.until >= s.week;
+};
+// Weeks until a case being prepared is ready (0 if none is under way)
+export const warCasePending = (s, c, target) => {
+  const w = warCaseOf(c, target);
+  return w && w.until >= s.week && w.ready > nowWeeks(s) + 1e-6 ? w.ready - nowWeeks(s) : 0;
+};
 // Do the people accept every war this country is in? Defensive wars and wars the leader explained to them are
 // accepted; an unexplained war of choice is not.
 export function warsAccepted(s, id) {

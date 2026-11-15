@@ -25,9 +25,9 @@ export function renderHud(ctx) {
     stat(pct(me.growth, 1, true), 'Growth', tone(me.growth, 2, 0)),
     stat(pct(me.infl), 'Inflation', me.infl > 8 ? 'bad' : me.infl > 4 ? 'warn' : ''),
     stat(money(me.treasury), 'Reserves', me.treasury < me.gdp * 0.005 ? 'warn' : ''),
-    stat(`${Math.round(me.debtRatio)}%`, 'Debt/GDP', me.debtRatio > 120 ? 'warn' : ''),
-    stat(`${Math.round(me.approval)}%`, 'Approval', tone(me.approval, 50, 30)),
-    stat(`${Math.round(me.stability)}`, 'Stability', tone(me.stability, 60, 30)),
+    stat(whole(me.debtRatio, '%'), 'Debt/GDP', me.debtRatio > 120 ? 'warn' : ''),
+    stat(whole(me.approval, '%'), 'Approval', tone(me.approval, 50, 30)),
+    stat(whole(me.stability), 'Stability', tone(me.stability, 60, 30)),
     stat(`#${s.ranks.find((r) => r.id === s.me)?.rank ?? '—'}`, 'Power rank'),
   ) : h('div.hud-stats');
 
@@ -43,6 +43,9 @@ export function renderHud(ctx) {
     clock, stats, actions,
   );
 }
+
+// A whole number for the bar, or a dash while the figure isn't known
+const whole = (v, unit = '') => (Number.isFinite(v) ? `${Math.round(v)}${unit}` : '—');
 
 function stat(value, label, cls = '') {
   return h('div.stat', h('b', { class: cls }, value), h('span', label));

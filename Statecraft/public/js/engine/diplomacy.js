@@ -1,12 +1,13 @@
 // Diplomacy: war and peace, alliances, treaties, deals, sanctions, the straits and the UN Security Council.
 
+import { routeFor, ship } from './trade.js';
 import { regimeChange } from './coups.js';
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { CHOKEPOINTS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
 import {
   P5, clamp, news, alert, nameOf, nation, isMinor, alive, atWar, allied, enemiesOf, alliancesOf, treaty, rel, addRel,
-  setRel, nextId, money, warBetween, warCaseMade,
+  setRel, nextId, money, warBetween, warCaseMade, warCasePending,
 } from './core.js';
 import { orderArmy } from './military.js';
 
@@ -39,6 +40,13 @@ export function declareWar(s, c, target, goal = 'conquest', { leaveShared = fals
   if (blocking && !leaveShared) return `You are both in ${blocking.name}. Leave it before going to war.`;
   if (leaveShared) for (const al of shared) leaveAlliance(s, c, al.id);
 
+  // No war without a case for it, prepared in advance (Diplomacy, or when sending an army)
+  if (!warCaseMade(s, c, target)) {
+    const wait = warCasePending(s, c, target);
+    return wait > 0
+      ? `The case for war against ${t.name} is still being prepared: ready in about ${Math.ceil(wait)} week${Math.ceil(wait) === 1 ? '' : 's'}.`
+      : `You must justify a war on ${t.name} before declaring it. Start preparing the case (it takes about 45 seconds); it stays secret unless their spies are deep inside our government.`;
+  }
   const nap = treaty(s, 'nap', c.id, target);
   const claim = c.claims.some((rid) => s.regions[rid]?.ctrl === target);
   // A leader who has made the case to the nation goes to war with the public behind them
@@ -55,6 +63,8 @@ export function declareWar(s, c, target, goal = 'conquest', { leaveShared = fals
   s.treaties = s.treaties.filter((x) => !(['fta', 'access', 'deal'].includes(x.kind) && ((x.a === c.id && x.b === target) || (x.b === c.id && x.a === target))));
   startWar(s, c.id, target, goal);
   if (justified || claim) warBetween(s, c.id, target).justified = c.id;
+  // The case has served its purpose
+  if (c.warCases) delete c.warCases[target];
   news(s, `${c.name} declares war on ${t.name}${claim ? ', pressing its territorial claims' : justified ? ' after its leader made the case to the nation' : ''}.`, 'war', [c.id, target]);
   if (s.countries[target]) {
     s.countries[target].rally += 14;
@@ -233,6 +243,8 @@ function validate(s, from, to, kind, t) {
       const weeks = Number(t.weeks);
       if (!(qty > 0) || !(price >= 0) || !(weeks >= 4 && weeks <= 520)) return 'Set an amount, a yearly price and a length of 4 to 520 weeks.';
       if (t.seller !== from && t.seller !== to) return 'Choose who sells.';
+      const exclusive = s.treaties.find((x) => x.kind === 'deal' && x.a === t.seller && x.res === t.res && x.exclusive);
+      if (exclusive) return `${nameOf(s, t.seller)} has promised all its ${RESOURCE_INFO[t.res].name.toLowerCase()} to ${nameOf(s, exclusive.b)}.`;
       return null;
     }
     case 'loan': {
@@ -252,7 +264,10 @@ function validate(s, from, to, kind, t) {
       if (t.reparations) {
         const payer = s.countries[t.reparations.from];
         if (!payer || ![from, to].includes(t.reparations.from)) return 'Reparations must be paid by one side of the war.';
-        if (t.reparations.amount > payer.gdp * 0.1) return 'Reparations can be at most 10% of the payer\'s GDP a year.';
+        const amount = Number(t.reparations.amount);
+        const years = Number(t.reparations.years ?? 5);
+        if (!(amount > 0) || !(years >= 1 && years <= 30)) return 'Set reparations as an amount a year, for 1 to 30 years.';
+        if (amount > payer.gdp * 0.1) return 'Reparations can be at most 10% of the payer\'s GDP a year.';
       }
       if (t.regime != null && ![from, to].includes(t.regime)) return 'A new government can only be installed on one side of the war.';
       return null;
@@ -277,7 +292,7 @@ export function describe(s, p) {
     case 'deal': {
       const info = RESOURCE_INFO[t.res];
       const buyer = t.seller === p.from ? p.to : p.from;
-      return `${nameOf(s, t.seller)} sells ${nameOf(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year for ${money(Number(t.price))} a year, for ${t.weeks} weeks`;
+      return `${nameOf(s, t.seller)} sells ${nameOf(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year for ${money(Number(t.price))} a year, for ${t.weeks} weeks${t.exclusive ? ', and to no one else' : ''}${t.secret ? ' (in secret)' : ''}`;
     }
     case 'loan': return `a loan of ${money(Number(t.amount))} over ${t.years} years at ${t.rate}%`;
     case 'peace': {
@@ -350,9 +365,13 @@ export function respond(s, cid, id, accept) {
       break;
     case 'deal': {
       const buyer = t.seller === p.from ? p.to : p.from;
-      s.treaties.push({ id: nextId(s, 't'), kind: 'deal', a: t.seller, b: buyer, res: t.res, qty: Number(t.qty), price: Number(t.price), since: s.week, until: s.week + Number(t.weeks) });
+      s.treaties.push({
+        id: nextId(s, 't'), kind: 'deal', a: t.seller, b: buyer, res: t.res, qty: Number(t.qty), price: Number(t.price), since: s.week, until: s.week + Number(t.weeks),
+        secret: Boolean(t.secret), exclusive: Boolean(t.exclusive),
+      });
       addRel(s, p.from, p.to, 6);
-      news(s, `${nameOf(s, t.seller)} agrees to supply ${nameOf(s, buyer)} with ${RESOURCE_INFO[t.res].name.toLowerCase()}.`, 'trade', [p.from, p.to]);
+      // A secret deal makes no headlines: only spies deep inside either government find out
+      if (!t.secret) news(s, `${nameOf(s, t.seller)} agrees to supply ${nameOf(s, buyer)} with ${RESOURCE_INFO[t.res].name.toLowerCase()}${t.exclusive ? ', and no one else' : ''}.`, 'trade', [p.from, p.to]);
       break;
     }
     case 'loan': {
@@ -533,7 +552,10 @@ export function setChokepoint(s, c, key, close) {
   if (close) {
     if (state.closedBy) return `The ${cp.name} is already closed.`;
     state.closedBy = c.id;
+    state.closedAt = s.week;
     c.rep = Math.max(0, c.rep - 10);
+    // Every country whose trade runs through it takes it personally
+    for (const u of cp.users ?? []) if (s.countries[u] && u !== c.id && !allied(s, u, c.id)) addRel(s, u, c.id, -20);
     for (const other of Object.values(s.countries)) if (other.id !== c.id && !allied(s, other.id, c.id)) addRel(s, other.id, c.id, -8);
     news(s, `${c.name} closes the ${cp.name} to shipping. ${cp.note}`, 'trade', [c.id]);
   } else {
@@ -635,6 +657,8 @@ function aiVote(s, voter, r) {
 
 /* ---------- Weekly upkeep ---------- */
 
+const CONVOY_WEEKS = 2;
+
 export function diplomacyTick(s) {
   for (const p of Object.values(s.proposals)) {
     if (p.expires > s.week) continue;
@@ -643,18 +667,25 @@ export function diplomacyTick(s) {
     alert(s, p.from, `${nameOf(s, p.to)} let your proposal lapse: ${describe(s, p)}.`, 'warn');
   }
   // Resource deals deliver weekly; loans and reparations are paid in the budget
+  // A deal sails as a convoy every two weeks, carrying two weeks' worth: it can be seen at sea, escorted, and
+  // stopped like any other cargo. The buyer pays on arrival.
   for (const t of s.treaties) {
     if (t.kind !== 'deal') continue;
     const seller = nation(s, t.a);
     const buyer = nation(s, t.b);
     if (!seller || !buyer) continue;
-    const want = t.qty;
+    if (s.week - (t.lastConvoy ?? t.since - CONVOY_WEEKS) < CONVOY_WEEKS) continue;
+    t.lastConvoy = s.week;
+    const want = t.qty * CONVOY_WEEKS;
     const give = Math.min(want, Math.max(0, seller.stock[t.res] ?? 0));
+    if (give <= 0) continue;
+    const way = routeFor(s, t.a, t.b);
+    if (!way) {
+      alert(s, t.b, `No ${RESOURCE_INFO[t.res].name.toLowerCase()} could leave ${nameOf(s, t.a)} under our deal: there is no open route.`, 'warn');
+      continue;
+    }
     seller.stock[t.res] -= give;
-    buyer.stock[t.res] = (buyer.stock[t.res] ?? 0) + give;
-    const pay = (t.price / 52) * (want ? give / want : 0);
-    if (s.countries[t.b]) s.countries[t.b].treasury -= pay;
-    if (s.countries[t.a]) s.countries[t.a].treasury += pay;
+    ship(s, { seller: t.a, buyer: t.b, res: t.res, qty: give, cost: 0, deal: t.id, secret: t.secret, payment: (t.price / 52) * CONVOY_WEEKS * (give / want), route: way });
   }
   const ending = s.treaties.filter((t) => t.until <= s.week);
   for (const t of ending) {
