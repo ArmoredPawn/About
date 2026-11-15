@@ -12,6 +12,9 @@ import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, chance, rand, pick, alert, news, nameOf, alive, addRel, allied, troopsLabel, money, rel, warCaseOf, atWar, nowWeeks } from './core.js';
 import { revealAlliance } from './diplomacy.js';
+import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
+import { worldFlows, routeFor, CHOKEPOINTS } from './trade.js';
+import { pipelineDef, pipelineFlows } from './energy.js';
 
 const regionName = (id) => REGION_NAMES[id] ?? id;
 
@@ -134,6 +137,7 @@ export function intelAction(s, c, { id, action }) {
   else if (r.act === 'pact' && action === 'expose') err = exposePact(s, c, r);
   else if (r.act === 'nukes' && action === 'expose') err = exposeNukes(s, c, r);
   else if (r.act === 'rollup' && action === 'rollup') err = rollUp(s, c, r);
+  else if (r.act === 'supply' && action === 'expose') err = exposeSupply(s, c, r);
   else return "That isn't something we can do with this report.";
   if (!err) r.used = action;
   return err;
@@ -274,6 +278,104 @@ function gather(s, c, target) {
   if (big.length) facts.push([`The mood is sour: ${big.length} protest movement${big.length > 1 ? 's' : ''} on the streets; stability ${Math.round(t.stability)}.`, 'mood']);
   for (const [other, net] of Object.entries(t.spies ?? {})) if (other === c.id && !lie) facts.push([`${t.name} runs a network of about ${net.agents} agents inside our country.`, 'counter', { act: 'rollup', target }]);
   return facts;
+}
+
+/* ---------- Tracing a country's supply lines ---------- */
+
+// Where a country gets its raw materials: for each resource it imports, how much of what it uses comes from
+// abroad, who sells it and which straits or borders it passes; its resource deals (secret ones included), its
+// pipelines, and the cargoes at sea bound for it right now. A turned network names the wrong suppliers, and
+// keeps the secret deals secret.
+export function supplyPicture(s, target, lie = false) {
+  const t = s.countries[target];
+  if (!t) return null;
+  const others = [...Object.keys(s.countries), ...Object.keys(s.minors)].filter((x) => x !== target && alive(s, x));
+  const fake = new Map();
+  const who = (id) => {
+    if (!lie) return id;
+    if (!fake.has(id)) fake.set(id, chance(s, 0.65) ? pick(s, others) ?? id : id);
+    return fake.get(id);
+  };
+  const way = (from) => {
+    const r = routeFor(s, from, target);
+    if (!r) return { straits: [], transit: [] };
+    return { straits: r.straits.map((k) => CHOKEPOINTS[k]?.name ?? k), transit: r.transit.filter((x) => x !== from && x !== target) };
+  };
+  const flows = worldFlows(s, Infinity, target).filter((f) => f[3] > 0);
+  const res = [];
+  for (const r of RESOURCES) {
+    const dem = t.demand?.[r] ?? 0;
+    const imp = -(t.net?.[r] ?? 0);
+    if (dem <= 0 || imp <= dem * 0.02) continue;
+    const suppliers = flows.filter((f) => f[2] === r).slice(0, 4).map(([from, , , v]) => ({ id: who(from), value: v, ...way(from) }));
+    const straits = [...new Set(suppliers.flatMap((x) => x.straits))];
+    res.push({ r, imported: clamp(imp / dem, 0, 1), suppliers, straits });
+  }
+  res.sort((a, b) => b.imported - a.imported);
+  const deals = s.treaties.filter((d) => d.kind === 'deal' && d.b === target && (!lie || !d.secret))
+    .map((d) => ({ id: d.id, from: who(d.a), res: d.res, price: d.price, secret: Boolean(d.secret) }));
+  // A turned network sometimes invents a secret deal, to provoke us into a false accusation
+  if (lie && res.length && chance(s, 0.4)) {
+    const x = pick(s, res);
+    deals.push({ id: null, from: pick(s, others), res: x.r, price: Math.max(0.5, (x.suppliers[0]?.value ?? 2) * 0.6), secret: true });
+  }
+  const pipelines = (s.pipelines ?? []).flatMap((p) => {
+    const def = pipelineDef(p.id);
+    if (!def?.buyers?.includes(target) || !pipelineFlows(s, p, target)) return [];
+    return [{ name: def.name, from: def.seller, res: def.res, share: def.share }];
+  });
+  const cargoes = (s.shipments ?? []).filter((sh) => sh.buyer === target && !sh.done && (!lie || !(sh.covert || sh.secret)))
+    .map((sh) => ({ from: who(sh.seller), res: sh.res, qty: sh.qty, covert: Boolean(sh.covert), secret: Boolean(sh.secret), mode: sh.mode, left: sh.left, straits: sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k) }));
+  return { res, deals, pipelines, cargoes };
+}
+
+// The operation worked: the agents send home what they found, as one report
+export function traceSupply(s, c, target) {
+  initSpies(c);
+  const t = s.countries[target];
+  const turned = Boolean(c.spies?.[target]?.turned);
+  const p = supplyPicture(s, target, turned);
+  if (!p) return 'That government is gone.';
+  const resName = (r) => RESOURCE_INFO[r].name.toLowerCase();
+  const parts = p.res.slice(0, 4).map((x) => `${resName(x.r)} ${Math.round(x.imported * 100)}% imported${x.suppliers.length ? `, mostly from ${x.suppliers.slice(0, 2).map((y) => nameOf(s, y.id)).join(' and ')}` : ''}${x.straits.length ? ` through ${x.straits.join(', ')}` : ''}`);
+  const hidden = p.deals.filter((d) => d.secret).length + p.cargoes.filter((x) => x.covert).length;
+  const text = `Supply lines: ${p.res.length ? `${t.name} buys ${parts.join('; ')}.` : `${t.name} imports almost nothing: it lives on its own resources.`}${hidden ? ` We found ${hidden} secret or sanctions-busting supply line${hidden > 1 ? 's' : ''}.` : ''}`;
+  // Not the routine figures: it is always new, and always filed
+  c.reportSeen ??= {};
+  delete c.reportSeen[`${target}|${text}`];
+  report(s, c, target, text, 'supply', { turned, supply: p, ...(hidden ? { act: 'supply', target } : {}) });
+  return null;
+}
+
+// Expose the secret deals and the sanctions-busting trade a supply report turned up
+function exposeSupply(s, c, r) {
+  const t = s.countries[r.target];
+  const deals = (r.supply?.deals ?? []).filter((d) => d.secret);
+  const busting = (r.supply?.cargoes ?? []).filter((x) => x.covert);
+  if (r.turned || (!deals.length && !busting.length)) {
+    news(s, `${c.name} accuses ${t.name} of buying in secret and around sanctions. The evidence doesn't hold up.`, 'trade', [c.id, r.target]);
+    c.rep = Math.max(0, c.rep - 6);
+    addRel(s, c.id, r.target, -15);
+    alert(s, c.id, `The supply lines we exposed were a fabrication. Our network in ${t.name} has probably been turned.`, 'bad');
+    return null;
+  }
+  const names = new Set();
+  for (const d of deals) {
+    const deal = s.treaties.find((x) => x.id === d.id);
+    if (deal) deal.secret = false;
+    names.add(d.from);
+  }
+  for (const x of busting) names.add(x.from);
+  const partners = [...names].filter((x) => s.countries[x] || s.minors[x]);
+  news(s, `${c.name} reveals that ${t.name} has been buying in secret${busting.length ? ' and through shell companies around sanctions' : ''}, from ${partners.map((x) => nameOf(s, x)).join(', ')}.`, 'trade', [c.id, r.target, ...partners]);
+  t.rep = Math.max(0, t.rep - 4);
+  addRel(s, c.id, r.target, -12);
+  for (const x of partners) {
+    const n = s.countries[x];
+    if (n) { n.rep = Math.max(0, n.rep - 3); addRel(s, c.id, x, -8); }
+  }
+  alert(s, c.id, `We exposed ${t.name}'s hidden supply lines. Its suppliers are embarrassed, and angry with us.`, 'good');
+  return null;
 }
 
 /* ---------- The weekly tick ---------- */

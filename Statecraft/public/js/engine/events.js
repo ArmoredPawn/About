@@ -3,7 +3,7 @@
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, rand, chance, pick, news, alert, nameOf, alive, addRel, nextId, enemiesOf } from './core.js';
-import { plant } from './spies.js';
+import { plant, traceSupply } from './spies.js';
 import { TECH_FIELDS } from './data/world.js';
 import { MAX_TECH } from './science.js';
 import { extremeFactor } from './climate.js';
@@ -17,6 +17,7 @@ export const INTEL = {
   sabotage: { name: 'Sabotage', cost: 1, region: true, note: 'Wreck oil fields, mines, fabs or factories in one of their provinces.' },
   cyber: { name: 'Cyberattack', cost: 0.5, note: 'Knock out power grids and banks: their output falls for two months.' },
   steal: { name: 'Steal technology', cost: 2, note: 'Take a whole level of research in a field where they lead you. Hard: it needs agents inside, and if they are caught we get nothing.' },
+  supply: { name: 'Trace their supply lines', cost: 1.5, wait: 12, note: 'Find out where they get their raw materials: who sells them what, through which straits, and any secret deals or sanctions-busting. Very hard: it needs a settled network of at least three agents inside, and customs files are well guarded.' },
   destabilize: { name: 'Fund the opposition', cost: 0.5, note: 'Stir protests: their approval and stability fall.' },
 };
 
@@ -25,6 +26,11 @@ export function covertOp(s, c, op, target, regionId) {
   const t = s.countries[target];
   if (!def || !t || target === c.id || !alive(s, target)) return 'Pick an operation and a country.';
   if (op === 'spy') return plant(s, c, target, 3);
+  // Tracing supply lines means reading customs ledgers and shipping manifests: only agents already inside can
+  if (op === 'supply') {
+    const n = c.spies?.[target];
+    if (!n || n.agents < 3 || s.week - n.since < 4) return `This needs a settled network of at least three agents inside ${t.name} (plant agents under Networks and give them four weeks).`;
+  }
   const key = `intel:${op}:${target}`;
   if ((c.cooldown[key] ?? -1) > s.week) return `Our agents need ${c.cooldown[key] - s.week} more weeks before trying that again.`;
   const cost = def.cost * (0.5 + Math.min(1, c.gdp / 2000) * 0.5);
@@ -34,16 +40,19 @@ export function covertOp(s, c, op, target, regionId) {
     if (!reg || reg.ctrl !== target) return `Pick a province held by ${t.name}.`;
   }
   c.treasury -= cost;
-  c.cooldown[key] = s.week + 8;
+  c.cooldown[key] = s.week + (def.wait ?? 8);
   const edge = c.tech.cyber - t.tech.cyber;
   // Agents already inside make every operation easier and safer
   const inside = Math.min(10, c.spies?.[target]?.agents ?? 0);
   // Stealing a whole level of research is far harder than other operations, and riskier: the files are guarded
   // by the best counter-intelligence a country has
-  const hard = op === 'steal';
-  const success = chance(s, hard
-    ? clamp(0.12 + 0.05 * edge + 0.035 * inside - 0.05 * ((t.counterIntel ?? 1) - 1), 0.03, 0.6)
-    : clamp(0.45 + 0.06 * edge + 0.03 * inside, 0.1, 0.95));
+  // Tracing where their raw materials come from is harder still: the agents must piece it together from many files
+  const hard = op === 'steal' || op === 'supply';
+  const success = chance(s, op === 'supply'
+    ? clamp(0.06 + 0.04 * edge + 0.02 * inside - 0.05 * ((t.counterIntel ?? 1) - 1), 0.02, 0.4)
+    : hard
+      ? clamp(0.12 + 0.05 * edge + 0.035 * inside - 0.05 * ((t.counterIntel ?? 1) - 1), 0.03, 0.6)
+      : clamp(0.45 + 0.06 * edge + 0.03 * inside, 0.1, 0.95));
   const caught = chance(s, clamp((hard ? 0.5 : 0.35) - 0.04 * edge - 0.015 * inside + (success ? 0 : 0.2) + 0.05 * ((t.counterIntel ?? 1) - 1), 0.05, 0.9));
   let result = '';
   if (success) {
@@ -82,6 +91,10 @@ export function covertOp(s, c, op, target, regionId) {
         result = `Our agents stole ${t.name}'s ${TECH_FIELDS[f]?.name ?? f} research. Our scientists are now at level ${c.tech[f]}.`;
         break;
       }
+      case 'supply':
+        traceSupply(s, c, target);
+        result = `Our agents in ${t.name} pieced together its supply lines from customs files and shipping manifests. See Spies, Reports.`;
+        break;
       case 'destabilize':
         t.approval = Math.max(0, t.approval - 2);
         t.stability = Math.max(0, t.stability - 4);

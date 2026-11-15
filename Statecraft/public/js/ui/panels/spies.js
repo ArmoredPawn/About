@@ -3,6 +3,7 @@
 
 import { backCoupDialog } from './power.js';
 import { h, flag, money, nationName } from '../dom.js';
+import { RESOURCE_INFO } from '../../engine/data/regions.js';
 import { INTEL } from '../../engine/events.js';
 import { COUNTER_INTEL, MAX_AGENTS } from '../../engine/spies.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
@@ -35,7 +36,7 @@ function networks(ctx) {
         h('li', 'Reports every two weeks: armies on the move, weapons being built, secret pacts, war plans, nuclear programmes, research and the treasury.'),
         h('li', 'Discoveries you can act on: warn a country it is about to be attacked, expose a war plan, a secret pact or a nuclear programme, or roll up their spies in our country.'),
         h('li', 'Deep inside (enough agents, good tradecraft): their armies\' orders on our map, their full dossier, and an 8% edge for our armies fighting them.'),
-        h('li', 'Easier, safer covert operations (sabotage, cyberattacks, stealing technology).'))),
+        h('li', 'Easier, safer covert operations (sabotage, cyberattacks, stealing technology), and some that only work with agents inside, like tracing where a country gets its raw materials.'))),
     h('p.muted.small', { style: { marginTop: '6px' } }, 'Agents take about four weeks to settle in. The bigger the network, the likelier it is to be caught, and a caught network may be turned to feed us lies: act on those and it backfires.'),
     h('div.list', { style: { marginTop: '10px' } }, list.length ? list.map(([id, n]) => {
       const age = s.week - n.since;
@@ -72,7 +73,7 @@ function plantDialog(ctx, target) {
 
 /* ---------- Reports ---------- */
 
-const KIND = { army: ['Army', 'bad'], arms: ['Weapons', 'warn'], secret: ['Secret', 'accent'], plan: ['War plan', 'bad'], tech: ['Research', ''], money: ['Money', ''], mood: ['Mood', 'warn'], counter: ['Their spies', 'bad'] };
+const KIND = { army: ['Army', 'bad'], arms: ['Weapons', 'warn'], secret: ['Secret', 'accent'], plan: ['War plan', 'bad'], tech: ['Research', ''], money: ['Money', ''], mood: ['Mood', 'warn'], counter: ['Their spies', 'bad'], supply: ['Supply lines', 'accent'] };
 
 function reports(ctx) {
   const s = ctx.state;
@@ -88,11 +89,30 @@ function reports(ctx) {
     h('div.list', { style: { marginTop: '10px' } }, list.length ? list.slice(0, 80).map((r) => h('div.item', { class: r.act === 'plan' && !r.used ? 'urgent' : '' },
       h('div.item-head', flag(r.about), h('span.name', nationName(s, r.about)), h('span.chip', { class: KIND[r.kind]?.[1] ?? '' }, KIND[r.kind]?.[0] ?? 'Intel'), h('span.muted.small', { style: { marginLeft: 'auto' } }, `week ${r.w}`)),
       h('div.meta', { style: { color: 'var(--ink)' } }, r.text),
+      r.supply ? supplyDetail(ctx, r.supply) : null,
       actions(ctx, r))) : [h('div.empty', 'No reports yet. Plant agents under Networks.')]));
 }
 
 // What we can do with a discovery, right on the report
 const USED = { warn: 'We warned them', expose: 'Exposed to the world', rollup: 'Their network rolled up' };
+
+// The full picture from a supply-lines report: each import and who sells it, deals, pipelines, cargoes at sea
+function supplyDetail(ctx, p) {
+  const s = ctx.state;
+  const res = (r) => RESOURCE_INFO[r]?.name ?? r;
+  const route = (x) => [x.straits?.length ? `via ${x.straits.join(', ')}` : '', x.transit?.length ? `overland through ${x.transit.map((y) => nationName(s, y)).join(', ')}` : ''].filter(Boolean).join(' · ');
+  const row = (left, right, chip) => h('div.row.between.small', { style: { padding: '2px 0', gap: '8px' } }, h('span', left, chip ?? ''), h('span.mono.faint', right));
+  const section = (title, items) => (items.length ? [h('div.small', { style: { marginTop: '6px' } }, h('b', title)), ...items] : []);
+  return h('div', { style: { marginTop: '6px' } },
+    ...p.res.flatMap((x) => [
+      h('div.small', { style: { marginTop: '6px' } }, h('b', res(x.r)), h('span.faint', ` · ${Math.round(x.imported * 100)}% of what they use is imported`)),
+      ...(x.suppliers.length ? x.suppliers.map((y) => row([flag(y.id), ' ', nationName(s, y.id), route(y) ? h('span.faint', ` ${route(y)}`) : ''], `${money(y.value)}/yr`)) : [h('div.small.faint', 'Bought on the open market from many small sellers.')]),
+    ]),
+    ...section('Resource deals', p.deals.map((d) => row([flag(d.from), ' ', nationName(s, d.from), ` sells them ${res(d.res).toLowerCase()}`], `${money(d.price)}/yr`, d.secret ? h('span.chip.warn', { style: { marginLeft: '6px' } }, 'secret') : null))),
+    ...section('Pipelines', p.pipelines.map((x) => row(`${x.name}: ${res(x.res).toLowerCase()} from ${nationName(s, x.from)}`, `up to ${Math.round(x.share * 100)}% of their need`))),
+    ...section('Cargoes at sea or on the road now', p.cargoes.slice(0, 8).map((x) => row([flag(x.from), ' ', `${res(x.res)} from ${nationName(s, x.from)}`, x.straits.length ? h('span.faint', ` via ${x.straits.join(', ')}`) : ''], `${x.left} wk out`, x.covert ? h('span.chip.bad', { style: { marginLeft: '6px' } }, 'around sanctions') : x.secret ? h('span.chip.warn', { style: { marginLeft: '6px' } }, 'secret deal') : null))),
+    h('p.muted.small', { style: { marginTop: '6px' } }, 'A snapshot of the week it was taken. Cut these lines with sanctions, a blockade, patrols in the straits or by hunting the cargoes at sea.'));
+}
 function actions(ctx, r) {
   const s = ctx.state;
   if (!r.act) return null;
@@ -113,6 +133,7 @@ function actions(ctx, r) {
   if (r.act === 'pact') return h('div.actions', act('expose', 'Expose the secret pact?', 'Its members lose standing and will resent us. Everyone will know who is bound to whom.', 'Expose the pact', true));
   if (r.act === 'nukes') return h('div.actions', act('expose', 'Expose the nuclear programme?', `${nationName(s, r.target)} loses standing and the democracies turn against it. It will be furious with us.`, 'Expose it', true));
   if (r.act === 'rollup') return h('div.actions', act('rollup', 'Roll up their network?', `Our police arrest every agent ${nationName(s, r.target)} has here. Relations will suffer, but their spying stops.`, 'Arrest their agents'));
+  if (r.act === 'supply') return h('div.actions', act('expose', 'Expose their hidden supply lines?', `We reveal ${nationName(s, r.target)}'s secret deals and sanctions-busting trade. It and its suppliers lose standing and will resent us. If our network has been turned and this is a lie, we are the ones who look foolish.`, 'Expose them', true));
   if (r.act === 'steal') return h('div.actions', h('button.btn.small', { onclick: () => { ctx.ui.opTarget = r.target; ctx.setSub('spies', 'ops'); } }, 'Steal their research…'));
   return null;
 }

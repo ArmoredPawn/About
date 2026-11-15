@@ -669,6 +669,48 @@ test('spies uncover war plans that can be acted on, and a turned network\'s lies
   assert.equal(s.countries.rus.spies.gbr, undefined);
 });
 
+test('a settled network can trace where a country gets its raw materials, but it is hard', async () => {
+  const { supplyPicture } = await import('../public/js/engine/spies.js');
+  const g = game(52, 'usa');
+  const s = g.s;
+  const me = s.countries.usa;
+  me.treasury += 500;
+  for (let w = 0; w < 3; w++) g.tick(); // let the market settle so imports show
+  // Without agents inside it can't even be tried
+  assert.match(g.command('usa', { type: 'intel', op: 'supply', target: 'jpn' }), /settled network/);
+  // A secret oil deal for Japan, which our agents should find
+  s.treaties.push({ id: 't-test', kind: 'deal', a: 'sau', b: 'jpn', res: 'oil', qty: 1, price: 5, secret: true, since: s.week, until: s.week + 200 });
+  const p = supplyPicture(s, 'jpn');
+  assert.ok(p.res.length > 0, 'Japan imports raw materials');
+  assert.ok(p.res.some((x) => x.suppliers.length), 'and its suppliers are named');
+  assert.ok(p.deals.some((d) => d.secret && d.from === 'sau'), 'the secret deal is found');
+  assert.ok(p.res.every((x) => x.imported > 0 && x.imported <= 1));
+  // With a settled network, it eventually works; it is hard, so it takes several tries
+  g.command('usa', { type: 'spyPlant', target: 'jpn', agents: 10 });
+  s.countries.jpn.counterIntel = 0;
+  let tries = 0;
+  let got = null;
+  for (; tries < 60 && !got; tries++) {
+    me.spies.jpn.since = s.week - 10;
+    me.spies.jpn.agents = 10;
+    me.spies.jpn.turned = false;
+    delete me.cooldown['intel:supply:jpn'];
+    assert.equal(g.command('usa', { type: 'intel', op: 'supply', target: 'jpn' }), null);
+    got = me.reports.find((r) => r.kind === 'supply');
+  }
+  assert.ok(got, 'the supply lines were traced');
+  assert.ok(got.supply.deals.some((d) => d.secret), 'including the secret deal');
+  assert.equal(got.act, 'supply');
+  assert.ok((me.cooldown['intel:supply:jpn'] ?? 0) >= s.week + 12, 'and it can only be tried every three months');
+  // Exposing it makes the deal public
+  assert.equal(g.command('usa', { type: 'intelAct', id: got.id, action: 'expose' }), null);
+  assert.equal(s.treaties.find((t) => t.id === 't-test').secret, false);
+  // A turned network names the wrong suppliers and keeps real secret deals hidden
+  s.treaties.find((t) => t.id === 't-test').secret = true;
+  const lie = supplyPicture(s, 'jpn', true);
+  assert.ok(!lie.deals.some((d) => d.id === 't-test'), 'a turned network hides the real secret deal');
+});
+
 /* ---------- Military access ---------- */
 
 test('crossing another country takes its permission: granted, the army marches on; refused, only war opens the way', async () => {

@@ -587,8 +587,9 @@ export { CHOKEPOINTS };
 // The world market is one pool, so who ships to whom is estimated: each exporter's sales go to the importers in
 // proportion to what they buy, more to nearer ones, never to an enemy, a country it sanctions or one under an oil
 // embargo, and not by sea to a neighbour (that trade goes overland). Returns the biggest flows by value:
-// [from, to, resource, $ billions a year].
-export function worldFlows(s, limit = 48) {
+// [from, to, resource, $ billions a year]. With `into`, every flow into that one country instead (what a spy
+// network that traces a country's supplies works out).
+export function worldFlows(s, limit = 48, into = null) {
   const live = Object.values(s.countries).filter((c) => !c.exile && c.net);
   // Where each country is: its richest province
   const where = new Map();
@@ -624,10 +625,10 @@ export function worldFlows(s, limit = 48) {
         weights.push([i.id, w]);
         total += w;
       }
-      for (const [to, w] of weights) flows.push([e.id, to, r, e.net[r] * (w / total) * value]);
+      for (const [to, w] of weights) if (!into || to === into) flows.push([e.id, to, r, e.net[r] * (w / total) * value]);
     }
     flows.sort((a, b) => b[3] - a[3]);
-    out.push(...flows.slice(0, 10));
+    out.push(...(into ? flows : flows.slice(0, 10)));
   }
   return out.sort((a, b) => b[3] - a[3]).slice(0, limit).map(([a, b, r, v]) => [a, b, r, Math.round(v * 10) / 10]);
 }
