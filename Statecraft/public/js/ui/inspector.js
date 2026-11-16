@@ -36,14 +36,21 @@ function provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from }
   }
   // Each city's output goes to whoever holds it: its share is of that country's economy
   const gdpOf = (x) => s.countries[x]?.gdp ?? null;
-  return h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'CITIES'),
-    list.map((c) => {
-      const holder = fallen.has(c.name) ? battleBy : ctrl;
-      const national = gdpOf(holder);
-      return h('div.row.between.small.city-row', { style: { padding: '2px 0', cursor: 'pointer' }, title: 'Open the city', onclick: () => ctx.openCity(id, c.name) },
-        h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${(c.pop / 1000).toFixed(1)}M people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `taken by ${nationName(s, battleBy)}`) : holder !== owner ? h('span.chip.warn', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : null),
-        h('span.mono', `${money(c.share * gdp)}${national ? ` · ${((c.share * gdp) / national * 100).toFixed(1)}% of ${nationName(s, holder)}` : ''}`));
-    }),
+  const row = (c) => {
+    const holder = fallen.has(c.name) ? battleBy : ctrl;
+    const national = gdpOf(holder);
+    const size = c.pop >= 1000 ? `${(c.pop / 1000).toFixed(1)}M` : `${Math.round(c.pop)}K`;
+    return h('div.row.between.small.city-row', { style: { padding: '2px 0', cursor: 'pointer' }, title: 'Open the city', onclick: () => ctx.openCity(id, c.name) },
+      h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${size} people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `taken by ${nationName(s, battleBy)}`) : holder !== owner ? h('span.chip.warn', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : null),
+      h('span.mono', `${money(c.share * gdp)}${national ? ` · ${((c.share * gdp) / national * 100).toFixed(1)}% of ${nationName(s, holder)}` : ''}`));
+  };
+  // The biggest cities, and the rest of the towns behind a toggle (those already taken in a battle always shown)
+  const TOP = 8;
+  const top = list.filter((c, i) => i < TOP || fallen.has(c.name));
+  const rest = list.filter((c, i) => i >= TOP && !fallen.has(c.name));
+  return h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, `CITIES (${list.length})`),
+    top.map(row),
+    rest.length ? h('details', h('summary.small.muted', { style: { cursor: 'pointer', padding: '2px 0' } }, `${rest.length} more town${rest.length > 1 ? 's' : ''}`), rest.map(row)) : null,
     h('p.muted.small', { style: { marginTop: '4px' } }, 'Output a year, and the share of the economy of the country that holds it: an occupied city works for its occupier. In a battle the front takes the cities one by one, each lost to the defender as it falls. Zoom in on the map for the city close-up.'));
 }
 

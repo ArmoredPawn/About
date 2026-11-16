@@ -1,14 +1,22 @@
-// Builds the cities for the close-up war view from Natural Earth's populated places (1:50m):
+// Builds the cities for the close-up war view:
 //   public/js/engine/data/cities.js   [name, province, x, y, population in thousands, capital]
 //
-// Each city is placed in the province whose outline (public/data/map.json) contains it, using the same map
-// projection as scripts/build-map.js. Cities of a quarter of a million or more are kept, every national capital,
-// and the largest city of any province that would otherwise have none; at most eight per province.
+// Two sources, merged:
+//  - Natural Earth's populated places (1:10m): the big cities, with the population of the whole built-up area
+//    (Paris is eleven million, not the two million inside the city limits), and every national capital.
+//  - GeoNames (cities over 15,000 people, CC BY 4.0): the towns and smaller cities in between.
+// A town inside a bigger city's built-up area is part of that city, not a city of its own, so it is dropped.
 //
-// Run with `npm run build:cities` (it downloads the data), or `node scripts/build-cities.js <places.geojson>`.
+// Each city is placed in the province whose outline (public/data/map.json) contains it, using the same map
+// projection as scripts/build-map.js. Every province keeps its cities of 50,000 people or more (up to 30), and
+// a province with fewer than 12 is filled up with its next-largest towns.
+//
+// Run with `npm run build:cities` (it downloads the data), or
+//   node scripts/build-cities.js <ne_10m_populated_places_simple.geojson> <cities15000.zip or .txt>
 // The output is committed.
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as topojson from 'topojson-client';
@@ -17,10 +25,13 @@ import { IGNORED_FEATURES } from '../public/js/engine/data/minors.js';
 import { COUNTRIES } from '../public/js/engine/data/countries.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SOURCE = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_populated_places_simple.geojson';
+const NE_SOURCE = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson';
+const GEONAMES_SOURCE = 'https://download.geonames.org/export/dump/cities15000.zip';
 const W = 2000;
-const MIN_POP = 250000;
-const PER_PROVINCE = 8;
+const MIN_POP = 50000; // a city in its own right
+const PER_PROVINCE = 30; // at most
+const FILL_TO = 12; // a province with fewer cities than this takes its next-largest towns too
+const MIN_GAP = 0.4; // map units (about 8 km): two places closer than this are one town
 
 // The same projection as the map
 const topo = JSON.parse(readFileSync(path.join(ROOT, 'node_modules/world-atlas/countries-50m.json'), 'utf8'));
@@ -69,11 +80,11 @@ function provinceAt(pt, allowed = () => true) {
     for (const ring of sh.rings) if (inside(pt, ring)) n++;
     if (n % 2 === 1) return sh.id;
   }
-  // Ports and coastal cities can fall just outside a simplified coastline: take the nearest outline within 6 px
+  // Ports and coastal cities can fall just outside a simplified coastline: take the nearest outline within 12 px
   let best = null;
   for (const sh of shapes) {
     if (!allowed(sh.id)) continue;
-    if (pt[0] < sh.box[0] - 6 || pt[0] > sh.box[2] + 6 || pt[1] < sh.box[1] - 6 || pt[1] > sh.box[3] + 6) continue;
+    if (pt[0] < sh.box[0] - 12 || pt[0] > sh.box[2] + 12 || pt[1] < sh.box[1] - 12 || pt[1] > sh.box[3] + 12) continue;
     for (const ring of sh.rings) {
       for (const [x, y] of ring) {
         const d = Math.hypot(x - pt[0], y - pt[1]);
@@ -84,33 +95,110 @@ function provinceAt(pt, allowed = () => true) {
   return best?.id ?? null;
 }
 
-const file = process.argv[2];
-const places = file ? JSON.parse(readFileSync(file, 'utf8')) : await (await fetch(SOURCE)).json();
+// The one file inside a zip archive (GeoNames ships a single text file per zip)
+function unzipOne(buf) {
+  let end = buf.length - 22;
+  while (end >= 0 && buf.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < 0) throw new Error('not a zip file');
+  const dir = buf.readUInt32LE(end + 16);
+  const method = buf.readUInt16LE(dir + 10);
+  const size = buf.readUInt32LE(dir + 20);
+  const local = buf.readUInt32LE(dir + 42);
+  const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+  const data = buf.subarray(start, start + size);
+  return (method === 0 ? data : inflateRawSync(data)).toString('utf8');
+}
 
-const byProvince = new Map();
+const read = async (file, url) => (file ? readFileSync(file) : Buffer.from(await (await fetch(url)).arrayBuffer()));
+const neFile = process.argv[2];
+const gnFile = process.argv[3];
+const ne = JSON.parse((await read(neFile, NE_SOURCE)).toString('utf8'));
+const gnRaw = await read(gnFile, GEONAMES_SOURCE);
+const gnText = (gnFile ?? GEONAMES_SOURCE).endsWith('.zip') ? unzipOne(gnRaw) : gnRaw.toString('utf8');
+
+const ISO2 = new Map(Object.values(COUNTRIES).map((c) => [c.iso2.toUpperCase(), c.id]));
+// Official names shortened to the ones people use
+const SHORT = {
+  'Universitäts- und Hansestadt Greifswald': 'Greifswald',
+  'Heroica Ciudad de Juchitán de Zaragoza': 'Juchitán',
+  'Tapachula de Córdova y Ordóñez': 'Tapachula',
+  'San Martin Texmelucan de Labastida': 'San Martín Texmelucan',
+  'Ciudad de Huajuapan de León': 'Huajuapan de León',
+  'Makakilo / Kapolei / Honokai Hale': 'Kapolei',
+};
+const clean = (name) => {
+  const n = String(name).replace(/\s+/g, ' ').trim();
+  return SHORT[n] ?? n.replace(/^(Hansestadt|Universitätsstadt) /, '');
+};
+const place = (iso, lon, lat) => {
+  const pt = projection([lon, lat]);
+  if (!pt) return null;
+  const id = provinceAt(pt, COUNTRIES[iso] ? (pid) => pid.startsWith(`${iso}-`) : () => true);
+  return id ? { id, x: Math.round(pt[0] * 10) / 10, y: Math.round(pt[1] * 10) / 10 } : null;
+};
+
+const candidates = [];
 let unplaced = 0;
-for (const f of places.features) {
+for (const f of ne.features) {
   const p = f.properties;
   const [lon, lat] = f.geometry.coordinates;
-  const pt = projection([lon, lat]);
-  if (!pt) continue;
-  const iso = String(p.adm0_a3 ?? '').toLowerCase();
-  const id = provinceAt(pt, COUNTRIES[iso] ? (pid) => pid.startsWith(`${iso}-`) : () => true);
-  if (!id) { unplaced++; continue; }
+  const at = place(String(p.adm0_a3 ?? '').toLowerCase(), lon, lat);
+  if (!at) { unplaced++; continue; }
   const pop = Math.max(p.pop_max ?? 0, p.pop_min ?? 0);
   const capital = p.adm0cap === 1 || p.featurecla === 'Admin-0 capital';
-  const list = byProvince.get(id) ?? byProvince.set(id, []).get(id);
-  list.push({ name: String(p.name).replace(/\s+/g, ' ').trim(), x: Math.round(pt[0] * 10) / 10, y: Math.round(pt[1] * 10) / 10, pop: Math.round(pop / 1000), capital });
+  candidates.push({ ...at, name: clean(p.name), pop: Math.round(pop / 1000), capital, metro: true });
 }
+// GeoNames: geonameid, name, asciiname, alternatenames, latitude, longitude, feature class, feature code,
+// country code, cc2, admin1-4, population, elevation, dem, timezone, modified. Parts of a city (PPLX), and
+// abandoned, destroyed or historical places, are not towns of their own.
+const SKIP = new Set(['PPLX', 'PPLQ', 'PPLW', 'PPLH', 'PPLCH']);
+for (const line of gnText.split('\n')) {
+  const col = line.split('\t');
+  if (col.length < 15 || col[6] !== 'P' || SKIP.has(col[7])) continue;
+  const pop = Number(col[14]) || 0;
+  if (pop < 15000) continue;
+  const at = place(ISO2.get(col[8]) ?? '', Number(col[5]), Number(col[4]));
+  if (!at) { unplaced++; continue; }
+  // National capitals come from Natural Earth: GeoNames also marks the capitals of overseas territories
+  candidates.push({ ...at, name: clean(col[1]), pop: Math.round(pop / 1000), capital: false, metro: false });
+}
+
+// Biggest first (Natural Earth's built-up areas ahead of a GeoNames city of the same size), so each built-up
+// area keeps one name: a place inside a bigger city's reach, or right next to another town, is part of it
+candidates.sort((a, b) => b.pop - a.pop || Number(b.metro) - Number(a.metro));
+const reach = (c) => Math.max(MIN_GAP, 0.025 * Math.sqrt(c.pop)); // about 50 km for a city of ten million
+const kept = [];
+const grid = new Map();
+const cell = 4;
+const key = (x, y) => `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+for (const c of candidates) {
+  let clash = false;
+  const gx = Math.floor(c.x / cell);
+  const gy = Math.floor(c.y / cell);
+  for (let i = -1; i <= 1 && !clash; i++) for (let j = -1; j <= 1 && !clash; j++) {
+    for (const o of grid.get(`${gx + i},${gy + j}`) ?? []) {
+      const d = Math.hypot(o.x - c.x, o.y - c.y);
+      if (d < reach(o) || d < MIN_GAP || (o.name === c.name && o.id === c.id)) { clash = true; break; }
+    }
+  }
+  // A capital is always kept, even right next to a bigger city
+  if (clash && !c.capital) continue;
+  kept.push(c);
+  (grid.get(key(c.x, c.y)) ?? grid.set(key(c.x, c.y), []).get(key(c.x, c.y))).push(c);
+}
+
+const byProvince = new Map();
+for (const c of kept) (byProvince.get(c.id) ?? byProvince.set(c.id, []).get(c.id)).push(c);
 
 const rows = [];
 for (const [id, list] of [...byProvince].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-  list.sort((a, b) => b.pop - a.pop);
-  // The same city can appear twice (a capital and its metro): keep one per name
+  list.sort((a, b) => Number(b.capital) - Number(a.capital) || b.pop - a.pop);
+  // A capital and its namesake (Mexico City, Kuwait City) can both survive: keep one per name
   const seen = new Set();
-  const keep = list.filter((c) => !seen.has(c.name) && seen.add(c.name))
-    .filter((c, i) => i === 0 || c.capital || c.pop * 1000 >= MIN_POP)
-    .slice(0, PER_PROVINCE);
+  const unique = list.filter((c) => !seen.has(c.name) && seen.add(c.name));
+  const big = unique.filter((c, i) => i === 0 || c.capital || c.pop * 1000 >= MIN_POP);
+  const keep = (big.length >= FILL_TO ? big : unique.slice(0, Math.max(FILL_TO, big.length))).slice(0, PER_PROVINCE);
+  keep.sort((a, b) => b.pop - a.pop);
   for (const c of keep) rows.push([c.name, id, c.x, c.y, c.pop, c.capital ? 1 : 0]);
 }
 
@@ -136,7 +224,8 @@ for (const sh of shapes) {
 }
 
 writeFileSync(path.join(ROOT, 'public/js/engine/data/cities.js'),
-  '// Generated by scripts/build-cities.js from Natural Earth populated places. Do not edit by hand.\n'
+  '// Generated by scripts/build-cities.js from Natural Earth populated places and GeoNames (CC BY 4.0,\n'
+  + '// geonames.org). Do not edit by hand.\n'
   + '// [name, province, x, y, population (thousands), national capital]\n'
   + `export const CITIES = ${JSON.stringify(rows)};\n`
   + '// Each province\'s outline as a convex hull, for measuring how far a front has come across it\n'

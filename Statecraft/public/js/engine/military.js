@@ -844,7 +844,7 @@ function sail(s, a, c, dt, fights) {
 function march(s, a, c, dt, gar, fights) {
   const maneuver = a.gen.trait === 'maneuver';
   autoCapture(s, a);
-  assistFront(s, a, c);
+  keepToFront(s, a, c);
   // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
   if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
     a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver }) ?? [];
@@ -1240,7 +1240,9 @@ export function capture(s, regionId, by, attackers = [], bt = 0) {
     // Retreating defenders wreck oil wells and mines (as at Maykop in 1942)
     if ((reg.res.oil || reg.res.gas) && chance(s, 0.6)) reg.dmg = Math.min(0.9, reg.dmg + 0.2);
   }
-  // Defending armies fall back, or surrender if surrounded
+  // Defending armies fall back to the new line, or surrender if surrounded. They fall back toward home (never
+  // into a dead end the enemy can cut off), onto our own ground, and where the line needs them most.
+  const homes = new Map();
   for (const a of Object.values(s.armies)) {
     if (a.region !== regionId || a.sea || a.owner === by || onSameSide(s, a.owner, by)) continue;
     const exits = GEO[regionId].adj.filter((id) => friendlyGround(s, a.owner, s.regions[id].ctrl));
@@ -1248,12 +1250,20 @@ export function capture(s, regionId, by, attackers = [], bt = 0) {
       destroyArmy(s, a, `was encircled in ${regionName(regionId)} and surrendered`);
       continue;
     }
-    const best = exits.reduce((m, id) => (s.regions[id].ctrl === a.owner ? id : m), exits[0]);
+    const home = homes.get(a.owner) ?? homes.set(a.owner, homeDistance(s, a.owner)).get(a.owner);
+    const score = (id) => {
+      const reg = s.regions[id];
+      const b = reg.battle && atWar(s, reg.battle.by, a.owner);
+      return (home.has(id) ? 20 - Math.min(10, home.get(id)) : 0) + (reg.ctrl === a.owner ? 4 : 0) + (b ? 3 + reg.battle.prog / 25 : 0);
+    };
+    const best = exits.reduce((m, id) => (score(id) > score(m) ? id : m), exits[0]);
     a.region = best;
     a.troops *= 0.9;
     a.tanks *= 0.85;
     a.org = Math.max(0, a.org / 2);
     a.path = [];
+    if (a.op.kind === 'hold') a.op = { kind: 'hold', target: best, aggr: a.op.aggr };
+    a.assistAt = 0;
     a.status = `Fell back to ${regionName(best)}`;
   }
   // The attackers move in
@@ -1753,15 +1763,26 @@ export function setAssist(s, c, a, on) {
   if (!a || a.owner !== c.id) return 'That army is not yours.';
   a.assist = Boolean(on);
   a.assistAt = 0;
-  if (a.assist) briefing(s, c.id, `${a.name} will support the front: it moves to defend any nearby province of ours or our allies' that comes under attack, and joins our allies' attacks next to it.`, 'info');
+  if (a.assist) briefing(s, c.id, `${a.name} will support the front: it moves to defend any nearby province of ours or our allies' that comes under attack, moves up to the line wherever the front has moved, and joins our allies' attacks next to it.`, 'info');
   return null;
 }
 
-// An army told to support the front: where the fighting is next door, it goes to help
-function assistFront(s, a, c) {
-  if (!a.assist || a.sea || a.auto || a.path.length || a.attacking) return;
+// Is this province on the front line: next to ground held by an enemy of ours?
+const onFront = (s, owner, id) => GEO[id].adj.some((n) => s.regions[n] && atWar(s, owner, s.regions[n].ctrl));
+
+// Armies holding the line stay on it. Every computer-run army does this, and a leader's army when told to
+// support the front: where a province next door is under attack it goes to defend it; where the front has moved
+// on (pushed forward, or the enemy's attacks have bent it back), it marches to the nearest stretch of the line
+// that needs it. An army told to support the front also joins our allies' attacks next to it.
+function keepToFront(s, a, c) {
+  if (!(a.assist || !c.human) || a.sea || a.auto || a.path.length || a.attacking || a.op.kind !== 'hold') return;
+  // A surrounded army has the pocket's own choices: break out, airlift, or surrender
+  if (a.pocket && !a.pocketSea) return;
+  // Nor does a landing force building up in its port
+  if (a.buildup?.region === a.region) return;
   if ((a.assistAt ?? 0) > (s.stepNo ?? 0)) return;
-  a.assistAt = (s.stepNo ?? 0) + 6;
+  a.assistAt = (s.stepNo ?? 0) + 2;
+  if (!enemiesOf(s, a.owner).size) return;
   const here = s.regions[a.region];
   // Our own ground under attack: stay and hold it
   if (here.battle && atWar(s, here.battle.by, a.owner)) return;
@@ -1775,15 +1796,49 @@ function assistFront(s, a, c) {
       const score = 2 + reg.battle.prog / 50;
       if (!best || score > best.score) best = { id, kind: 'hold', score };
     }
-    // An ally's attack on an enemy we are at war with: join it
-    if (by !== a.owner && onSameSide(s, a.owner, by) && atWar(s, a.owner, reg.ctrl)) {
+    // An ally's attack on an enemy we are at war with: join it (only when told to)
+    if (a.assist && by !== a.owner && onSameSide(s, a.owner, by) && atWar(s, a.owner, reg.ctrl)) {
       const score = 1 + reg.battle.prog / 100;
       if (!best || score > best.score) best = { id, kind: 'attack', score };
     }
   }
+  // Behind the line: forward to the nearest province on it, the one under attack or with the fewest of our troops
+  if (!best && !onFront(s, a.owner, a.region)) best = nearestFront(s, a);
   if (!best) return;
   if (orderArmy(s, c, a, { kind: best.kind, target: best.id, aggr: a.op.aggr ?? 'balanced' })) return;
-  a.status = best.kind === 'hold' ? `Supporting the front: reinforcing ${regionName(best.id)}` : `Supporting the front: joining the attack on ${regionName(best.id)}`;
+  a.orderedAt = s.week;
+  a.status = best.kind === 'attack' ? `Supporting the front: joining the attack on ${regionName(best.id)}`
+    : best.score >= 2 ? `Holding the line: reinforcing ${regionName(best.id)}` : `Holding the line: moving up to ${regionName(best.id)}`;
+}
+
+// The nearest province of the front line over our own ground (up to eight provinces away), ours or an ally's
+function nearestFront(s, a) {
+  const owner = a.owner;
+  const dist = new Map([[a.region, 0]]);
+  const queue = [a.region];
+  const found = [];
+  let reach = 8;
+  while (queue.length) {
+    const id = queue.shift();
+    const d = dist.get(id);
+    if (d > reach) break;
+    if (id !== a.region && onFront(s, owner, id)) { found.push(id); reach = Math.min(reach, d + 1); continue; }
+    for (const next of GEO[id].adj) {
+      if (dist.has(next)) continue;
+      const reg = s.regions[next];
+      if (!reg || !(reg.ctrl === owner || friendlyGround(s, owner, reg.ctrl))) continue;
+      dist.set(next, d + 1);
+      queue.push(next);
+    }
+  }
+  if (!found.length) return null;
+  const troopsAt = (id) => Object.values(s.armies).reduce((t, o) => t + (o.id !== a.id && !o.sea && onSameSide(s, o.owner, owner) && (o.region === id || (o.op.kind === 'hold' && o.op.target === id)) ? o.troops : 0), 0);
+  const need = (id) => {
+    const b = s.regions[id].battle;
+    return (b && atWar(s, b.by, owner) ? 1000 + b.prog * 10 : 0) - troopsAt(id) - dist.get(id) * 40 + (s.regions[id].ctrl === owner ? 20 : 0);
+  };
+  const id = found.reduce((m, x) => (need(x) > need(m) ? x : m), found[0]);
+  return { id, kind: 'hold', score: 1 };
 }
 
 // What each leader sees of the pockets: where they are and who is in them

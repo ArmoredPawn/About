@@ -65,7 +65,10 @@ every few seconds, armies glide across the map and front lines creep through con
   and the forces beyond are a pocket: organisation, fuel and men drain every week until they break out, are relieved,
   are kept alive by an airlift (as at Stalingrad) or surrender. Coastal pockets whose waters the enemy doesn't hold are
   supplied by sea. Attacks from two sides are pincers; mechanised armies break through, bypass garrisons and keep
-  rolling. Invaded peoples raise a home guard, and big cities in the front's path mean street fighting.
+  rolling. Invaded peoples raise a home guard, and big cities in the front's path mean street fighting. Defenders hold
+  the line: computer-run armies (and yours, with "Support the front") move in to defend a province under attack next
+  door, fall back onto the new line when a province falls, and march up wherever the front has moved on.
+- **Cities:** over 7,000 cities and towns, dozens in every country, each with its share of its province's output.
 - **Doctrine** (Military → Doctrine): build the way the army fights from five choices (attack, defence, air power,
   logistics, command), develop and train it in, and master it in battle. Each attack concept fares better against some
   defences than others; mastered combinations become new ways of war (Blitzkrieg, Deep operations, AirLand Battle…),
@@ -87,7 +90,7 @@ every few seconds, armies glide across the map and front lines creep through con
 - **Chat:** a world channel, one-to-one messages, group chats, and a chat for every alliance.
 - **Solo play** runs entirely in the browser and saves as you go.
 
-Figures are rounded real-world values from around 2025 (IMF, IISS, SIPRI, FAS, USGS, EIA). The map is Natural Earth.
+Figures are rounded real-world values from around 2025 (IMF, IISS, SIPRI, FAS, USGS, EIA). The map is Natural Earth; the cities are Natural Earth and GeoNames (CC BY 4.0).
 
 ## How it fits together
 

@@ -187,29 +187,57 @@ export class WorldMap {
     const money = (v) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}T` : v >= 1 ? `$${Math.round(v)}B` : `$${Math.round(v * 1000)}M`);
     const out = [];
     const labels = [];
+    // Every city in view, biggest first; towns appear as you zoom in, wherever they have room on the screen
+    const seen = [];
     for (const [id] of CITIES_OF) {
       const g = GEO[id];
       if (!g || g.x < x0 - 60 || g.x > x1 + 60 || g.y < y0 - 60 || g.y > y1 + 60) continue;
-      for (const c of this.#cityInfo(id)) {
-        if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
-        const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
-        const color = politicalColor(this.state, c.holder);
-        const street = this.state.battleInfo?.[id]?.street === c.name;
-        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}${street ? ' Street fighting here now.' : ''} Click for details.`;
-        if (street) out.push(svg('circle', { class: 'street-ring', cx: c.x, cy: c.y, r: r * 4, 'stroke-width': 1.6 / unit, 'pointer-events': 'none' }));
-        out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}${street ? ' street' : ''}`, 'data-id': id, 'data-city': c.name },
-          // The city's built-up area, in the colour of whoever holds it
-          svg('circle', { class: 'city-area', 'data-id': id, cx: c.x, cy: c.y, r: r * 2.6, fill: color }),
-          c.capital
-            ? svg('rect', { 'data-id': id, x: c.x - r, y: c.y - r, width: r * 2, height: r * 2, fill: color, stroke: '#fff', 'stroke-width': 1.2 / unit, transform: `rotate(45 ${c.x} ${c.y})` })
-            : svg('circle', { 'data-id': id, cx: c.x, cy: c.y, r, fill: color, stroke: c.fallen ? '#ff5a5a' : '#0b0f1a', 'stroke-width': (c.fallen ? 1.4 : 1) / unit }),
-          svg('title', {}, title)));
-        // Names (and output) once there is room for them
-        const big = c.pop >= 4000 || c.capital;
-        if (unit >= 3.2 || (unit >= 1.6 && big) || (unit >= 2.3 && c.pop >= 1500)) {
-          labels.push(svg('text', { class: 'city-label', x: c.x + r + 2 / unit, y: c.y, 'font-size': 8.5 / unit, 'stroke-width': 2.4 / unit },
-            c.name, unit >= 2.3 ? svg('tspan', { class: 'city-output', dx: 3 / unit }, money(c.output)) : null));
-        }
+      for (const c of this.#cityInfo(id)) if (c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1) seen.push([id, c]);
+    }
+    seen.sort((a, b) => Number(b[1].capital) - Number(a[1].capital) || b[1].pop - a[1].pop);
+    const gap = 9 / unit;
+    const dots = new Map();
+    const crowded = (x, y, d, grid) => {
+      const gx = Math.floor(x / d);
+      const gy = Math.floor(y / d);
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        for (const [ox, oy] of grid.get(`${gx + i},${gy + j}`) ?? []) if (Math.hypot(ox - x, oy - y) < d) return true;
+      }
+      return false;
+    };
+    const shown = [];
+    for (const [id, c] of seen) {
+      const street = this.state.battleInfo?.[id]?.street === c.name;
+      if (!street && !c.capital && crowded(c.x, c.y, gap, dots)) continue;
+      const k = `${Math.floor(c.x / gap)},${Math.floor(c.y / gap)}`;
+      (dots.get(k) ?? dots.set(k, []).get(k)).push([c.x, c.y]);
+      shown.push([id, c]);
+    }
+    // Labels where they fit: biggest first, never over another
+    const boxes = [];
+    const fits = (b) => !boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+    for (const [id, c] of shown) {
+      const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
+      const color = politicalColor(this.state, c.holder);
+      const street = this.state.battleInfo?.[id]?.street === c.name;
+      const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}${street ? ' Street fighting here now.' : ''} Click for details.`;
+      if (street) out.push(svg('circle', { class: 'street-ring', cx: c.x, cy: c.y, r: r * 4, 'stroke-width': 1.6 / unit, 'pointer-events': 'none' }));
+      out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}${street ? ' street' : ''}`, 'data-id': id, 'data-city': c.name },
+        // The city's built-up area, in the colour of whoever holds it
+        svg('circle', { class: 'city-area', 'data-id': id, cx: c.x, cy: c.y, r: r * 2.6, fill: color }),
+        c.capital
+          ? svg('rect', { 'data-id': id, x: c.x - r, y: c.y - r, width: r * 2, height: r * 2, fill: color, stroke: '#fff', 'stroke-width': 1.2 / unit, transform: `rotate(45 ${c.x} ${c.y})` })
+          : svg('circle', { 'data-id': id, cx: c.x, cy: c.y, r, fill: color, stroke: c.fallen ? '#ff5a5a' : '#0b0f1a', 'stroke-width': (c.fallen ? 1.4 : 1) / unit }),
+        svg('title', {}, title)));
+      // Names (and output) once there is room for them
+      const big = c.pop >= 4000 || c.capital;
+      const tag = unit >= 2.3 ? money(c.output) : '';
+      const fs = 8.5 / unit;
+      const box = [c.x + r, c.y - fs * 0.7, c.x + r + 2 / unit + fs * 0.56 * (c.name.length + (tag ? tag.length + 1 : 0)), c.y + fs * 0.45];
+      if ((unit >= 3.2 || (unit >= 1.6 && big) || (unit >= 2.3 && c.pop >= 1500)) && labels.length < 400 && fits(box)) {
+        boxes.push(box);
+        labels.push(svg('text', { class: 'city-label', x: c.x + r + 2 / unit, y: c.y, 'font-size': 8.5 / unit, 'stroke-width': 2.4 / unit },
+          c.name, unit >= 2.3 ? svg('tspan', { class: 'city-output', dx: 3 / unit }, money(c.output)) : null));
       }
     }
     this.gCities.replaceChildren(...out, ...labels);

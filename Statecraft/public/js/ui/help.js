@@ -58,10 +58,10 @@ const PAGES = {
       h('li', h('b', 'Doctrine'), ' (Military → Doctrine): build your own way of war from five choices, master it in battle, and invent new ones like Blitzkrieg.'),
       h('li', h('b', 'Pincers and breakthroughs'), ': attack a province from two sides for a big bonus; armoured armies tear through lines and keep rolling.'),
       h('li', h('b', 'Street fighting and home guards'), ': invaded countries fight for every city, and their people take up arms.'),
-      h('li', h('b', 'Allies fight beside you'), ': computer-run allies send armies to your front; tick "Support the front" on an army and it helps wherever the fighting is next to it.'),
+      h('li', h('b', 'Allies fight beside you'), ': computer-run allies send armies to your front; tick "Support the front" on an army and it helps wherever the fighting is next to it and keeps to the line as the front moves. Computer-run armies always do: attack a province and the defenders next door move in, and when it falls they fall back onto the new line.'),
       h('li', h('b', 'Shipping lines'), ' (Economy → Routes): place two points on the map to open a public or private line.'),
       h('li', h('b', 'Catching cargo'), ': choose from every fleet that can reach a ship, best first, or put a new fleet to sea from the nearest port. Fleets can hunt shipping across a whole sea, and choose to seize or sink.'),
-      h('li', h('b', 'Cities'), ': zoom in and click any city to see what it makes and who is fighting for it.')),
+      h('li', h('b', 'Cities'), ': every country has its towns as well as its great cities, thousands in all. Zoom in and more appear; click any to see what it makes and who is fighting for it.')),
   ],
 
   economy: () => [
@@ -104,7 +104,7 @@ const PAGES = {
       h('li', h('b', 'Breakthrough'), ' (on each army\'s card): how mechanised it is, and its doctrine. Winning at good odds, a high-breakthrough army advances much faster, bypasses garrisons the enemy has no armies to back, and carries its momentum into the next province.'),
       h('li', 'Use them together: two armoured spearheads converging behind an enemy army is how pockets are made.')),
     h('h3', 'Allies and support'),
-    h('p', 'Computer-run allies at war with your enemy send expeditionary armies to your front and fight beside you. Tick ', h('b', 'Support the front'), ' on any army: when a nearby province of yours or an ally\'s comes under attack, it moves in to defend it, and when an ally attacks an enemy province next to it, it joins in. ', h('b', 'Automatic capture'), ' keeps an army attacking one province after another.'),
+    h('p', 'Computer-run allies at war with your enemy send expeditionary armies to your front and fight beside you. Tick ', h('b', 'Support the front'), ' on any army: when a nearby province of yours or an ally\'s comes under attack, it moves in to defend it; where the front has moved on, it marches up to the nearest stretch of the line that needs it; and when an ally attacks an enemy province next to it, it joins in. Computer-run armies always hold the line this way. Defenders driven out of a province fall back toward home, onto the new line. ', h('b', 'Automatic capture'), ' keeps an army attacking one province after another.'),
     h('h3', 'Supply, oil and the air'),
     h('ul',
       h('li', 'Armies far from home need money, factories and troops guarding the supply lines (Military → Logistics). They burn oil holding, marching and (most of all) fighting; a fuel crisis stalls tanks and grounds aircraft.'),
