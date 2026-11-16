@@ -100,26 +100,27 @@ export class WorldMap {
     }
     this.#wire();
     this.#apply();
-    new ResizeObserver(() => this.#apply()).observe(el);
+    new ResizeObserver(() => { this.size = null; this.#apply(); }).observe(el);
   }
 
   /* ---------- Drawing ---------- */
 
   // live: a real-time step (every second or so) rather than a full weekly update
-  update(state, { tick = false, live = false } = {}) {
+  // Every update from the game moves the war along, so armies glide to where they now stand (a mid-week update
+  // used to make them jump). A real-time step changes only armies, fleets, cargo ships and battles: the rest of
+  // the map is left as it is.
+  update(state, { live = false } = {}) {
     this.state = state;
-    this.moving = tick || live;
+    this.moving = true;
     this.#paint();
     this.#drawEnemies();
-    this.#drawLabels();
     this.#drawArmies();
     this.#drawFleets();
-    this.#drawPipelines();
-    if (!live) { this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); }
+    if (!live) { this.#drawLabels(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawOverlays(); }
     else this.#moveShips();
     this.#drawBattles();
-    this.#drawOverlays();
-    this.#drawCities();
+    // Cities change hands as a front passes them, so the close-up follows the battles
+    if (!live || this.fronts.size) this.#drawCities();
     this.#animate();
   }
 
@@ -175,9 +176,9 @@ export class WorldMap {
   }
 
   #drawCities() {
-    if (!this.cityShown || !this.state) { this.gCities.replaceChildren(); return; }
+    if (!this.cityShown || !this.state) { this.gCities.replaceChildren(); this.citiesKey = null; return; }
     const unit = this.#unit();
-    const rect = this.el.getBoundingClientRect();
+    const rect = this.#size();
     const vbW = W / this.view.k;
     const vbH = vbW * (rect.height / Math.max(1, rect.width));
     const x0 = this.view.cx - vbW / 2 - 10;
@@ -187,11 +188,25 @@ export class WorldMap {
     const money = (v) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}T` : v >= 1 ? `$${Math.round(v)}B` : `$${Math.round(v * 1000)}M`);
     const out = [];
     const labels = [];
-    // Every city in view, biggest first; towns appear as you zoom in, wherever they have room on the screen
-    const seen = [];
+    const near = [];
     for (const [id] of CITIES_OF) {
       const g = GEO[id];
       if (!g || g.x < x0 - 60 || g.x > x1 + 60 || g.y < y0 - 60 || g.y > y1 + 60) continue;
+      near.push(id);
+    }
+    // Nothing the close-up shows has changed (the view, who holds what, how far each battle has got): leave it.
+    // It is asked to redraw every second while there is fighting anywhere in the world.
+    const st = this.state;
+    const key = [unit, x0, y0, x1, y1, st.week, ...near.map((id) => {
+      const r = this.#region(id);
+      const f = r.battleBy ? this.fronts.get(id) : null;
+      return `${r.ctrl}${politicalColor(st, r.ctrl)}${r.gdp}${r.battleBy ? `${r.battleBy}${politicalColor(st, r.battleBy)}${Math.round(f?.shown ?? r.prog)}${st.battleInfo?.[id]?.street ?? ''}` : ''}`;
+    })].join('|');
+    if (key === this.citiesKey) return;
+    this.citiesKey = key;
+    // Every city in view, biggest first; towns appear as you zoom in, wherever they have room on the screen
+    const seen = [];
+    for (const id of near) {
       for (const c of this.#cityInfo(id)) if (c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1) seen.push([id, c]);
     }
     seen.sort((a, b) => Number(b[1].capital) - Number(a[1].capital) || b[1].pop - a[1].pop);
@@ -216,19 +231,29 @@ export class WorldMap {
     // Labels where they fit: biggest first, never over another
     const boxes = [];
     const fits = (b) => !boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+    // A city's markers are kept and reused while they look the same, rather than built afresh every time
+    const old = this.cityNodes ?? new Map();
+    const kept = new Map();
+    const reuse = (k, sig, make) => {
+      const had = old.get(k);
+      const node = had?.sig === sig ? had.node : make();
+      kept.set(k, { sig, node });
+      return node;
+    };
     for (const [id, c] of shown) {
       const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
       const color = politicalColor(this.state, c.holder);
       const street = this.state.battleInfo?.[id]?.street === c.name;
       const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}${street ? ' Street fighting here now.' : ''} Click for details.`;
-      if (street) out.push(svg('circle', { class: 'street-ring', cx: c.x, cy: c.y, r: r * 4, 'stroke-width': 1.6 / unit, 'pointer-events': 'none' }));
-      out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}${street ? ' street' : ''}`, 'data-id': id, 'data-city': c.name },
+      const ck = `${id}|${c.name}`;
+      if (street) out.push(reuse(`${ck}|ring`, String(unit), () => svg('circle', { class: 'street-ring', cx: c.x, cy: c.y, r: r * 4, 'stroke-width': 1.6 / unit, 'pointer-events': 'none' })));
+      out.push(reuse(ck, `${unit}|${color}|${c.fallen}|${street}|${title}`, () => svg('g', { class: `city${c.fallen ? ' fallen' : ''}${street ? ' street' : ''}`, 'data-id': id, 'data-city': c.name },
         // The city's built-up area, in the colour of whoever holds it
         svg('circle', { class: 'city-area', 'data-id': id, cx: c.x, cy: c.y, r: r * 2.6, fill: color }),
         c.capital
           ? svg('rect', { 'data-id': id, x: c.x - r, y: c.y - r, width: r * 2, height: r * 2, fill: color, stroke: '#fff', 'stroke-width': 1.2 / unit, transform: `rotate(45 ${c.x} ${c.y})` })
           : svg('circle', { 'data-id': id, cx: c.x, cy: c.y, r, fill: color, stroke: c.fallen ? '#ff5a5a' : '#0b0f1a', 'stroke-width': (c.fallen ? 1.4 : 1) / unit }),
-        svg('title', {}, title)));
+        svg('title', {}, title))));
       // Names (and output) once there is room for them
       const big = c.pop >= 4000 || c.capital;
       const tag = unit >= 2.3 ? money(c.output) : '';
@@ -236,10 +261,11 @@ export class WorldMap {
       const box = [c.x + r, c.y - fs * 0.7, c.x + r + 2 / unit + fs * 0.56 * (c.name.length + (tag ? tag.length + 1 : 0)), c.y + fs * 0.45];
       if ((unit >= 3.2 || (unit >= 1.6 && big) || (unit >= 2.3 && c.pop >= 1500)) && labels.length < 400 && fits(box)) {
         boxes.push(box);
-        labels.push(svg('text', { class: 'city-label', x: c.x + r + 2 / unit, y: c.y, 'font-size': 8.5 / unit, 'stroke-width': 2.4 / unit },
-          c.name, unit >= 2.3 ? svg('tspan', { class: 'city-output', dx: 3 / unit }, money(c.output)) : null));
+        labels.push(reuse(`${ck}|label`, `${unit}|${tag}`, () => svg('text', { class: 'city-label', x: c.x + r + 2 / unit, y: c.y, 'font-size': 8.5 / unit, 'stroke-width': 2.4 / unit },
+          c.name, tag ? svg('tspan', { class: 'city-output', dx: 3 / unit }, tag) : null)));
       }
     }
+    this.cityNodes = kept;
     this.gCities.replaceChildren(...out, ...labels);
   }
 
@@ -250,12 +276,24 @@ export class WorldMap {
     for (const sh of s.shipments ?? []) {
       const n = this.tradeShips.get(sh.id);
       if (!n || sh.x == null) continue;
-      const x = ((sh.x % W) + W) % W;
-      const jump = n.dataset.x != null && Math.abs(Number(n.dataset.x) - x) > W / 2;
-      n.style.transition = jump ? 'none' : `transform ${Math.round((this.stepMs ?? 1000) * 1.05)}ms linear`;
-      n.style.transform = `translate(${x}px, ${sh.y}px)`;
-      n.dataset.x = x;
+      this.#sail(n, ((sh.x % W) + W) % W, sh.y);
     }
+  }
+
+  // Sends a cargo ship gliding to a new spot over the next real-time step. It is moved by the animation loop with
+  // a transform attribute, not a CSS transition: the browser lifts every SVG element with an animated CSS
+  // transform into a layer of its own, and with dozens of ships that made each frame of the map crawl.
+  #sail(n, x, y) {
+    const a = n.glide;
+    if (a && a.tx === x && a.ty === y) return;
+    const now = performance.now();
+    // The first sighting, or a crossing of the Pacific edge, puts it straight there
+    if (!a || Math.abs(a.tx - x) > W / 2) {
+      n.glide = { x, y, fx: x, fy: y, tx: x, ty: y, t0: now, dur: 1 };
+      n.setAttribute('transform', `translate(${x} ${y})`);
+      return;
+    }
+    Object.assign(a, { fx: a.x, fy: a.y, tx: x, ty: y, t0: now, dur: (this.stepMs ?? 1000) * 1.05 });
   }
 
   // Oil (amber) and gas (blue) pipelines; dashed while shut, cut by war, wrecked or still being built
@@ -271,7 +309,7 @@ export class WorldMap {
       const live = p.status === 'open' && p.flowing;
       const path = pts.map((g, i) => `${i ? 'L' : 'M'}${g.x} ${g.y}`).join('');
       out.push(svg('path', {
-        class: 'pipeline', d: path, stroke: color, 'stroke-width': (live ? 2.2 : 1.6) / unit, opacity: live ? 0.85 : 0.5,
+        class: 'pipeline', d: path, stroke: color, 'stroke-width': (live ? 2.2 : 1.6) / unit, 'stroke-opacity': live ? 0.85 : 0.5,
         'stroke-dasharray': live ? null : `${4 / unit} ${3 / unit}`,
       }, svg('title', {}, `${d.name} pipeline (${d.res}): ${p.status === 'building' ? `being built, ${p.left} weeks left` : p.status === 'sabotaged' ? 'wrecked by sabotage' : p.status === 'shut' ? 'shut' : live ? 'flowing' : 'cut by war'}`)));
     }
@@ -285,6 +323,12 @@ export class WorldMap {
     const s = this.state;
     if (!s?.shipments) return;
     const unit = this.#unit();
+    // Most updates change nothing about the lanes (they come every second in a war): then only the ships move
+    const key = JSON.stringify([unit, s.me, this.tradeRoutes?.size ?? 0, s.trade,
+      s.shipments.map((sh) => [sh.id, sh.mode, sh.lane, sh.seller, sh.buyer, sh.res, sh.covert, sh.secret, sh.deal, sh.left, sh.hunter?.name, sh.x == null]),
+      (s.treaties ?? []).filter((t) => t.kind === 'deal').map((t) => [t.a, t.b, t.res, t.until])]);
+    if (key === this.tradeKey) { this.#moveShips(); return; }
+    this.tradeKey = key;
     const portsOf = new Map();
     const ports = (cid) => {
       if (!portsOf.has(cid)) {
@@ -299,7 +343,6 @@ export class WorldMap {
       return portsOf.get(cid);
     };
     // The pair of ports closest to each other, and the sea route between them (remembered: it doesn't change)
-    this.tradeRoutes ??= new Map();
     const lane = (a, b) => {
       let best = null;
       for (const pa of ports(a)) for (const pb of ports(b)) {
@@ -307,17 +350,7 @@ export class WorldMap {
         if (!best || d < best[2]) best = [pa, pb, d];
       }
       if (!best) return null;
-      const key = `${best[0]}>${best[1]}`;
-      if (!this.tradeRoutes.has(key)) {
-        const from = PORTS[best[0]];
-        const way = seaRoute(from, PORTS[best[1]]);
-        if (!way) { this.tradeRoutes.set(key, null); return null; }
-        const pts = [from, ...way];
-        const cum = [0];
-        for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-        this.tradeRoutes.set(key, { pts, cum });
-      }
-      return this.tradeRoutes.get(key);
+      return this.#seaLane(best[0], best[1]) ?? null;
     };
     const at = (r, t) => {
       const want = r.cum[r.cum.length - 1] * Math.max(0, Math.min(1, t));
@@ -341,34 +374,27 @@ export class WorldMap {
       const w = Math.max(1.4, Math.min(6, Math.sqrt(value) * 0.5));
       lines.push(svg('path', {
         class: `trade-flow${ours ? ' ours' : ''}`, d: path(r), stroke: RES_COLORS[res] ?? '#9aa4b8', 'stroke-width': w / unit,
-        'stroke-dasharray': `${6 / unit} ${6 / unit}`, style: `--dash:${12 / unit}px`,
+        'stroke-dasharray': `${6 / unit} ${6 / unit}`,
       }, svg('title', {}, `${s.countries[from]?.name ?? from} → ${s.countries[to]?.name ?? to}: ${RESOURCE_INFO[res]?.name ?? res}, about ${money(value)} a year`)));
     }
     const seen = new Set();
     // A cargo's own lane, as the game sails it (its ports), else the lane between the two countries
     const ownLane = (sh) => {
-      if (!sh.lane) return lane(sh.seller, sh.buyer);
-      const key = `${sh.lane.from}>${sh.lane.to}`;
-      if (!this.tradeRoutes.has(key)) {
-        const from = PORTS[sh.lane.from];
-        const way = from && PORTS[sh.lane.to] ? seaRoute(from, PORTS[sh.lane.to]) : null;
-        if (!way) { this.tradeRoutes.set(key, null); return lane(sh.seller, sh.buyer); }
-        const pts = [from, ...way];
-        const cum = [0];
-        for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-        this.tradeRoutes.set(key, { pts, cum });
-      }
-      return this.tradeRoutes.get(key) ?? lane(sh.seller, sh.buyer);
+      if (!sh.lane || !PORTS[sh.lane.from] || !PORTS[sh.lane.to]) return lane(sh.seller, sh.buyer);
+      const r = this.#seaLane(sh.lane.from, sh.lane.to);
+      if (r === undefined) return null; // still being found
+      return r ?? lane(sh.seller, sh.buyer);
     };
     for (const sh of s.shipments) {
       if (sh.mode !== 'sea') continue;
       const r = ownLane(sh);
-      if (!r) continue;
+      // A ship whose lane is still being found is shown where it is, and its lane joins it shortly
+      if (!r && sh.x == null) continue;
       const ours = sh.buyer === s.me || sh.seller === s.me;
       const color = RES_COLORS[sh.res] ?? '#9aa4b8';
       const info = RESOURCE_INFO[sh.res];
       const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.covert ? ' (covert)' : ''}${sh.secret ? ' (secret deal)' : sh.deal ? ' (deal convoy)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
-      lines.push(svg('path', {
+      if (r) lines.push(svg('path', {
         class: `trade-lane${ours ? ' ours' : ''}`, d: path(r), stroke: color, 'stroke-width': (ours ? 1.8 : 1.1) / unit,
         'stroke-dasharray': sh.covert ? `${2 / unit} ${3 / unit}` : `${5 / unit} ${4 / unit}`,
       }, svg('title', {}, title)));
@@ -381,15 +407,19 @@ export class WorldMap {
         this.tradeShips.set(sh.id, n);
       }
       n.classList.toggle('hunted', Boolean(sh.hunter));
-      const jump = n.dataset.x != null && Math.abs(Number(n.dataset.x) - wrap(p[0])) > W / 2;
-      n.style.transition = jump || n.dataset.x == null ? 'none' : `transform ${Math.round((this.tickMs ?? 9000) * 0.9)}ms linear`;
-      n.style.transform = `translate(${wrap(p[0])}px, ${p[1]}px)`;
-      n.dataset.x = wrap(p[0]);
-      n.replaceChildren(
-        ours ? null : svg('circle', { r: 9 / unit, fill: 'transparent' }), // easier to click
-        sh.hunter ? svg('circle', { class: 'hunt-ring', r: 7 / unit, fill: 'none', stroke: '#ff5a5a', 'stroke-width': 1.4 / unit }) : null,
-        svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
-        svg('title', {}, `${title}${sh.hunter ? ` · ${sh.hunter.name} is after it` : ours ? '' : ' · click to stop it'}`));
+      // Redrawing the map (a pan, a zoom) must not restart a ship's glide toward the same spot
+      const x = wrap(p[0]);
+      this.#sail(n, x, p[1]);
+      const tip = `${title}${sh.hunter ? ` · ${sh.hunter.name} is after it` : ours ? '' : ' · click to stop it'}`;
+      const key = `${unit}|${ours}|${color}|${Boolean(sh.hunter)}|${tip}`;
+      if (n.dataset.key !== key) {
+        n.dataset.key = key;
+        n.replaceChildren(
+          ours ? null : svg('circle', { r: 9 / unit, fill: 'transparent' }), // easier to click
+          sh.hunter ? svg('circle', { class: 'hunt-ring', r: 7 / unit, fill: 'none', stroke: '#ff5a5a', 'stroke-width': 1.4 / unit }) : null,
+          svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
+          svg('title', {}, tip));
+      }
     }
     for (const [id, n] of this.tradeShips) if (!seen.has(id)) { n.remove(); this.tradeShips.delete(id); }
     // Our standing resource deals: the lanes their cargoes use
@@ -401,6 +431,52 @@ export class WorldMap {
         svg('title', {}, `Standing deal: ${s.countries[t.a]?.name} sells ${s.countries[t.b]?.name} ${RESOURCE_INFO[t.res]?.name ?? t.res} until week ${t.until}`)));
     }
     this.gTrade.replaceChildren(...lines, ...this.tradeShips.values());
+  }
+
+  // The sea route between two ports, as { pts, cum } (cum: distance along it), null if there is none, or
+  // undefined while it is still being found. Routes are found in a background worker, and the lanes are
+  // redrawn as they come in; where workers are missing, they are found here.
+  #seaLane(a, b) {
+    const key = `${a}>${b}`;
+    this.tradeRoutes ??= new Map();
+    if (this.tradeRoutes.has(key)) return this.tradeRoutes.get(key);
+    const from = PORTS[a];
+    const keep = (way) => {
+      if (!way) { this.tradeRoutes.set(key, null); return null; }
+      const pts = [from, ...way];
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const r = { pts, cum };
+      this.tradeRoutes.set(key, r);
+      return r;
+    };
+    if (this.routeWorker === undefined) {
+      this.routeWaiting = new Map();
+      try {
+        this.routeWorker = new Worker(new URL('./route-worker.js', import.meta.url), { type: 'module' });
+        this.routeWorker.addEventListener('message', ({ data }) => {
+          this.routeWaiting.get(data.key)?.(data.way);
+          this.routeWaiting.delete(data.key);
+          // Draw the new lanes a moment later, a batch at a time
+          if (!this.routeRedraw) this.routeRedraw = setTimeout(() => { this.routeRedraw = null; if (this.state) this.#drawTrade(); }, 150);
+        });
+        // A worker that can't start: find the rest here
+        this.routeWorker.addEventListener('error', () => {
+          this.routeWorker = null;
+          for (const k of this.routeWaiting.keys()) this.tradeRoutes.delete(k);
+          this.routeWaiting.clear();
+          if (this.state) this.#drawTrade();
+        });
+      } catch {
+        this.routeWorker = null;
+      }
+    }
+    if (!this.routeWorker) return keep(seaRoute(from, PORTS[b]));
+    if (!this.routeWaiting.has(key)) {
+      this.routeWaiting.set(key, keep);
+      this.routeWorker.postMessage({ key, from, to: PORTS[b] });
+    }
+    return undefined;
   }
 
   // Shipping lines opened by countries (the ones this leader knows of), and one being placed
@@ -604,7 +680,7 @@ export class WorldMap {
         f?.g.remove();
         const clipId = `front-${id}`;
         const clip = svg('clipPath', { id: clipId }, svg('path', { d: this.d[id] }));
-        const area = svg('polygon', { fill: color, opacity: 0.95 });
+        const area = svg('polygon', { fill: color, 'fill-opacity': 0.95 });
         const shade = svg('polyline', { class: 'front-shadow' });
         const line = svg('polyline', { class: 'front-line' });
         const labelA = svg('text', { class: 'front-label' });
@@ -751,14 +827,26 @@ export class WorldMap {
       for (const [id, f] of this.fronts) {
         const k = Math.min(1, (now - f.t0) / ((this.stepMs ?? this.tickMs) * 0.95));
         const shown = f.from + (f.to - f.from) * k;
-        if (Math.abs(shown - f.shown) > 0.05) { f.shown = shown; this.#placeFront(id, f); }
+        // Re-placed once it has moved enough to see (a quarter of a percent of the province), not every frame
+        if (Math.abs(shown - f.shown) > 0.25 || (k >= 1 && shown !== f.shown)) { f.shown = shown; this.#placeFront(id, f); }
+        if (k < 1) busy = true;
+      }
+      // Cargo ships sail at an even speed
+      for (const n of this.tradeShips.values()) {
+        const a = n.glide;
+        if (!a || (a.x === a.tx && a.y === a.ty)) continue;
+        const k = Math.min(1, (now - a.t0) / a.dur);
+        a.x = k >= 1 ? a.tx : a.fx + (a.tx - a.fx) * k;
+        a.y = k >= 1 ? a.ty : a.fy + (a.ty - a.fy) * k;
+        n.setAttribute('transform', `translate(${a.x} ${a.y})`);
         if (k < 1) busy = true;
       }
       for (const n of [...this.armyNodes.values(), ...this.fleetNodes.values()]) {
+        if (n.x === n.tx && n.y === n.ty) continue;
         const k = Math.min(1, (now - n.t0) / n.dur);
         const e = k * (2 - k) * 0.35 + k * 0.65;
-        n.x = n.fx + (n.tx - n.fx) * e;
-        n.y = n.fy + (n.ty - n.fy) * e;
+        n.x = k >= 1 ? n.tx : n.fx + (n.tx - n.fx) * e;
+        n.y = k >= 1 ? n.ty : n.fy + (n.ty - n.fy) * e;
         n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
         if (k < 1) busy = true;
       }
@@ -771,6 +859,10 @@ export class WorldMap {
     const s = this.state;
     const k = this.view.k;
     const unit = this.#unit();
+    // Labels follow who owns what and the zoom; unchanged, they are left alone
+    const key = `${k}|${unit}|${s.regions.map((r) => r[0]).join(',')}|${Object.values(s.countries).map((c) => c.name).join(',')}`;
+    if (key === this.labelsKey) return;
+    this.labelsKey = key;
     const out = [];
     const groups = new Map();
     for (const id of ORDER) {
@@ -876,10 +968,17 @@ export class WorldMap {
         n.g.setAttribute('class', `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}`);
         n.g.setAttribute('opacity', a.sea ? '0.85' : '1');
         n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
-        n.g.replaceChildren(
-          svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
-          svg('text', { x: 0, y: 0, 'font-size': 9 / unit }, (a.exact || a.seen ? '' : '~') + armyLabel(a.troops)),
-          svg('title', {}, `${a.name} (${s.countries[a.owner]?.name ?? ''})${a.status ? `: ${a.status}` : ''}`));
+        // Rebuilt only when what it shows changes: rebuilding it every second made its tooltip flicker
+        const text = (a.exact || a.seen ? '' : '~') + armyLabel(a.troops);
+        const tip = `${a.name} (${s.countries[a.owner]?.name ?? ''})${a.status ? `: ${a.status}` : ''}`;
+        const key = `${unit}|${colorOf(a.owner)}|${text}|${tip}`;
+        if (n.key !== key) {
+          n.key = key;
+          n.g.replaceChildren(
+            svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
+            svg('text', { x: 0, y: 0, 'font-size': 9 / unit }, text),
+            svg('title', {}, tip));
+        }
       });
     }
     for (const [id, n] of this.armyNodes) if (!seen.has(id)) { n.g.remove(); this.armyNodes.delete(id); }
@@ -938,10 +1037,15 @@ export class WorldMap {
       n.g.setAttribute('class', `fleet${this.selectedFleet === f.id ? ' sel' : ''}${mine ? '' : ' foe'}${f.battle ? ' fighting' : ''}`);
       n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
       const label = `⚓ ${f.ships}${f.carriers ? ` +${f.carriers}✈` : ''}`;
-      n.g.replaceChildren(
-        svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: hgt / 2, fill: colorOf(f.owner) }),
-        svg('text', { x: 0, y: 0, 'font-size': 8.5 / unit }, label),
-        svg('title', {}, `${f.name} (${s.countries[f.owner]?.name ?? ''}): ${f.ships} warships${f.carriers ? `, ${f.carriers} aircraft carriers` : ''}${f.status ? ` · ${f.status}` : ''}`));
+      const tip = `${f.name} (${s.countries[f.owner]?.name ?? ''}): ${f.ships} warships${f.carriers ? `, ${f.carriers} aircraft carriers` : ''}${f.status ? ` · ${f.status}` : ''}`;
+      const key = `${unit}|${colorOf(f.owner)}|${label}|${tip}`;
+      if (n.key !== key) {
+        n.key = key;
+        n.g.replaceChildren(
+          svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: hgt / 2, fill: colorOf(f.owner) }),
+          svg('text', { x: 0, y: 0, 'font-size': 8.5 / unit }, label),
+          svg('title', {}, tip));
+      }
     }
     for (const [id, n] of this.fleetNodes) if (!seen.has(id)) { n.g.remove(); this.fleetNodes.delete(id); }
     // Our fleets' courses: a dotted line along the route, to a ring where it will stop
@@ -1085,9 +1189,19 @@ export class WorldMap {
 
   /* ---------- Pan and zoom ---------- */
 
+  // The map's size on screen, remembered until it is resized: measuring it right after the map has been redrawn
+  // forces the browser to lay the whole page out again, which made every animation frame stutter
+  #size() {
+    if (!this.size) {
+      const r = this.el.getBoundingClientRect();
+      this.size = { width: r.width, height: r.height };
+    }
+    return this.size;
+  }
+
   #unit() {
     // screen pixels per map unit at the current zoom
-    const rect = this.el.getBoundingClientRect();
+    const rect = this.#size();
     const vbW = W / this.view.k;
     const vbH = vbW * (rect.height / Math.max(1, rect.width));
     return Math.min(rect.width / vbW, rect.height / vbH) || 1;
@@ -1095,6 +1209,7 @@ export class WorldMap {
 
   #apply() {
     const rect = this.el.getBoundingClientRect();
+    this.size = rect.width ? { width: rect.width, height: rect.height } : null;
     if (!rect.width) return;
     const vbW = W / this.view.k;
     const vbH = vbW * (rect.height / rect.width);
@@ -1106,7 +1221,16 @@ export class WorldMap {
     if (this.state) {
       cancelAnimationFrame(this.raf);
       this.#syncView();
-      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
+      this.raf = requestAnimationFrame(() => {
+        this.moving = false;
+        // Dragging the map only changes which cities are in view; everything else is sized for the zoom, so it
+        // is redrawn only when the zoom changes
+        const unit = this.#unit();
+        if (unit === this.drawnUnit) { this.#drawCities(); return; }
+        this.drawnUnit = unit;
+        this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities();
+        for (const [id, f] of this.fronts) this.#placeFront(id, f);
+      });
     }
   }
 
@@ -1171,7 +1295,9 @@ export class WorldMap {
     el.addEventListener('pointerdown', (e) => {
       el.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
-      if (pointers.size === 1) drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, target: e.target };
+      // What was clicked is read now: armies, fleets, ships and cities are redrawn every second, and a click
+      // that spanned a redraw used to land on a marker no longer on the map (and deselect everything)
+      if (pointers.size === 1) drag = { x: e.clientX, y: e.clientY, cx: this.view.cx, cy: this.view.cy, moved: false, hit: hitOf(e.target) };
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), k: this.view.k };
@@ -1216,26 +1342,21 @@ export class WorldMap {
       drag = null;
       el.classList.remove('dragging');
       if (d.moved) return;
-      const armyEl = d.target.closest?.('[data-army]');
-      const fleetEl = d.target.closest?.('[data-fleet]');
-      const nodeEl = d.target.closest?.('[data-node]');
-      const id = d.target.dataset?.id;
+      const { army, fleet, node, cargo, city, id } = d.hit;
       if (this.targeting) {
-        if (armyEl && this.targeting.onArmy?.(armyEl.dataset.army)) return;
-        if (fleetEl && this.targeting.onFleet?.(fleetEl.dataset.fleet)) return;
-        if (nodeEl && this.targeting.onNode?.(nodeEl.dataset.node)) return;
-        if (!id && !armyEl && !fleetEl && !nodeEl && this.targeting.onWater) { const [mx, my] = this.#toMap(d.x, d.y); this.targeting.onWater(((mx % W) + W) % W, my); return; }
+        if (army && this.targeting.onArmy?.(army)) return;
+        if (fleet && this.targeting.onFleet?.(fleet)) return;
+        if (node && this.targeting.onNode?.(node)) return;
+        if (!id && !army && !fleet && !node && this.targeting.onWater) { const [mx, my] = this.#toMap(d.x, d.y); this.targeting.onWater(((mx % W) + W) % W, my); return; }
         if (id && (!this.targeting.filter || this.targeting.filter(id))) this.targeting.onPick(id);
         else if (id) this.targeting.onReject?.(id);
         return;
       }
-      if (fleetEl) return this.onFleet?.(fleetEl.dataset.fleet);
-      if (armyEl) return this.onArmy?.(armyEl.dataset.army);
-      const cargoEl = d.target.closest?.('[data-cargo]');
-      if (cargoEl && this.onCargo) return this.onCargo(cargoEl.dataset.cargo);
-      const cityEl = d.target.closest?.('[data-city]');
-      if (cityEl && this.onCity) return this.onCity(cityEl.dataset.id, cityEl.dataset.city);
-      if (nodeEl) return;
+      if (fleet) return this.onFleet?.(fleet);
+      if (army) return this.onArmy?.(army);
+      if (cargo && this.onCargo) return this.onCargo(cargo);
+      if (city && this.onCity) return this.onCity(city.id, city.name);
+      if (node) return;
       this.onRegion?.(id ?? null);
     };
     el.addEventListener('pointerup', end);
@@ -1249,6 +1370,19 @@ export class WorldMap {
     el.addEventListener('pointercancel', end);
     el.addEventListener('pointerleave', () => { if (hover) this.uses.get(hover)?.classList.remove('hover'); hover = null; this.onHover?.(null); });
   }
+}
+
+// What a click landed on, read at once: the marker may be redrawn before the button comes back up
+function hitOf(target) {
+  const cityEl = target?.closest?.('[data-city]');
+  return {
+    army: target?.closest?.('[data-army]')?.dataset.army ?? null,
+    fleet: target?.closest?.('[data-fleet]')?.dataset.fleet ?? null,
+    node: target?.closest?.('[data-node]')?.dataset.node ?? null,
+    cargo: target?.closest?.('[data-cargo]')?.dataset.cargo ?? null,
+    city: cityEl ? { id: cityEl.dataset.id, name: cityEl.dataset.city } : null,
+    id: target?.dataset?.id ?? null,
+  };
 }
 
 /* ---------- Colours ---------- */
@@ -1327,7 +1461,7 @@ function arrowPath(points, color, unit, dashed) {
   }
   return svg('path', {
     class: 'arrow', d, stroke: color, 'stroke-width': 3.2 / unit, 'stroke-dasharray': dashed ? `${5 / unit} ${4 / unit}` : null,
-    'marker-end': `url(#${markerFor(color)})`, opacity: 0.9,
+    'marker-end': `url(#${markerFor(color)})`, 'stroke-opacity': 0.9,
   });
 }
 

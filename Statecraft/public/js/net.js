@@ -103,32 +103,66 @@ function saveRoom(v) {
 
 /* ---------- Solo play ---------- */
 
+// The link whose saves count: one that has been left may still send its last save after a new game started
+let latestSolo = null;
+
 export class LocalLink {
   constructor(onMessage, onStatus) {
     this.onMessage = onMessage;
     this.onStatus = onStatus;
+    this.worker = null;
     this.room = null;
     this.player = null;
+    this.left = false;
   }
 
   get available() { return true; }
 
+  // The world runs in a background worker so the map stays smooth; on the page itself if workers are missing
   open({ name, restore }) {
-    const deliver = (msg) => queueMicrotask(() => this.onMessage(structuredClone(msg)));
+    latestSolo = this;
+    const state = restore ? loadSolo()?.state ?? null : null;
+    this.onStatus('open');
+    let worker = null;
+    try {
+      worker = new Worker(new URL('./solo-worker.js', import.meta.url), { type: 'module' });
+    } catch { /* no module workers here */ }
+    if (!worker) { this.#openHere(name, state); return; }
+    this.worker = worker;
+    let heard = false;
+    worker.addEventListener('message', ({ data }) => {
+      heard = true;
+      if (data.save != null) {
+        if (latestSolo === this) try { localStorage.setItem(SAVE_KEY, data.save); } catch { /* storage full or unavailable */ }
+      } else if (data.left) {
+        worker.terminate();
+      } else if (data.msg && !this.left) {
+        this.onMessage(data.msg);
+      }
+    });
+    // A worker that fails to start (an old browser, a blocked script): play on the page instead
+    worker.addEventListener('error', (e) => {
+      if (heard || this.left) return;
+      e.preventDefault?.();
+      worker.terminate();
+      this.worker = null;
+      this.#openHere(name, state);
+    });
+    worker.postMessage({ open: { name, state, v: SAVE_VERSION } });
+  }
+
+  #openHere(name, state) {
+    const deliver = (msg) => queueMicrotask(() => { if (!this.left) this.onMessage(structuredClone(msg)); });
     this.room = new Room({
       code: 'SOLO',
       timers: BROWSER_TIMERS,
       onTick: (room) => { if (room.game.s.week % 2 === 0 || room.game.s.over) this.save(); },
     });
-    this.onStatus('open');
     deliver({ type: 'joined', code: 'SOLO', you: 'me', token: 'solo', solo: true });
     this.player = this.room.addPlayer({ id: 'me', token: 'solo', name: name || 'You', conn: { send: deliver } });
-    if (restore) {
-      const saved = loadSolo();
-      if (saved) {
-        this.room.restore(saved.state, this.player);
-        return;
-      }
+    if (state) {
+      this.room.restore(state, this.player);
+      return;
     }
     this.room.settings.speed = 'normal';
     this.room.start();
@@ -136,14 +170,15 @@ export class LocalLink {
   }
 
   send(msg) {
-    if (!this.room) return;
     if (msg.type === 'leave') return this.leave();
+    if (this.worker) { this.worker.postMessage({ msg }); return; }
+    if (!this.room) return;
     this.room.handle(this.player, msg);
     if (msg.type === 'cmd') this.save();
   }
 
   save() {
-    if (!this.room?.game) return;
+    if (!this.room?.game || latestSolo !== this) return;
     try {
       const s = this.room.game.s;
       localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, saved: Date.now(), state: { ...s, fresh: [] } }));
@@ -151,6 +186,10 @@ export class LocalLink {
   }
 
   leave() {
+    if (this.left) return;
+    this.left = true;
+    // The worker saves the game, stops its clock, then says so and is shut down
+    if (this.worker) { this.worker.postMessage({ leave: true }); this.worker = null; return; }
     this.save();
     this.room?.stopClock();
     this.room = null;

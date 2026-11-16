@@ -367,7 +367,6 @@ function onState(s) {
   app.tickMs = SPEEDS[s.speed] ?? SPEEDS.normal;
   map.tickMs = app.tickMs;
   map.stepMs = s.stepMs ?? app.tickMs;
-  app.ticked = Boolean(ticked);
   for (const n of s.news ?? []) app.newsLog.set(n.id, n);
   for (const m of s.you?.inbox ?? []) frontNews(m, s.me);
   if (app.newsLog.size > 1500) for (const k of [...app.newsLog.keys()].slice(0, app.newsLog.size - 1500)) app.newsLog.delete(k);
@@ -476,7 +475,7 @@ function renderGame() {
   renderPanel();
   renderMapTools();
   mapReady.then(() => {
-    map.update(app.state, { tick: app.ticked });
+    map.update(app.state);
     if (app.selection?.region) showRegion(ctx, app.selection.region);
     else if (app.selection?.army) {
       if (app.state.armies.some((a) => a.id === app.selection.army)) showArmy(ctx, app.selection.army);
