@@ -9,9 +9,11 @@ import { clamp, news, alert, alive, nameOf, money, nextId, atWar, friendlyGround
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, lineProblem, hasLine, LINE_SETUP } from './economy.js';
 import {
   createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setAuto, prepareLanding,
-  setAirCampaign, settleMinor, checkOrder,
+  setAirCampaign, settleMinor, checkOrder, setAssist, breakOut, setAirlift, surrenderArmy,
 } from './military.js';
-import { formFleet, fleetOrder, reinforceFleet, mergeFleets, disbandFleet, renameFleet, recallFleets } from './navy.js';
+import { formFleet, fleetOrder, reinforceFleet, mergeFleets, disbandFleet, renameFleet, recallFleets, setFleetRaid } from './navy.js';
+import { planDoctrine, cancelDoctrine } from './doctrine.js';
+import { openRoute, closeRoute, setRoutePrivacy } from './routes.js';
 import { setProvincePolicy, holdReferendum, setBorder } from './peoples.js';
 import { startAid, stopAid } from './proxy.js';
 import { setCarbonTax, makePledge } from './climate.js';
@@ -24,7 +26,7 @@ import {
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
 import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, interceptProblem } from './trade.js';
-import { huntCargo, callOffHunt } from './shipping.js';
+import { huntCargo, callOffHunt, orderCoastguard } from './shipping.js';
 import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
@@ -283,6 +285,12 @@ const HANDLERS = {
   },
   armyDisband(s, c, { id }) { return disbandArmy(s, c, s.armies[id]); },
   armyAuto(s, c, { id, on }) { return setAuto(s, c, s.armies[id], on); },
+  armyAssist(s, c, { id, on }) { return setAssist(s, c, s.armies[id], on); },
+  armyBreakout(s, c, { id }) { return breakOut(s, c, s.armies[id]); },
+  armyAirlift(s, c, { id, aircraft }) { return setAirlift(s, c, s.armies[id], aircraft); },
+  armySurrender(s, c, { id }) { return surrenderArmy(s, c, s.armies[id]); },
+  doctrine(s, c, { picks, name }) { return planDoctrine(s, c, { picks, name }); },
+  doctrineCancel(s, c) { return cancelDoctrine(s, c); },
   armyLanding(s, c, { id }) { return prepareLanding(s, c, s.armies[id]); },
   armyReinforce(s, c, { id, troops, tanks }) { return reinforceArmy(s, c, s.armies[id], { troops, tanks }); },
   armyMerge(s, c, { ids }) { return Array.isArray(ids) ? mergeArmies(s, c, ids) : 'Pick armies to merge.'; },
@@ -304,6 +312,7 @@ const HANDLERS = {
   fleetMerge(s, c, { ids }) { return mergeFleets(s, c, ids); },
   fleetDisband(s, c, { id }) { return disbandFleet(s, c, { id }); },
   fleetRename(s, c, { id, name }) { return renameFleet(s, c, { id, name }); },
+  fleetRaid(s, c, { id, how }) { return setFleetRaid(s, c, { id, how }); },
   air(s, c, { region, aircraft, mission }) { return setAirCampaign(s, c, region, aircraft, mission); },
 
   /* ---------- Diplomacy ---------- */
@@ -373,14 +382,21 @@ const HANDLERS = {
   marketSell(s, c, { res, qty }) { return sellToWorld(s, c, { res, qty }); },
   marketOffer(s, c, { res, qty, markup }) { return setOffer(s, c, { res, qty, markup }); },
   // At sea a fleet has to sail out and meet the cargo; overland, a country it crosses seizes it at the border
-  intercept(s, c, { id, how, fleet }) {
+  // fleet: one of ours at sea, 'new' (warships in port put to sea from the best port), or 'coastguard' (in our own
+  // waters, for a secret line we have found)
+  intercept(s, c, { id, how, fleet, ships, carriers }) {
     const sh = (s.shipments ?? []).find((x) => x.id === id);
     if (sh?.mode !== 'sea') return orderIntercept(s, c, { id, how });
     const why = interceptProblem(s, c, sh);
     if (why) return why;
-    return huntCargo(s, c, sh, s.fleets?.[fleet], how === 'sink' ? 'sink' : 'seize');
+    how = how === 'sink' ? 'sink' : 'seize';
+    if (fleet === 'coastguard') return orderCoastguard(s, c, sh, how);
+    return huntCargo(s, c, sh, fleet === 'new' ? 'new' : s.fleets?.[fleet], how, { ships, carriers });
   },
   huntCancel(s, c, { fleet }) { return callOffHunt(s, c, { fleet }); },
+  routeOpen(s, c, { from, to, private: secret, name }) { return openRoute(s, c, { from, to, private: Boolean(secret), name }); },
+  routeClose(s, c, { id }) { return closeRoute(s, c, { id }); },
+  routePrivacy(s, c, { id, private: secret }) { return setRoutePrivacy(s, c, { id, private: secret }); },
   toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
   straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
   // Patrols and blockades are fleets now; these call them off

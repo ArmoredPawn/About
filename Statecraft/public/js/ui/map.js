@@ -26,8 +26,10 @@ const INDEX = Object.fromEntries(ORDER.map((id, i) => [id, i]));
 const CITY_ZOOM = 3;
 
 export class WorldMap {
-  constructor(el, { onRegion, onArmy, onFleet, onCargo, onHover, onContext, onTargetHint, onViewChange }) {
+  constructor(el, { onRegion, onArmy, onFleet, onCargo, onCity, onHover, onContext, onTargetHint, onViewChange }) {
     this.onCargo = onCargo;
+    this.onCity = onCity;
+    this.routePreview = null;
     this.onViewChange = onViewChange;
     this.el = el;
     this.onRegion = onRegion;
@@ -87,7 +89,10 @@ export class WorldMap {
     this.gTrade = svg('g', { class: 'trade' });
     this.gFleets = svg('g');
     this.gPreview = svg('g', { 'pointer-events': 'none' });
-    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gLines, this.gTrade, this.gRes, this.gSeas, this.gCities, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview);
+    this.gPockets = svg('g', { class: 'pockets', 'pointer-events': 'none' });
+    this.gRoutes = svg('g', { class: 'routes' });
+    this.gRoutePreview = svg('g', { class: 'route-preview', 'pointer-events': 'none' });
+    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gPockets, this.gLines, this.gTrade, this.gRoutes, this.gRes, this.gSeas, this.gCities, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview, this.gRoutePreview);
     for (const id of ORDER) {
       const u = svg('path', { d: this.d[id], class: 'region', 'data-id': id, fill: NEUTRAL });
       this.uses.set(id, u);
@@ -110,7 +115,7 @@ export class WorldMap {
     this.#drawArmies();
     this.#drawFleets();
     this.#drawPipelines();
-    if (!live) this.#drawTrade();
+    if (!live) { this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); }
     else this.#moveShips();
     this.#drawBattles();
     this.#drawOverlays();
@@ -189,8 +194,10 @@ export class WorldMap {
         if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
         const r = Math.max(1.6, Math.min(7, Math.sqrt(c.pop / 120))) / unit;
         const color = politicalColor(this.state, c.holder);
-        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}`;
-        out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}`, 'data-id': id },
+        const street = this.state.battleInfo?.[id]?.street === c.name;
+        const title = `${c.name}${c.capital ? ' (capital)' : ''}: ${(c.pop / 1000).toFixed(1)} million people, about ${money(c.output)} of output a year${c.national != null ? ` (${(c.national * 100).toFixed(1)}% of ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? 'its holder'}'s economy)` : ''}. ${c.fallen ? `Taken by ${this.state.countries[c.holder]?.name ?? c.holder} in the fighting.` : `Held by ${this.state.countries[c.holder]?.name ?? this.state.minors?.[c.holder]?.name ?? c.holder}.`}${street ? ' Street fighting here now.' : ''} Click for details.`;
+        if (street) out.push(svg('circle', { class: 'street-ring', cx: c.x, cy: c.y, r: r * 4, 'stroke-width': 1.6 / unit, 'pointer-events': 'none' }));
+        out.push(svg('g', { class: `city${c.fallen ? ' fallen' : ''}${street ? ' street' : ''}`, 'data-id': id, 'data-city': c.name },
           // The city's built-up area, in the colour of whoever holds it
           svg('circle', { class: 'city-area', 'data-id': id, cx: c.x, cy: c.y, r: r * 2.6, fill: color }),
           c.capital
@@ -368,6 +375,87 @@ export class WorldMap {
     this.gTrade.replaceChildren(...lines, ...this.tradeShips.values());
   }
 
+  // Shipping lines opened by countries (the ones this leader knows of), and one being placed
+  #drawRoutes() {
+    const s = this.state;
+    const unit = this.#unit();
+    const out = [];
+    const all = [...(s.routes ?? []).map((r) => ({ ...r, kind: r.by === s.me || r.partner === s.me ? 'ours' : r.private ? 'found' : 'other' }))];
+    for (const r of all) {
+      if (!r.pts?.length) continue;
+      const d = [0, -W, W].map((shift) => r.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
+      const name = `${r.name}: ${s.countries[r.by]?.name ?? r.by} → ${s.countries[r.partner]?.name ?? r.partner}, ${Math.round(r.km).toLocaleString('en')} km${r.private ? ' (private)' : ''}`;
+      out.push(svg('path', { class: `route-line ${r.kind}${r.private ? ' private' : ''}`, d, 'stroke-width': (r.kind === 'ours' ? 2.4 : 1.6) / unit, 'stroke-dasharray': r.private ? `${1.5 / unit} ${3 / unit}` : `${8 / unit} ${3 / unit}` }, svg('title', {}, name)));
+      for (const [x, y] of [r.pts[0], r.pts[r.pts.length - 1]]) out.push(svg('circle', { class: `route-end ${r.kind}`, cx: ((x % W) + W) % W, cy: y, r: 3.2 / unit, 'stroke-width': 1 / unit }, svg('title', {}, name)));
+    }
+    this.gRoutes.replaceChildren(...out);
+    this.#drawRoutePreview();
+  }
+
+  previewRoute(p) {
+    this.routePreview = p;
+    this.#drawRoutePreview();
+    if (p?.pts) {
+      const xs = p.pts.map((q) => q[0]);
+      const ys = p.pts.map((q) => q[1]);
+      this.#fitBox(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys));
+    }
+  }
+
+  #drawRoutePreview() {
+    const p = this.routePreview;
+    if (!p || !this.state) { this.gRoutePreview.replaceChildren(); return; }
+    const unit = this.#unit();
+    const out = [];
+    if (p.pts) {
+      const d = [0, -W, W].map((shift) => p.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
+      out.push(svg('path', { class: 'route-line preview', d, 'stroke-width': 3 / unit, 'stroke-dasharray': `${7 / unit} ${4 / unit}` }));
+    }
+    for (const id of [p.from, p.to]) {
+      if (!id || !PORTS[id]) continue;
+      const [x, y] = PORTS[id];
+      out.push(svg('circle', { class: 'route-end preview', cx: x, cy: y, r: 6 / unit, 'stroke-width': 2 / unit }));
+    }
+    this.gRoutePreview.replaceChildren(...out);
+  }
+
+  focusRoutes(list) {
+    const pts = (list ?? []).flatMap((r) => r.pts ?? []);
+    if (!pts.length) return;
+    this.#fitBox(Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])));
+  }
+
+  #fitBox(x0, y0, x1, y1) {
+    const rect = this.el.getBoundingClientRect();
+    const aspect = rect.height / Math.max(1, rect.width);
+    const spanX = Math.max(60, x1 - x0) * 1.3;
+    const spanY = Math.max(40, y1 - y0) * 1.3;
+    this.view.k = Math.max(1, Math.min(16, Math.min(W / spanX, W * aspect / spanY)));
+    this.view.cx = (x0 + x1) / 2;
+    this.view.cy = (y0 + y1) / 2;
+    this.#apply();
+  }
+
+  // Encircled forces: a red ring around every pocket (dashed where it is still supplied by sea)
+  #drawPockets() {
+    const s = this.state;
+    const out = [];
+    for (const p of s.pockets ?? []) {
+      for (const id of p.regions ?? []) {
+        if (!this.d[id]) continue;
+        out.push(svg('path', { d: this.d[id], class: `pocket-area${p.sea ? ' sea' : ''}` }));
+      }
+      const main = GEO[p.regions?.[0]];
+      if (!main) continue;
+      const g = p.regions.map((id) => GEO[id]).filter(Boolean);
+      const cx = g.reduce((t, q) => t + q.x, 0) / g.length;
+      const cy = g.reduce((t, q) => t + q.y, 0) / g.length;
+      const unit = this.#unit();
+      out.push(svg('text', { class: 'pocket-label', x: cx, y: cy - 22 / unit, 'font-size': 10 / unit, 'stroke-width': 2.4 / unit }, `${p.sea ? '⚓ Cut off' : '⭕ Encircled'}: ${p.name} (${s.countries[p.holder]?.name ?? p.holder})`));
+    }
+    this.gPockets.replaceChildren(...out);
+  }
+
   setLayers(layers) {
     this.layers = { ...this.layers, ...layers };
     this.gArmies.style.display = this.layers.armies ? '' : 'none';
@@ -375,6 +463,7 @@ export class WorldMap {
     this.gFleets.style.display = this.layers.fleets ? '' : 'none';
     this.gLines.style.display = this.layers.pipelines ? '' : 'none';
     this.gTrade.style.display = this.layers.trade ? '' : 'none';
+    this.gRoutes.style.display = this.layers.trade ? '' : 'none';
   }
 
   setMode(mode, resource) {
@@ -860,7 +949,12 @@ export class WorldMap {
       const rad = 9 / unit;
       const prog = Math.max(0.02, r.prog / 100);
       const end = [g.x + rad * Math.sin(prog * 2 * Math.PI), g.y - rad * Math.cos(prog * 2 * Math.PI)];
-      out.push(svg('g', { class: 'battle' },
+      const info = this.state.battleInfo?.[id];
+      const tags = [info?.pincer ? 'Pincer' : null, info?.street ? `Street fighting: ${info.street}` : null, info?.militia >= 1 ? `${Math.round(info.militia)}K home guard` : null].filter(Boolean);
+      if (tags.length && unit >= 1.4) {
+        out.push(svg('text', { class: 'battle-tag', x: g.x, y: g.y - 30 / unit, 'font-size': 8 / unit, 'stroke-width': 2.2 / unit, 'text-anchor': 'middle' }, tags.join(' · ')));
+      }
+      out.push(svg('g', { class: `battle${info?.pincer ? ' pincer' : ''}` },
         svg('circle', { cx: g.x, cy: g.y - 16 / unit, r: rad, fill: 'rgb(12 14 22 / 0.85)', stroke: '#e5484d', 'stroke-width': 1 / unit }),
         svg('path', { d: `M${g.x} ${g.y - 16 / unit - rad}A${rad} ${rad} 0 ${prog > 0.5 ? 1 : 0} 1 ${end[0]} ${end[1] - 16 / unit}`, fill: 'none', stroke: colorOf(r.battleBy), 'stroke-width': 2.2 / unit }),
         svg('text', { x: g.x, y: g.y - 16 / unit, 'font-size': 10 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff' }, '⚔')));
@@ -984,7 +1078,7 @@ export class WorldMap {
     if (this.state) {
       cancelAnimationFrame(this.raf);
       this.#syncView();
-      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
+      this.raf = requestAnimationFrame(() => { this.moving = false; this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); });
     }
   }
 
@@ -1111,6 +1205,8 @@ export class WorldMap {
       if (armyEl) return this.onArmy?.(armyEl.dataset.army);
       const cargoEl = d.target.closest?.('[data-cargo]');
       if (cargoEl && this.onCargo) return this.onCargo(cargoEl.dataset.cargo);
+      const cityEl = d.target.closest?.('[data-city]');
+      if (cityEl && this.onCity) return this.onCity(cityEl.dataset.id, cityEl.dataset.city);
       if (nodeEl) return;
       this.onRegion?.(id ?? null);
     };

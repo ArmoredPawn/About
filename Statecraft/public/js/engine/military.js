@@ -11,9 +11,10 @@ import {
   clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround, fuelCut,
   onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted, rel,
 } from './core.js';
-import { navyStep, navyTick, landingControl, crossingOdds } from './navy.js';
+import { navyStep, navyTick, landingControl, crossingOdds, controlAt, PORTS, OFF_COAST } from './navy.js';
 import { shippingStep } from './shipping.js';
-import { fallenCities } from './cities.js';
+import { fallenCities, citiesIn, cityDepths } from './cities.js';
+import { fx as doctrineFx, matchup, noteFighting } from './doctrine.js';
 import { gpsCoverage, commsReady, satSees } from './space.js';
 import { PROVINCES } from './data/regions.js';
 import { NATIONS as COUNTRIES } from './data/nations.js';
@@ -114,26 +115,62 @@ function genBonus(gen, role) {
   return m;
 }
 
+// Doctrine (doctrine.js): how each country's armies fight
+const dfx = (s, id) => doctrineFx(s, id);
+// Rough ground: hills, forests, mountains, marshes, jungle, cities
+const rough = (terrain) => terrain.defend > 1.1;
+// A surrounded garrison fights on what it has left
+const POCKET_SUPPLY = 0.2;
+const garrisonState = (s, regionId) => {
+  const p = s.pockets?.[regionId];
+  return p && !p.sea ? { org: 45, supply: POCKET_SUPPLY } : { org: 80, supply: 1 };
+};
+// What a defender's doctrine adds to holding a province: fortifications count for more behind a fortified line
+export const defendMul = (s, holder, terrain, fort) => holdFactor(terrain, fort * (1 + (dfx(s, holder).fort ?? 0))) * (1 + (dfx(s, holder).defend ?? 0));
+
 // A rough strength guess for a province's defence, used by generals and the AI to plan
 export function defenceEstimate(s, regionId, gar = garrisons(s)) {
   const reg = s.regions[regionId];
   const terrain = terrainOf(regionId);
   const g = gar.get(regionId) ?? { troops: 0, tanks: 0 };
-  let p = power(g.troops, g.tanks, quality(s, reg.ctrl), 80, 1, terrain);
+  const gs = garrisonState(s, regionId);
+  let p = power(g.troops, g.tanks, quality(s, reg.ctrl), gs.org, gs.supply, terrain) + militiaPower(s, reg, terrain);
   for (const a of Object.values(s.armies)) {
     if (a.region === regionId && !a.sea && onSameSide(s, a.owner, reg.ctrl)) {
-      p += power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend');
+      p += power(a.troops, runningTanks(s, a) * (1 + (dfx(s, a.owner).armorDefend ?? 0)), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend');
     }
   }
-  return p * holdFactor(terrain, reg.fort);
+  return p * defendMul(s, reg.ctrl, terrain, reg.fort);
 }
 
-// Tanks without fuel are only pillboxes
-const runningTanks = (s, a) => a.tanks * (1 - fuelCut(s.countries[a.owner]));
+// Tanks without fuel are only pillboxes, and a surrounded army's fuel runs out first
+const runningTanks = (s, a) => a.tanks * (1 - fuelCut(s.countries[a.owner])) * (a.pocket && !a.pocketSea ? 0.35 : 1);
 
 export function armyAttackEstimate(s, a, regionId) {
-  return power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrainOf(regionId)) * genBonus(a.gen, 'attack');
+  const terrain = terrainOf(regionId);
+  const d = dfx(s, a.owner);
+  const tanks = runningTanks(s, a) * Math.max(0.3, 1 + (d.armor ?? 0));
+  return power(a.troops, tanks, quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'attack')
+    * (1 + (d.attack ?? 0) + (rough(terrain) ? d.roughAttack ?? 0 : 0));
 }
+
+// How well an army can break through a line and run on into the open behind it: mechanised (tanks per thousand
+// men) and trained to it by its doctrine. 0 (foot infantry) to about 1.
+export function breakthroughOf(s, a) {
+  const armour = clamp(runningTanks(s, a) / Math.max(1, a.troops) / 3, 0, 1);
+  const tech = 0.6 + 0.05 * (s.countries[a.owner]?.tech?.army ?? 4);
+  return clamp(armour * 0.6 * tech + (dfx(s, a.owner).breakthrough ?? 0) * (0.4 + 0.6 * armour), 0, 1.2);
+}
+
+// The people of a province defending their own homeland take up arms: a home guard of about 4,000 for every
+// million people, many times that under a people's war. It fights as the cities do, and is used up as they fall.
+export function militiaOf(s, reg) {
+  const holder = reg.ctrl;
+  if (reg.owner !== holder || (reg.people ?? reg.owner) !== holder || !s.countries[holder]) return 0;
+  const k = 1 + 2 * (dfx(s, holder).militia ?? 0);
+  return Math.max(0, reg.pop * 4 * k - (reg.battle?.militiaLost ?? 0));
+}
+const militiaPower = (s, reg, terrain) => power(militiaOf(s, reg), 0, 0.45, 60, 1, terrain);
 
 /* ---------- Fuel ---------- */
 
@@ -162,7 +199,7 @@ export function forcesFuel(s, c) {
   let inArmies = 0;
   for (const a of Object.values(s.armies)) {
     if (a.owner !== c.id) continue;
-    armies += armyFuel(a);
+    armies += armyFuel(a) * (1 + (dfx(s, c.id).fuel ?? 0));
     inArmies += a.troops;
   }
   const garrisons = Math.max(0, c.troops - inArmies) * FUEL.hold[0] + c.aircraft * 0.000004 + Math.max(0, c.tanks) * FUEL.hold[1] * 0.5;
@@ -690,7 +727,7 @@ export function setAirCampaign(s, c, target, aircraft, mission = 'strategic') {
   if (!reg || !atWar(s, c.id, reg.ctrl)) return 'Air campaigns target provinces held by an enemy.';
   const far = rangeProblem(s, c, target, 'air');
   if (far) { if (was) c.airOps.push(was); return far; }
-  const committed = c.airOps.reduce((t, o) => t + o.aircraft, 0);
+  const committed = c.airOps.reduce((t, o) => t + o.aircraft, 0) + (c.airlifts ?? []).reduce((t, o) => t + o.aircraft, 0);
   if (aircraft + committed > c.aircraft) { if (was) c.airOps.push(was); return `You have ${c.aircraft - committed} aircraft free.`; }
   c.airOps.push({ region: target, aircraft, mission, since: was?.since ?? s.week, last: was?.last ?? null, total: was?.total ?? { org: 0, killed: 0, dmg: 0, lost: 0, weeks: 0 } });
   if (!was) alert(s, reg.ctrl, `${c.name} has begun ${mission === 'support' ? 'bombing our troops' : mission === 'interdict' ? 'bombing our supply lines' : 'bombing'} in ${regionName(target)}.`, 'bad', { region: target });
@@ -727,7 +764,8 @@ export function marchSpeed(s, a) {
   const mech = 0.8 + 0.4 * Math.min(1, a.tanks / Math.max(1, a.troops) / 3);
   const fuel = 1 - 0.85 * fuelCut(c);
   const factories = 0.7 + 0.3 * (c.logistics?.factories ?? 1);
-  return base * mech * fuel * factories * (a.gen.trait === 'maneuver' ? 1.3 : 1);
+  const doctrine = Math.max(0.6, 1 + (dfx(s, a.owner).speed ?? 0));
+  return base * mech * fuel * factories * (a.gen.trait === 'maneuver' ? 1.3 : 1) * doctrine;
 }
 
 // The cost of marching from one province into the next, in km of open road: the distance between them, made
@@ -753,6 +791,8 @@ export function militaryStep(s, dt) {
     battle(s, regionId, attackers, gar, dt);
     battled.add(regionId);
   }
+  // Provinces changed hands: who is cut off now
+  if (s.frontMoved && (s.stepNo ?? 0) % 3 === 0) { s.frontMoved = false; updatePockets(s); }
   // Where the fighting has stopped, the attackers' gains melt away
   for (const reg of Object.values(s.regions)) {
     if (reg.battle && !battled.has(reg.id) && reg.battle.pushed !== s.stepNo) {
@@ -804,6 +844,7 @@ function sail(s, a, c, dt, fights) {
 function march(s, a, c, dt, gar, fights) {
   const maneuver = a.gen.trait === 'maneuver';
   autoCapture(s, a);
+  assistFront(s, a, c);
   // An army knocked off its route (pushed back, or the map changed) finds a new way to its objective
   if (a.op.kind === 'attack' && !a.path.length && a.region !== a.op.target) {
     a.path = route(s, a.owner, a.region, a.op.target, { offensive: true, maneuver }) ?? [];
@@ -833,6 +874,8 @@ function march(s, a, c, dt, gar, fights) {
       a.regrouping = false;
       a.mv = 0;
       a.attacking = next;
+      // An attack launched after two weeks or more of preparation in place is a set-piece battle
+      if (!a.assault || a.assault.target !== next) a.assault = { target: next, since: s.week, prepared: a.stillSince != null && s.week - a.stillSince >= 2 };
       addFight(fights, next, a);
       a.status = `Attacking ${regionName(next)}`;
       break;
@@ -845,6 +888,9 @@ function march(s, a, c, dt, gar, fights) {
     alert(s, a.owner, `${a.name} has halted: the route to ${regionName(a.op.target)} crosses ${nameOf(s, holder)}, which we are not at war with.`, 'warn');
     break;
   }
+  if (a.path.length || a.attacking) a.stillSince = null;
+  else a.stillSince ??= s.week;
+  if (!a.attacking) a.assault = null;
   if (!a.path.length && !a.attacking) {
     if (a.op.kind === 'attack' && a.region === a.op.target) {
       a.op = { kind: 'hold', target: a.region, aggr: a.op.aggr };
@@ -857,13 +903,14 @@ function march(s, a, c, dt, gar, fights) {
 // Once a week: supply, the cost of the war, recovery, and the air and sea campaigns
 export function militaryTick(s) {
   navyTick(s);
+  updatePockets(s);
   supplyAll(s);
   logistics(s);
   for (const a of Object.values(s.armies)) {
     const c = s.countries[a.owner];
     if (!c || !alive(s, a.owner)) { delete s.armies[a.id]; continue; }
     if (a.sea) continue;
-    const recover = a.gen.trait === 'logistician' ? 12 : 8;
+    const recover = (a.gen.trait === 'logistician' ? 12 : 8) * (1 + (dfx(s, c.id).orgRecover ?? 0));
     a.org = Math.min(100 * (c.readiness ?? 1), a.org + recover * a.supply * (a.attacking ? 0.4 : 1) * (commsReady(s, c.id) ? 1.25 : 1));
     if (a.supply < 0.5) {
       a.troops *= 0.99;
@@ -876,6 +923,7 @@ export function militaryTick(s) {
       if (!a.irradiated) { a.irradiated = true; briefing(s, a.owner, `${a.name} is in a contaminated zone: radiation sickness is spreading through the ranks. Move it out.`, 'bad'); }
     } else a.irradiated = false;
   }
+  pocketTick(s);
   airAndSea(s);
 }
 
@@ -890,13 +938,15 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   attackers = attackers.filter((a) => atWar(s, a.owner, holder));
   if (!attackers.length) return;
   const lead = attackers.reduce((m, a) => (a.troops > m.troops ? a : m)).owner;
+  const fa = dfx(s, lead);
+  const fh = dfx(s, holder);
 
   // Air superiority over the battlefield: aircraft for both sides, plus the defender's air defences
   const airOf = (id) => {
     const c = s.countries[id];
     if (!c) return 0;
     const busy = Math.max(1, enemiesOf(s, id).size);
-    return c.aircraft * airQuality(c) * 0.6 / busy;
+    return c.aircraft * airQuality(c) * 0.6 / busy * (1 + (dfx(s, id).airEdge ?? 0));
   };
   const airA = airOf(lead);
   const hd = s.countries[holder];
@@ -908,24 +958,45 @@ function battle(s, regionId, attackers, gar, dt = 1) {
   for (const a of attackers) {
     let p = armyAttackEstimate(s, a, regionId) * (1 + 0.05 * gpsCoverage(s, a.owner)) * (knowsPlans(s, a.owner, holder) ? 1.08 : 1);
     if (a.landing) p *= a.prepared ? 0.75 : 0.5;
+    // A prepared, set-piece attack; a desperate breakout from a pocket
+    if (a.assault?.prepared) p *= 1 + (dfx(s, a.owner).setPiece ?? 0);
+    if ((a.breakout ?? -1) > s.week) p *= 1.25;
     attack += p;
     attackTroops += a.troops;
   }
   attack *= 1 + 0.3 * airEdge;
-  if (reg.cas && reg.cas.until > s.week && onSameSide(s, reg.cas.side, lead)) attack *= 1 + 0.25 * Math.min(1, reg.cas.power);
+  // How our way of attacking fares against their way of defending
+  attack *= 1 + matchup(s, lead, holder);
+  if (reg.cas && reg.cas.until > s.week && onSameSide(s, reg.cas.side, lead)) attack *= 1 + 0.25 * Math.min(1, reg.cas.power) * (1 + (dfx(s, reg.cas.side).cas ?? 0));
+
+  // Pincers: armies closing in on a province from two sides at once (the arrows converge). The defenders can't
+  // face both ways, and armoured spearheads make the most of it.
+  const pincer = pincerOf(attackers, regionId);
+  const bt = Math.max(0, Math.max(...attackers.map((a) => breakthroughOf(s, a))) - (fh.vsBreakthrough ?? 0) * 0.5);
+  if (pincer) attack *= 1.15 + (fa.pincer ?? 0) * 0.6 + bt * 0.1;
 
   const g = gar.get(regionId) ?? { troops: 0, tanks: 0 };
+  const gs = garrisonState(s, regionId);
   const defenders = Object.values(s.armies).filter((a) => a.region === regionId && !a.sea && onSameSide(s, a.owner, holder));
-  let defence = power(g.troops, g.tanks, quality(s, holder), 80, 1, terrain);
+  let defence = power(g.troops, g.tanks, quality(s, holder), gs.org, gs.supply, terrain);
   let defendTroops = g.troops;
+  // The home guard of a people defending its own land
+  const militia = militiaOf(s, reg);
+  defence += power(militia, 0, 0.45, 60, 1, terrain);
+  defendTroops += militia;
   for (const a of defenders) {
-    defence += power(a.troops, runningTanks(s, a), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend') * (a.op.kind === 'hold' ? 1.1 : 1);
+    defence += power(a.troops, runningTanks(s, a) * (1 + (dfx(s, a.owner).armorDefend ?? 0)), quality(s, a.owner), a.org, a.supply, terrain) * genBonus(a.gen, 'defend') * (a.op.kind === 'hold' ? 1.1 : 1);
     defendTroops += a.troops;
   }
-  defence *= holdFactor(terrain, reg.fort) * (1 - 0.2 * airEdge) * (knowsPlans(s, holder, lead) ? 1.08 : 1);
-  // Whoever has far more men gets the edge of mass
-  attack *= massBonus(attackTroops, defendTroops);
-  defence *= massBonus(defendTroops, attackTroops);
+  defence *= defendMul(s, holder, terrain, reg.fort) * (1 - 0.2 * airEdge) * (knowsPlans(s, holder, lead) ? 1.08 : 1);
+  // Whoever has far more men gets the edge of mass (more so for a broad-front doctrine)
+  attack *= 1 + (massBonus(attackTroops, defendTroops) - 1) * (1 + (fa.mass ?? 0));
+  defence *= 1 + (massBonus(defendTroops, attackTroops) - 1) * (1 + (fh.mass ?? 0));
+  // Armour that has broken through bypasses strongpoints the garrison alone can't plug
+  if (bt > 0.3 && !defenders.length) defence *= 1 - 0.25 * Math.min(1, bt);
+  // Street fighting: a big city in the front's path holds the attack up
+  const street = streetFight(reg, regionId);
+  if (street) defence *= 1.12 + 0.12 * (fh.urban ?? 0);
   defence = Math.max(defence, 0.5);
 
   const fresh = !(reg.battle && reg.battle.by === lead);
@@ -936,33 +1007,44 @@ function battle(s, regionId, attackers, gar, dt = 1) {
     news(s, `${nameOf(s, lead)}'s forces attack ${regionName(regionId)}, held by ${nameOf(s, holder)}.`, 'war', [...sides, holder]);
     alert(s, holder, `${nameOf(s, lead)} is attacking ${regionName(regionId)} with about ${troopsLabel(approx(attackTroops))} troops.`, 'war', { region: regionId });
   }
+  if (pincer && !reg.battle.pincer) {
+    reg.battle.pincer = true;
+    news(s, `Pincer movement: ${nameOf(s, lead)}'s armies close in on ${regionName(regionId)} from two sides.`, 'war', [...sides, holder]);
+    for (const side of sides) briefing(s, side, `Our armies are attacking ${regionName(regionId)} from two sides at once: a pincer. The defenders can't face both ways.`, 'good', { region: regionId, front: true });
+    briefing(s, holder, `${nameOf(s, lead)} is closing in on ${regionName(regionId)} from two sides. If the pincers meet behind it, our troops there could be cut off.`, 'bad', { region: regionId, front: true });
+  }
+  if (street && reg.battle.street !== street.name) {
+    reg.battle.street = street.name;
+    if (street.share >= 0.08 || street.capital) news(s, `Street fighting in ${street.name}: ${nameOf(s, holder)}'s defenders fight for every block.`, 'war', [lead, holder]);
+  } else if (!street) reg.battle.street = null;
+  reg.battle.militia = Math.round(militia);
+  reg.battle.bt = Math.round(bt * 100) / 100;
   // Ground the defenders thought impassable: lightly held, and the attack comes as a shock
   const sneak = surpriseFeature(regionId);
   if (sneak && reg.fort <= 1 && !defenders.some((a) => a.op.kind === 'hold') && reg.battle.weeks <= 3) {
-    defence *= 0.55;
+    defence *= clamp(0.55 - 0.3 * (fa.surprise ?? 0), 0.3, 0.8);
     if (fresh) {
       news(s, `${nameOf(s, lead)}'s forces strike through ${sneak.name}, ground ${nameOf(s, holder)} thought impassable. Its defenders are caught off guard.`, 'war', [lead, holder]);
       alert(s, lead, `Surprise: our attack through ${sneak.name} has caught ${nameOf(s, holder)} off guard.`, 'good', { region: regionId });
     }
   }
   const ratio = attack / defence;
-  reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders });
-  // The front moves fast: an even fight takes a province in under two weeks, a strong attack in days
+  reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders, militia, street, pincer });
   // A winning attack moves as fast as the attackers can: mechanised, well-supplied armies break through in days,
   // low-tech infantry grinds forward
   const main = attackers.reduce((m, a) => (a.troops > m.troops ? a : m));
-  const tempo = clamp(marchSpeed(s, main) / 700, 0.5, 1.4);
+  const tempo = clamp(marchSpeed(s, main) / 700, 0.5, 1.4) * (1 + (fa.tempo ?? 0)) * (ratio >= 1.3 ? 1 + 0.8 * Math.min(1, bt) : 1);
   // Percent of the province taken a week: an even fight takes about a month, a 3:1 attack about a week, and big
-  // provinces (up to three times the usual size) take longer
-  const step = (ratio >= 1 ? Math.min(95, 25 + 35 * (ratio - 1)) * tempo : ratio >= 0.8 ? 10 * (ratio - 0.8) / 0.2 : -40 * (0.8 - ratio) / 0.8) / size(regionId);
+  // provinces (up to three times the usual size) take longer; street fighting in a big city slows it to a crawl
+  const step = (ratio >= 1 ? Math.min(95, 25 + 35 * (ratio - 1)) * tempo * (street ? 0.55 / (1 + (fh.urban ?? 0)) : 1) : ratio >= 0.8 ? 10 * (ratio - 0.8) / 0.2 : -40 * (0.8 - ratio) / 0.8) / size(regionId);
   reg.battle.prog = clamp(reg.battle.prog + step * dt, 0, 100);
   // Beaten back with nothing gained, the defenders counter-attack into the ground the attack came from
-  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / holdFactor(terrain, reg.fort), gar, dt);
+  if (ratio < 0.8 && reg.battle.prog <= 0 && reg.battle.from) counterAttack(s, reg.battle.from, holder, regionId, defence / defendMul(s, holder, terrain, reg.fort), gar, dt);
 
   // Losses
   let attackLoss = 0;
   for (const a of attackers) {
-    const style = AGGRESSION[a.op.aggr].losses * (a.gen.trait === 'aggressive' ? 1.2 : a.gen.trait === 'cautious' ? 0.75 : 1);
+    const style = AGGRESSION[a.op.aggr].losses * (a.gen.trait === 'aggressive' ? 1.2 : a.gen.trait === 'cautious' ? 0.75 : 1) * Math.max(0.5, 1 + (dfx(s, a.owner).attackLoss ?? 0));
     const rate = 0.016 * dt * clamp(1 / ratio, 0.35, 2.5) * style * (a.landing ? (a.prepared ? 1.4 : 1.8) : 1);
     const lost = a.troops * rate;
     a.troops -= lost;
@@ -970,13 +1052,13 @@ function battle(s, regionId, attackers, gar, dt = 1) {
     a.org = Math.max(0, a.org - (a.op.aggr === 'allout' ? 8 : 6) * dt);
     attackLoss += lost;
   }
-  const defRate = 0.016 * dt * clamp(ratio, 0.35, 2.5);
+  const defRate = 0.016 * dt * clamp(ratio, 0.35, 2.5) * Math.max(0.5, 1 + (fh.defendLoss ?? 0)) * (pincer ? 1.25 : 1);
   let defendLoss = 0;
   for (const a of defenders) {
-    const lost = a.troops * defRate * (a.gen.trait === 'defensive' ? 0.85 : 1);
+    const lost = a.troops * defRate * (a.gen.trait === 'defensive' ? 0.85 : 1) * Math.max(0.5, 1 + (dfx(s, a.owner).defendLoss ?? 0));
     a.troops -= lost;
     a.tanks *= 1 - defRate * 1.3;
-    a.org = Math.max(0, a.org - 6 * dt);
+    a.org = Math.max(0, a.org - (pincer ? 9 : 6) * dt);
     defendLoss += lost;
   }
   const gLost = g.troops * defRate;
@@ -986,21 +1068,27 @@ function battle(s, regionId, attackers, gar, dt = 1) {
     hn.tanks = Math.max(0, hn.tanks - g.tanks * defRate * 1.3);
   }
   defendLoss += gLost;
+  // The home guard is used up as it fights
+  if (militia > 0) { const mLost = militia * defRate * 1.6; reg.battle.militiaLost = (reg.battle.militiaLost ?? 0) + mLost; defendLoss += mLost; }
   for (const a of attackers) {
     const n = s.countries[a.owner];
     n.troops = Math.max(0, n.troops - attackLoss * (a.troops / Math.max(1, attackTroops)));
   }
   record(s, lead, attackLoss);
   record(s, holder, defendLoss);
+  // Every week of fighting teaches each side's doctrine something
+  for (const side of sides) noteFighting(s.countries[side], 'attack', dt / sides.length, ratio >= 1);
+  noteFighting(s.countries[holder], 'defend', dt, ratio < 1);
+  if (reg.cas && reg.cas.until > s.week) noteFighting(s.countries[reg.cas.side], 'air', dt * 0.5, true);
   // The dead are gone from the population, and civilians in the battle zone die or flee
   for (const a of attackers) bury(s, a.owner, attackLoss * (a.troops / Math.max(1, attackTroops)));
   bury(s, holder, defendLoss);
-  reg.pop *= 1 - 0.0008 * dt * Math.min(2, ratio);
+  reg.pop *= 1 - 0.0008 * dt * Math.min(2, ratio) * (street ? 1.6 : 1);
   const war = s.wars.find((w) => (w.a === lead && w.b === holder) || (w.b === lead && w.a === holder));
   if (war) {
     if (war.a === lead) { war.lossA += attackLoss; war.lossB += defendLoss; } else { war.lossB += attackLoss; war.lossA += defendLoss; }
   }
-  reg.dmg = Math.min(0.9, reg.dmg + 0.006 * dt);
+  reg.dmg = Math.min(0.9, reg.dmg + 0.006 * dt * (street ? 1.8 : 1));
 
   // Cities fall one by one as the front passes them
   if (reg.battle.prog < 100) {
@@ -1017,20 +1105,59 @@ function battle(s, regionId, attackers, gar, dt = 1) {
       briefing(s, lead, `Our troops have taken ${city.name} (about ${pct}% of ${regionName(regionId)}'s output).`, 'good', { region: regionId, front: true });
     }
   }
-  if (reg.battle.prog >= 100) capture(s, regionId, lead, attackers);
+  if (reg.battle.prog >= 100) capture(s, regionId, lead, attackers, bt);
   for (const a of Object.values(s.armies)) if (a.troops < 1) destroyArmy(s, a, 'was destroyed in battle');
+}
+
+// Do the attacks on a province come from two sides? Two attacking armies whose lines of approach are at least
+// 70 degrees apart are a pincer.
+function pincerOf(attackers, regionId) {
+  const to = GEO[regionId];
+  const dirs = [];
+  for (const a of attackers) {
+    if (a.landing || !GEO[a.region] || a.region === regionId) continue;
+    const g = GEO[a.region];
+    const dx = to.x - g.x;
+    const dy = to.y - g.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 0) dirs.push([dx / len, dy / len]);
+  }
+  for (let i = 0; i < dirs.length; i++) for (let j = i + 1; j < dirs.length; j++) {
+    if (dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] <= Math.cos((70 * Math.PI) / 180)) return true;
+  }
+  return false;
+}
+
+// A big city just ahead of the front (within the next tenth of the province), still holding out: the attack has to
+// take it street by street
+function streetFight(reg, regionId) {
+  const b = reg.battle;
+  if (!b?.from || !GEO[b.from]) return null;
+  const cities = citiesIn(regionId, reg.pop);
+  if (!cities.length) return null;
+  const depth = cityDepths(regionId, GEO[b.from], cities);
+  const p = (b.prog ?? 0) / 100;
+  let best = null;
+  cities.forEach((c, i) => {
+    if (c.share < 0.05 && !c.capital) return;
+    if (depth[i] <= p || depth[i] > p + 0.1) return;
+    if (!best || c.share > best.share) best = c;
+  });
+  return best;
 }
 
 // How an attack is going, on each attacking army's card, and in the news whenever it turns: advancing,
 // stalled, or thrown back (when the defenders start pushing into the ground the attack came from)
-function reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders }) {
+function reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio, attackTroops, defendTroops, defenders, militia = 0, street = null, pincer = false }) {
   const trend = ratio >= 1 ? 'advancing' : ratio < 0.8 ? 'repulsed' : 'stalled';
   const odds = `${ratio.toFixed(2)}:1`;
   const where = regionName(regionId);
-  const theirs = `about ${troopsLabel(approx(defendTroops))} defenders${defenders.length ? `, including ${defenders.map((a) => `${nameOf(s, a.owner)}'s ${a.name} (~${troopsLabel(approx(a.troops))})`).join(', ')}` : ''}`;
+  const parts = [...defenders.map((a) => `${nameOf(s, a.owner)}'s ${a.name} (~${troopsLabel(approx(a.troops))})`), militia >= 1 ? `~${troopsLabel(approx(militia))} home guard` : null].filter(Boolean);
+  const theirs = `about ${troopsLabel(approx(defendTroops))} defenders${parts.length ? `, including ${parts.join(', ')}` : ''}`;
+  const how = [pincer ? 'pincer' : null, street ? `street fighting in ${street.name}` : null].filter(Boolean).join(', ');
   for (const a of attackers) {
-    a.status = trend === 'advancing' ? `Attacking ${where}: winning (${odds})`
-      : trend === 'stalled' ? `Attacking ${where}: held up (${odds} against ${theirs})`
+    a.status = trend === 'advancing' ? `Attacking ${where}: winning (${odds}${how ? `; ${how}` : ''})`
+      : trend === 'stalled' ? `Attacking ${where}: held up (${odds} against ${theirs}${street ? `; street fighting in ${street.name}` : ''})`
         : `Thrown back at ${where} (${odds} against ${theirs})`;
   }
   const was = reg.battle.trend;
@@ -1055,7 +1182,8 @@ function reportBattle(s, reg, regionId, { attackers, sides, lead, holder, ratio,
 function counterAttack(s, backId, by, from, strength, gar, dt = 1) {
   const back = s.regions[backId];
   if (!back || !atWar(s, by, back.ctrl)) return;
-  const odds = (strength * 0.6) / Math.max(1, defenceEstimate(s, backId, gar));
+  // An elastic or mobile defence is built to strike back
+  const odds = (strength * 0.6 * (1 + (dfx(s, by).counter ?? 0))) / Math.max(1, defenceEstimate(s, backId, gar));
   if (odds < 1) return;
   const push = (Math.min(60, 15 + 30 * (odds - 1)) / size(backId)) * dt;
   if (!(back.battle && back.battle.by === by)) {
@@ -1098,11 +1226,12 @@ function destroyArmy(s, a, how) {
   news(s, `${nameOf(s, a.owner)}'s ${a.name} ${how}.`, 'war', [a.owner]);
 }
 
-export function capture(s, regionId, by, attackers = []) {
+export function capture(s, regionId, by, attackers = [], bt = 0) {
   const reg = s.regions[regionId];
   const prev = reg.ctrl;
   reg.ctrl = by;
   reg.battle = null;
+  s.frontMoved = true;
   reg.dmg = Math.min(0.9, reg.dmg + 0.05);
   if (by === reg.owner) {
     reg.unrest = 0;
@@ -1140,6 +1269,8 @@ export function capture(s, regionId, by, attackers = []) {
       a.path.shift();
     }
     if (a.attacking === regionId) a.attacking = null;
+    // Armour that has broken through keeps rolling: it carries its momentum into the next province
+    if (bt >= 0.3 && a.path.length) a.mv = (a.mv ?? 0) + 260 * Math.min(1, bt);
     a.status = a.path.length ? `Advancing on ${regionName(a.op.target)}` : `Holding ${regionName(a.region)}`;
   }
   const liberated = by === reg.owner;
@@ -1260,14 +1391,22 @@ function supplyAll(s) {
     const c = s.countries[a.owner];
     const reg = s.regions[a.region];
     let supply;
+    const d = dfx(s, a.owner);
     if (reg.owner === a.owner || (reg.ctrl !== a.owner && friendlyGround(s, a.owner, reg.ctrl))) supply = 1;
     else {
       const hops = (cache.get(a.owner) ?? cache.set(a.owner, homeDistance(s, a.owner)).get(a.owner)).get(a.region);
       if (hops == null) supply = GEO[a.region].coast && c.ships > 5 ? 0.6 : 0.25;
-      else supply = clamp(1.05 - 0.1 * hops, 0.35, 1);
+      else supply = clamp(1.05 - 0.1 * hops * Math.max(0.3, 1 - (d.reach ?? 0)), 0.35, 1);
+      // Living off the land: never as short in enemy country
+      if (d.forage) supply = Math.max(supply, 0.45 + d.forage);
     }
-    // Partisans: a hostile people ambushes convoys and blows up rail lines
-    if (reg.people !== a.owner && reg.ctrl === a.owner && (reg.loyalty ?? 50) < 30) supply *= 0.75 + 0.25 * (reg.loyalty / 30);
+    // Cut off: whatever the army carried, and whatever is flown in
+    const pocket = s.pockets?.[a.region];
+    a.pocket = pocket && onSameSide(s, a.owner, pocket.holder) ? pocket.id : null;
+    a.pocketSea = Boolean(a.pocket && pocket.sea);
+    if (a.pocket) supply = Math.min(supply, pocket.sea ? 0.65 : POCKET_SUPPLY + 0.55 * airliftCover(s, a));
+    // Partisans: a hostile people ambushes convoys and blows up rail lines, all the more under a people's war
+    if (reg.people !== a.owner && reg.ctrl === a.owner && (reg.loyalty ?? 50) < 30) supply *= Math.max(0.4, 0.75 - 0.15 * (dfx(s, reg.people).partisans ?? 0) + 0.25 * (reg.loyalty / 30));
     // Bombed roads and depots
     if (reg.interdict && reg.interdict.until > s.week && atWar(s, reg.interdict.by, a.owner)) supply *= 1 - 0.4 * Math.min(1, reg.interdict.power);
     if (a.gen.trait === 'logistician') supply = Math.min(1, supply + 0.15);
@@ -1335,7 +1474,7 @@ function airAndSea(s) {
         week.dmg = 0.004 * power;
         reg.dmg = Math.min(0.9, reg.dmg + week.dmg);
       } else {
-        week.dmg = 0.02 * power;
+        week.dmg = 0.02 * power * (1 + (dfx(s, c.id).strategic ?? 0));
         reg.dmg = Math.min(0.9, reg.dmg + week.dmg);
       }
       // Fighters and air defences shoot some of ours down; theirs suffer too
@@ -1361,6 +1500,295 @@ function airReport(op) {
   if (op.mission === 'support') return `Close air support over ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: ${troopsLabel(t.killed)} defenders hit, their organisation down ${Math.round(op.last.org)} points this week; our attacks there hit harder.${lost}`;
   if (op.mission === 'interdict') return `Interdiction around ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: enemy armies there are short of supply.${lost}`;
   return `Strategic bombing of ${where}, ${t.weeks} week${t.weeks > 1 ? 's' : ''}: output ${Math.round(t.dmg * 100)} points lower.${lost}`;
+}
+
+/* ---------- Encirclement: supply lines, pockets, airlifts and breakouts ---------- */
+//
+// Every province a country holds draws its supply over its own (or friendly) ground from the capital and the
+// heartland. When an advance cuts the last friendly path between a stretch of front and the heartland, that whole
+// stretch is a pocket: the armies and garrisons inside keep fighting on what they carry, losing organisation,
+// fuel and men every week, until they break out, are relieved from outside, are kept alive by an airlift (as at
+// Stalingrad, for a while), or surrender. A pocket on the coast that the enemy doesn't hold the sea around is
+// supplied by ship instead, as Odessa and Sevastopol were.
+
+const CAPITAL_OF = new Map(PROVINCES.filter((p) => p.capital).map((p) => [p.country, p.id]));
+const capitalOf = (id) => CAPITAL_OF.get(id) ?? id;
+export const POCKET_WEEKS_TO_COLLAPSE = 3;
+
+// Recomputes every pocket in the world: s.pockets maps each cut-off province to { id, holder, sea, since, name }
+export function updatePockets(s) {
+  const before = s.pockets ?? {};
+  const out = {};
+  const list = {};
+  const holders = new Set();
+  for (const reg of Object.values(s.regions)) if (enemiesOf(s, reg.ctrl).size) holders.add(reg.ctrl);
+  for (const h of holders) {
+    const seen = new Set();
+    const comps = [];
+    for (const reg of Object.values(s.regions)) {
+      if (reg.ctrl !== h || seen.has(reg.id)) continue;
+      // One stretch of ground our forces can move through: our own provinces, allies', and land we have access to
+      const ids = [];
+      let capital = false;
+      let enemyNear = false;
+      let home = 0;
+      const queue = [reg.id];
+      seen.add(reg.id);
+      while (queue.length) {
+        const id = queue.pop();
+        ids.push(id);
+        const r = s.regions[id];
+        if (r.ctrl === r.owner && capitalOf(r.ctrl) === id && (r.ctrl === h || allied(s, h, r.ctrl))) capital = true;
+        if (r.ctrl === h && r.owner === h) home++;
+        for (const next of GEO[id].adj) {
+          const n = s.regions[next];
+          if (!n) continue;
+          if (atWar(s, h, n.ctrl)) { enemyNear = true; continue; }
+          if (seen.has(next) || !friendlyGround(s, h, n.ctrl)) continue;
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+      comps.push({ ids, capital, enemyNear, home });
+    }
+    // With the capital lost, the biggest stretch of home soil left is the heartland
+    if (!comps.some((x) => x.capital)) {
+      const heart = comps.filter((x) => x.home > 0).sort((a, b) => b.home - a.home)[0];
+      if (heart) heart.capital = true;
+    }
+    for (const comp of comps) {
+      // Supplied: the heartland, and anywhere the war hasn't reached
+      if (comp.capital || !comp.enemyNear) continue;
+      const own = comp.ids.filter((id) => s.regions[id].ctrl === h);
+      if (!own.length) continue;
+      // Supplied by sea: a coast whose waters the enemy doesn't hold, and ships to run the supplies in
+      const ships = (s.countries[h]?.ships ?? 0) + Object.values(s.countries).filter((o) => o.id !== h && allied(s, o.id, h)).reduce((t, o) => t + o.ships, 0);
+      const sea = ships >= 3 && own.some((id) => {
+        const port = PORTS[id];
+        if (!port) return false;
+        const { mine, theirs } = controlAt(s, h, port[0], port[1], OFF_COAST * 1.5);
+        return theirs === 0 || mine >= theirs;
+      });
+      // Named after its biggest province, as the Kiev or Demyansk pocket was
+      const main = own.reduce((m, id) => (s.regions[id].gdp > s.regions[m].gdp ? id : m), own[0]);
+      const was = own.map((id) => before[id]).find((p) => p && p.holder === h);
+      const id = was?.id ?? nextId(s, 'pk');
+      const pocket = { id, holder: h, sea, since: was?.since ?? s.week, name: regionName(main).replace(/\s*\(.*\)$/, ''), main };
+      list[id] = { ...pocket, regions: own };
+      for (const rid of own) out[rid] = pocket;
+      if (!was) {
+        const enemies = [...enemiesOf(s, h)].filter((e) => comp.ids.some((x) => GEO[x].adj.some((n) => s.regions[n]?.ctrl === e)));
+        const troops = Object.values(s.armies).filter((a) => own.includes(a.region) && onSameSide(s, a.owner, h)).reduce((t, a) => t + a.troops, 0);
+        news(s, `${sea ? 'Cut off by land' : 'Encircled'}: ${nameOf(s, h)}'s forces around ${pocket.name} are surrounded${troops >= 1 ? ` (about ${troopsLabel(approx(troops))} troops in armies)` : ''}${sea ? ', though still supplied by sea' : ''}.`, 'war', [h, ...enemies]);
+        briefing(s, h, sea
+          ? `Our forces around ${pocket.name} are cut off by land. Ships are still getting supplies in, but if the enemy wins the sea there they will be truly surrounded.`
+          : `ENCIRCLED: our forces around ${pocket.name} (${own.length} province${own.length > 1 ? 's' : ''}) are cut off from home. Every week they lose organisation, fuel and men. Break out toward our lines, fly in supplies (an airlift, from the army's card), open a corridor from outside, or surrender.`, 'bad', { region: main, front: true });
+        for (const e of enemies) briefing(s, e, `Our armies have encircled ${nameOf(s, h)}'s forces around ${pocket.name}. Tighten the ring: cut off from supply, they weaken every week.`, 'good', { region: main, front: true });
+      }
+    }
+  }
+  // Pockets that are gone: relieved, or overrun
+  for (const [rid, p] of Object.entries(before)) {
+    if (out[rid] || Object.values(out).some((x) => x.id === p.id)) continue;
+    if (list[p.id]) continue;
+    const relieved = s.regions[rid]?.ctrl === p.holder;
+    if (relieved && !s.pocketGone?.[p.id]) {
+      s.pocketGone = { ...(s.pocketGone ?? {}), [p.id]: s.week };
+      if (!p.sea) {
+        news(s, `The pocket around ${p.name} is relieved: ${nameOf(s, p.holder)} has opened a corridor to its trapped forces.`, 'war', [p.holder]);
+        briefing(s, p.holder, `Our forces around ${p.name} are no longer surrounded: supplies are getting through again.`, 'good', { region: p.main ?? rid, front: true });
+      }
+    }
+  }
+  if (s.pocketGone) for (const [k, w] of Object.entries(s.pocketGone)) if (s.week - w > 8) delete s.pocketGone[k];
+  s.pockets = out;
+  s.pocketList = list;
+}
+
+// How much of a surrounded army's needs an airlift covers, 0 to 1
+export function airliftCover(s, a) {
+  const c = s.countries[a.owner];
+  const lift = (c?.airlifts ?? []).find((x) => x.army === a.id);
+  if (!lift) return 0;
+  return clamp((lift.aircraft * 0.8 * (1 + (dfx(s, a.owner).airlift ?? 0))) / Math.max(20, a.troops), 0, 1);
+}
+
+// The pocket's clock, once a week: organisation, fuel and men drain away; the garrisons inside wear down; armies
+// at the end of their strength surrender; airlifts fly in and lose aircraft
+function pocketTick(s) {
+  for (const a of Object.values(s.armies)) {
+    if (a.sea) continue;
+    const c = s.countries[a.owner];
+    if (!a.pocket || a.pocketSea) { a.pocketWeeks = 0; continue; }
+    const d = dfx(s, a.owner);
+    const lift = airliftCover(s, a);
+    const bite = (1 - 0.75 * lift) * (1 - clamp(d.pocket ?? 0, 0, 0.8));
+    a.pocketWeeks = (a.pocketWeeks ?? 0) + 1;
+    a.org = Math.max(0, a.org - 10 * bite);
+    const lost = a.troops * 0.025 * bite;
+    a.troops -= lost;
+    a.tanks *= 1 - 0.04 * bite;
+    if (c) c.troops = Math.max(0, c.troops - lost);
+    bury(s, a.owner, lost * 0.5);
+    if (a.pocketWeeks === 1 || a.pocketWeeks % 3 === 0) {
+      briefing(s, a.owner, `${a.name} has been surrounded for ${a.pocketWeeks} week${a.pocketWeeks > 1 ? 's' : ''} at ${regionName(a.region)}: organisation ${Math.round(a.org)}%, supply ${Math.round(a.supply * 100)}%${lift ? `, the airlift covering ${Math.round(lift * 100)}% of its needs` : ''}. ${a.org < 20 ? 'It cannot hold out much longer.' : 'Break out, fly in supplies or relieve it.'}`, a.org < 20 ? 'bad' : 'warn', { region: a.region, front: true });
+    }
+    // At the end of its strength, an army surrenders. A human leader's army only when it has nothing left; never
+    // one with commissars at its back.
+    if (d.noSurrender || a.pocketWeeks < POCKET_WEEKS_TO_COLLAPSE) continue;
+    const spent = a.org < 4 && lift < 0.4;
+    if (c?.human ? spent && chance(s, 0.4) : a.org < 12 && lift < 0.5 && chance(s, 0.35)) surrender(s, a, true);
+  }
+  // Garrisons inside a pocket wear down too
+  const gar = garrisons(s);
+  for (const [rid, p] of Object.entries(s.pockets ?? {})) {
+    if (p.sea) continue;
+    const n = nation(s, p.holder);
+    const g = gar.get(rid);
+    if (n && g) n.troops = Math.max(0, n.troops - g.troops * 0.015 * (1 - clamp(dfx(s, p.holder).pocket ?? 0, 0, 0.8)));
+  }
+  // Airlifts: transports and fighters lost to the enemy's air force and flak; a lift to an army no longer
+  // surrounded (or gone) stands down
+  for (const c of Object.values(s.countries)) {
+    if (!c.airlifts?.length) continue;
+    c.airlifts = c.airlifts.filter((x) => {
+      const a = s.armies[x.army];
+      if (!a || !a.pocket || a.pocketSea) {
+        if (a) briefing(s, c.id, `The airlift to ${a.name} has stood down: it is no longer surrounded.`, 'info');
+        return false;
+      }
+      const foes = [...enemiesOf(s, c.id)].reduce((t, e) => t + (s.countries[e]?.aircraft ?? 0) * airQuality(s.countries[e] ?? { tech: { air: 4 } }), 0);
+      const share = foes / (foes + c.aircraft * airQuality(c) + 1);
+      const lost = Math.max(0, Math.round(x.aircraft * 0.02 * (0.3 + share * 1.5)));
+      x.aircraft -= lost;
+      c.aircraft = Math.max(0, c.aircraft - lost);
+      x.lost = (x.lost ?? 0) + lost;
+      x.weeks = (x.weeks ?? 0) + 1;
+      if (x.weeks === 1 || x.weeks % 4 === 0) briefing(s, c.id, `Airlift to ${a.name}: ${Math.round(airliftCover(s, a) * 100)}% of its needs flown in; ${x.lost} aircraft lost so far.`, 'info', { region: a.region, front: true });
+      return x.aircraft > 0;
+    });
+  }
+}
+
+// The army lays down its arms
+function surrender(s, a, forced = false) {
+  const c = s.countries[a.owner];
+  const enemies = [...enemiesOf(s, a.owner)];
+  const taker = enemies.find((e) => GEO[a.region].adj.some((n) => s.regions[n]?.ctrl === e)) ?? enemies[0];
+  if (c) c.troops = Math.max(0, c.troops - a.troops);
+  news(s, `${nameOf(s, a.owner)}'s ${a.name} surrenders ${forced ? 'in the pocket ' : ''}at ${regionName(a.region)}: about ${troopsLabel(approx(a.troops))} troops go into captivity${taker ? ` with ${nameOf(s, taker)}` : ''}.`, 'war', [a.owner, ...(taker ? [taker] : [])]);
+  briefing(s, a.owner, `${a.name} (${a.gen.name}) has surrendered at ${regionName(a.region)}. About ${troopsLabel(approx(a.troops))} of our soldiers are prisoners.`, 'bad', { region: a.region, front: true });
+  if (taker) briefing(s, taker, `${nameOf(s, a.owner)}'s ${a.name} has surrendered to us at ${regionName(a.region)}: about ${troopsLabel(approx(a.troops))} prisoners.`, 'good', { region: a.region, front: true });
+  record(s, a.owner, a.troops);
+  delete s.armies[a.id];
+  if (c?.airlifts) c.airlifts = c.airlifts.filter((x) => x.army !== a.id);
+}
+
+export function surrenderArmy(s, c, a) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  if (!a.pocket || a.pocketSea) return `${a.name} isn't surrounded. Disband it instead, if you must.`;
+  surrender(s, a);
+  return null;
+}
+
+// Fly supplies in to a surrounded army: aircraft taken from the air force, within range of our bases
+export function setAirlift(s, c, a, aircraft) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  aircraft = Math.floor(Number(aircraft) || 0);
+  c.airlifts ??= [];
+  const was = c.airlifts.find((x) => x.army === a.id);
+  c.airlifts = c.airlifts.filter((x) => x.army !== a.id);
+  if (aircraft <= 0) return null;
+  if (!a.pocket || a.pocketSea) { if (was) c.airlifts.push(was); return `${a.name} isn't surrounded: it doesn't need an airlift.`; }
+  const far = rangeProblem(s, c, a.region, 'air');
+  if (far) { if (was) c.airlifts.push(was); return far.replace(/bomb|strike/gi, 'reach'); }
+  const committed = c.airOps.reduce((t, o) => t + o.aircraft, 0) + c.airlifts.reduce((t, o) => t + o.aircraft, 0);
+  if (aircraft + committed > c.aircraft) { if (was) c.airlifts.push(was); return `We have ${Math.max(0, c.aircraft - committed)} aircraft free.`; }
+  c.airlifts.push({ army: a.id, aircraft, since: was?.since ?? s.week, lost: was?.lost ?? 0, weeks: was?.weeks ?? 0 });
+  a.supply = Math.max(a.supply, POCKET_SUPPLY + 0.55 * airliftCover(s, a));
+  if (!was) news(s, `${c.name} begins an airlift to its forces surrounded at ${regionName(a.region)}.`, 'war', [c.id]);
+  return null;
+}
+
+// The nearest province our side holds that isn't cut off, and the way there through the ring
+export function breakoutPlan(s, a) {
+  const owner = a.owner;
+  const prev = new Map([[a.region, null]]);
+  const queue = [a.region];
+  let goal = null;
+  while (queue.length && !goal) {
+    const id = queue.shift();
+    for (const next of GEO[id].adj) {
+      if (prev.has(next)) continue;
+      const reg = s.regions[next];
+      if (!reg) continue;
+      const friendly = friendlyGround(s, owner, reg.ctrl);
+      if (!friendly && !atWar(s, owner, reg.ctrl)) continue;
+      prev.set(next, id);
+      if (friendly && !s.pockets?.[next]) { goal = next; break; }
+      queue.push(next);
+    }
+  }
+  return goal;
+}
+
+// Break out of the ring toward our lines: a desperate attack, a quarter harder for three weeks
+export function breakOut(s, c, a) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  if (!a.pocket || a.pocketSea) return `${a.name} isn't surrounded.`;
+  const goal = breakoutPlan(s, a);
+  if (!goal) return 'There is no way back to our lines from here: every road runs through neutral ground.';
+  const err = orderArmy(s, c, a, { kind: 'go', target: goal, aggr: 'allout' });
+  if (err) return err;
+  a.breakout = s.week + 3;
+  a.org = Math.min(100, a.org + 10);
+  a.status = `Breaking out toward ${regionName(goal)}`;
+  news(s, `${nameOf(s, c.id)}'s surrounded ${a.name} tries to break out at ${regionName(a.region)}.`, 'war', [c.id]);
+  return null;
+}
+
+/* ---------- Armies that support the front on their own ---------- */
+
+export function setAssist(s, c, a, on) {
+  if (!a || a.owner !== c.id) return 'That army is not yours.';
+  a.assist = Boolean(on);
+  a.assistAt = 0;
+  if (a.assist) briefing(s, c.id, `${a.name} will support the front: it moves to defend any nearby province of ours or our allies' that comes under attack, and joins our allies' attacks next to it.`, 'info');
+  return null;
+}
+
+// An army told to support the front: where the fighting is next door, it goes to help
+function assistFront(s, a, c) {
+  if (!a.assist || a.sea || a.auto || a.path.length || a.attacking) return;
+  if ((a.assistAt ?? 0) > (s.stepNo ?? 0)) return;
+  a.assistAt = (s.stepNo ?? 0) + 6;
+  const here = s.regions[a.region];
+  // Our own ground under attack: stay and hold it
+  if (here.battle && atWar(s, here.battle.by, a.owner)) return;
+  let best = null;
+  for (const id of GEO[a.region].adj) {
+    const reg = s.regions[id];
+    if (!reg?.battle) continue;
+    const by = reg.battle.by;
+    // A friendly province under attack: go and defend it
+    if (onSameSide(s, a.owner, reg.ctrl) && friendlyGround(s, a.owner, reg.ctrl) && atWar(s, by, a.owner)) {
+      const score = 2 + reg.battle.prog / 50;
+      if (!best || score > best.score) best = { id, kind: 'hold', score };
+    }
+    // An ally's attack on an enemy we are at war with: join it
+    if (by !== a.owner && onSameSide(s, a.owner, by) && atWar(s, a.owner, reg.ctrl)) {
+      const score = 1 + reg.battle.prog / 100;
+      if (!best || score > best.score) best = { id, kind: 'attack', score };
+    }
+  }
+  if (!best) return;
+  if (orderArmy(s, c, a, { kind: best.kind, target: best.id, aggr: a.op.aggr ?? 'balanced' })) return;
+  a.status = best.kind === 'hold' ? `Supporting the front: reinforcing ${regionName(best.id)}` : `Supporting the front: joining the attack on ${regionName(best.id)}`;
+}
+
+// What each leader sees of the pockets: where they are and who is in them
+export function pocketsView(s) {
+  return Object.values(s.pocketList ?? {}).map((p) => ({ id: p.id, holder: p.holder, sea: p.sea, since: p.since, name: p.name, regions: p.regions }));
 }
 
 function ordinal(n) {

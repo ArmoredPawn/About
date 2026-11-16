@@ -410,6 +410,13 @@ export function tradeScore(s, c, world) {
     const other = t.a === c.id ? t.b : t.b === c.id ? t.a : null;
     if (other && alive(s, other)) partners += s.countries[other].gdp;
   }
+  // Shipping lines opened between two countries: a public one carries a fair share of their trade; a private
+  // line carries less, out of sight
+  for (const r of Object.values(s.routes ?? {})) {
+    if (r.closed) continue;
+    const other = r.by === c.id ? r.partner : r.partner === c.id ? r.by : null;
+    if (other && alive(s, other) && !atWar(s, c.id, other)) partners += (s.countries[other]?.gdp ?? 0) * (r.private ? 0.1 : 0.25);
+  }
   let tariffs = 0;
   for (const [key, level] of Object.entries(s.tariffs)) {
     const [a, b] = key.split('>');

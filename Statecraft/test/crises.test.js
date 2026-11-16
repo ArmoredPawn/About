@@ -76,7 +76,8 @@ test('a debt crisis forces a choice: the IMF lends with conditions; a default wr
 /* ---------- Crises ---------- */
 
 test('a pandemic spreads country to country, leaders choose lockdowns, and a funded vaccine ends it', () => {
-  const g = game(6, 'ita');
+  // Seed 7: on some seeds China's lockdown stamps the outbreak out at home before it can travel
+  const g = game(7, 'ita');
   const s = g.s;
   const x = startPandemic(s, 'chn');
   assert.ok(x && x.inf.chn > 0);

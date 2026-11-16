@@ -201,7 +201,14 @@ class MinHeap {
 /* ---------- Strength and ranges ---------- */
 
 export { PATROL_MODES };
-export const MISSIONS = { hold: 'Hold position', patrol: 'Patrol the strait', blockade: 'Blockade' };
+export const MISSIONS = { hold: 'Hold position', patrol: 'Patrol the strait', blockade: 'Blockade', raid: 'Hunt shipping' };
+// A fleet hunting shipping in a sea: whose cargo it goes after, and what it does with what it catches. The second
+// choice also applies to any fleet at war that meets an enemy cargo, and to blockades.
+export const RAID_MODES = { enemies: "Our enemies' cargo", hostile: "Enemies' and sanctioned countries' cargo" };
+export const RAID_HOW = { seize: 'Seize it', sink: 'Sink it' };
+export const raidStatus = (f) => (f.huntLabel
+  ? `${f.route?.length ? 'Closing in to' : 'Lying in wait to'} ${f.huntLabel}`
+  : `Hunting ${f.mode === 'hostile' ? 'enemy and sanctioned' : 'enemy'} shipping in the ${nodeName(f.raidSea)}`);
 export const MAX_FLEETS = 8;
 export const CARRIER_WEIGHT = 8; // a carrier group counts as eight warships
 export const REFIT_WEEKS = 6;
@@ -364,7 +371,8 @@ export function fleetOrder(s, c, { id, x, y, to, mission = 'hold', mode = null, 
     if (!isStrait(key)) return 'Patrols guard a strait: pick one.';
     if (!PATROL_MODES[mode]) return 'Pick what the patrol does.';
     dest = [NODES[key].x, NODES[key].y];
-  } else mode = null;
+  } else if (mission !== 'raid') mode = null;
+  if (mission === 'raid' && !RAID_MODES[mode]) mode = 'enemies';
   if (!dest && to && NODES[to]) dest = [NODES[to].x, NODES[to].y];
   if (!dest) return 'Pick a point on the water.';
   if (!isWater(...dest)) {
@@ -377,8 +385,9 @@ export function fleetOrder(s, c, { id, x, y, to, mission = 'hold', mode = null, 
   if (!route) return 'There is no way there by sea.';
   f.route = route;
   f.dest = [wrapX(dest[0]), dest[1]];
-  Object.assign(f, { mission, mode, target, retreating: false });
-  f.status = route.length && routeLength([f.x, f.y], route) > 2 ? `Sailing to the ${nodeName(seaAt(...f.dest))}` : statusOf(s, f);
+  Object.assign(f, { mission, mode, target, retreating: false, huntLabel: null });
+  if (mission === 'raid') Object.assign(f, { raidSea: seaAt(...f.dest), station: [...f.dest], target: null });
+  f.status = route.length && routeLength([f.x, f.y], route) > 2 ? `Sailing to the ${nodeName(seaAt(...f.dest))}${mission === 'raid' ? ' to hunt shipping' : ''}` : statusOf(s, f);
   applyFleets(s);
   return null;
 }
@@ -424,6 +433,17 @@ export function disbandFleet(s, c, { id }) {
   return null;
 }
 
+// What a fleet does with an enemy cargo it catches: seize it (take it home) or sink it (surer, and lost to all)
+export function setFleetRaid(s, c, { id, how }) {
+  const f = s.fleets?.[id];
+  if (!f || f.owner !== c.id) return 'That fleet is not yours.';
+  if (!RAID_HOW[how]) return 'Seize or sink?';
+  f.raid = how;
+  if (f.mission === 'raid' && f.target && f.huntLabel) f.huntLabel = f.huntLabel.replace(/^(seize|sink)/, how);
+  if (f.mission === 'raid') f.status = raidStatus(f);
+  return null;
+}
+
 export function renameFleet(s, c, { id, name }) {
   const f = s.fleets?.[id];
   if (!f || f.owner !== c.id) return 'That fleet is not yours.';
@@ -450,6 +470,7 @@ export function recallFleets(s, c, { target, key }) {
 
 function statusOf(s, f) {
   if (f.mission === 'intercept' && f.huntLabel) return moving(f) && !f.retreating ? `Sailing to ${f.huntLabel}` : `Lying in wait to ${f.huntLabel}`;
+  if (f.mission === 'raid' && !f.retreating && (f.huntLabel || !moving(f))) return raidStatus(f);
   if (moving(f)) return f.retreating ? 'Retreating' : `Sailing to the ${nodeName(seaAt(...(f.dest ?? [f.x, f.y])))}`;
   if (f.mission === 'blockade' && f.target) return `Blockading ${nameOf(s, f.target)}`;
   if (f.mission === 'patrol') return `Patrolling the ${nodeName(f.at)}: ${PATROL_MODES[f.mode]?.toLowerCase() ?? ''}`;
@@ -560,7 +581,7 @@ function sail(s, f, dt) {
   if (!f.route.length) {
     f.retreating = false;
     f.status = statusOf(s, f);
-    if (f.mission !== 'hold') alert(s, f.owner, `${f.name} is in position: ${f.status.toLowerCase()}.`, 'info', { front: true });
+    if (f.mission !== 'hold' && !(f.mission === 'raid' && f.target)) alert(s, f.owner, `${f.name} is in position: ${f.status.toLowerCase()}.`, 'info', { front: true });
     return true;
   }
   return crossed;
@@ -747,7 +768,7 @@ export function aiNavy(s, c) {
   // At peace: blockading fleets come home
   if (!enemies.length) {
     for (const f of mine) {
-      if (f.mission === 'blockade' || (f.mission === 'patrol' && f.mode !== 'escort')) {
+      if (f.mission === 'blockade' || f.mission === 'raid' || (f.mission === 'patrol' && f.mode !== 'escort')) {
         const home = f.port && PORTS[f.port] ? { x: PORTS[f.port][0], y: PORTS[f.port][1] } : main;
         fleetOrder(s, c, { id: f.id, x: home.x, y: home.y, mission: 'hold' });
       }
@@ -775,6 +796,27 @@ export function aiNavy(s, c) {
     const pick = mine.filter(ready).sort((a, b) => fleetStrength(s, b) - fleetStrength(s, a))[0];
     if (pick) fleetOrder(s, c, { id: pick.id, mission: 'blockade', target: e });
   }
+  // Hunt the enemy's shipping in the sea most of it crosses (the U-boats in the Atlantic): one fleet at a time,
+  // from those holding position
+  if (!mine.some((f) => f.mission === 'raid') && chance(s, 0.25)) {
+    const seas = new Map();
+    for (const sh of s.shipments ?? []) {
+      if (sh.done || sh.mode !== 'sea' || sh.x == null) continue;
+      if (!enemies.some((e) => e === sh.buyer || e === sh.seller) || allied(s, c.id, sh.buyer) || allied(s, c.id, sh.seller)) continue;
+      const k = seaAt(sh.x, sh.y);
+      if (k) seas.set(k, (seas.get(k) ?? 0) + 1);
+    }
+    const sea = [...seas.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (sea && NODES[sea]) {
+      const pick = mine.filter(ready).filter((f) => f.mission === 'hold').sort((a, b) => mapDistance(a.x, a.y, NODES[sea].x, NODES[sea].y) - mapDistance(b.x, b.y, NODES[sea].x, NODES[sea].y))[0];
+      if (pick) {
+        pick.raid = c.gov === 'autocracy' && chance(s, 0.6) ? 'sink' : 'seize';
+        fleetOrder(s, c, { id: pick.id, to: sea, mission: 'raid', mode: 'enemies' });
+      }
+    }
+  }
+  // At war, a fleet's standing orders for enemy cargoes it comes across
+  for (const f of mine) if (!f.raid) f.raid = c.gov === 'autocracy' ? 'sink' : 'seize';
   // Big navies stop enemy trade at the straits it depends on
   if (ours > 60 && chance(s, 0.15)) {
     for (const [key, cp] of Object.entries(CHOKEPOINTS)) {
@@ -795,10 +837,10 @@ export function fleetsFor(s, cid, { seen = false } = {}) {
     const own = !me || f.owner === cid || allied(s, cid, f.owner);
     const base = {
       id: f.id, owner: f.owner, name: f.name, x: Math.round(f.x * 10) / 10, y: Math.round(f.y * 10) / 10, at: f.at, moving: moving(f),
-      carriers: Math.round(f.carriers), mission: f.mission, target: f.target, mode: f.mode, battle: f.battle === s.week,
+      carriers: Math.round(f.carriers), mission: f.mission, target: f.mission === 'raid' || f.mission === 'intercept' ? null : f.target, mode: f.mode, battle: f.battle === s.week,
     };
     return own
-      ? { ...base, ships: Math.round(f.ships), org: Math.round(f.org), route: f.route.map(([x, y]) => [Math.round(x), Math.round(y)]), dest: f.dest, status: f.status, exact: true }
+      ? { ...base, ships: Math.round(f.ships), org: Math.round(f.org), route: f.route.map(([x, y]) => [Math.round(x), Math.round(y)]), dest: f.dest, status: f.status, exact: true, raid: f.raid ?? 'seize', raidSea: f.raidSea ?? null, chasing: f.target ?? null }
       : { ...base, ships: seen ? Math.round(f.ships) : Math.max(1, Math.round(f.ships / 5) * 5), exact: false, seen };
   });
 }

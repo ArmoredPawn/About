@@ -8,10 +8,14 @@ import { GEO } from './data/geo.js';
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import {
   clamp, rand, chance, pick, alive, atWar, allied, enemiesOf, rel, nameOf, nation, alliancesOf, treaty, addRel, news,
-  sanctioning, warBetween, friendlyGround,
+  sanctioning, warBetween, friendlyGround, onSameSide, alert,
 } from './core.js';
+import { PROVINCES } from './data/regions.js';
+import { aiDoctrine } from './doctrine.js';
+import { coastguardCanStop, orderCoastguard } from './shipping.js';
+import { openRoute, planRoute } from './routes.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower, upkeep, lineProblem, hasLine, LINE_SETUP } from './economy.js';
-import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor } from './military.js';
+import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor, breakOut, setAirlift, regionName } from './military.js';
 import { aiNavy } from './navy.js';
 import { aiPeoples } from './peoples.js';
 import { aiAid } from './proxy.js';
@@ -59,6 +63,8 @@ export function aiTick(s) {
     if ((s.week + c.ai.next) % 26 === 7) aiClimate(s, c);
     if ((s.week + c.ai.next) % 8 === 6) aiSpace(s, c);
     if (enemiesOf(s, c.id).size) war(s, c, gar);
+    if (c.ai.stopLines) stopLines(s, c);
+    if ((s.week + c.ai.next) % 8 === 2) aiDoctrine(s, c);
     else {
       if (c.mob > 0 && (s.week + c.ai.next) % 8 === 0) c.mob -= 1;
       if ((s.week + c.ai.next) % 8 === 0 && c.conscription && CONSCRIPTION[c.conscription].level > CONSCRIPTION[c.base.conscription].level && (c.threat?.value ?? 0) < 0.4) setConscription(s, c, c.base.conscription);
@@ -272,12 +278,18 @@ function war(s, c, gar) {
   const free = freeForces(s, c);
   // Draft reservists straight into the line when the enemy is stronger
   const draftable = ratio < 1.2 ? Math.max(0, c.reserves) * 0.5 : 0;
-  if (fronts.length && mine.length < Math.min(6, fronts.length + 1) && free.troops + draftable > 40) {
-    const threat = fronts.map((reg) => [reg, threatTo(s, c.id, reg.id, enemySet)]).sort((a, b) => b[1] - a[1]);
-    const spot = threat[0][0];
-    const troops = Math.floor(free.troops * 0.45 + draftable);
-    if (createArmy(s, c, { region: spot.id, troops, tanks: Math.floor(free.tanks * 0.45) })) createArmy(s, c, { region: spot.id, troops: Math.floor(free.troops * 0.45), tanks: Math.floor(free.tanks * 0.45) });
-  } else if (ratio < 0.8 && mine.length && c.reserves > 20) {
+  // Invaded, a country forms its armies as fast as it can: two a week while the enemy is on its soil
+  const invaded = lost > 0 || fronts.some((reg) => reg.battle && enemySet.has(reg.battle.by));
+  for (let i = 0; i < (invaded ? 2 : 1); i++) {
+    const have = Object.values(s.armies).filter((a) => a.owner === c.id).length;
+    const spare = freeForces(s, c);
+    if (!(fronts.length && have < Math.min(invaded ? 8 : 6, fronts.length + 2) && spare.troops + (i ? 0 : draftable) > 40)) break;
+    const threat = fronts.map((reg) => [reg, threatTo(s, c.id, reg.id, enemySet) + (reg.battle && enemySet.has(reg.battle.by) ? 200 : 0)]).sort((a, b) => b[1] - a[1]);
+    const spot = threat[Math.min(i, threat.length - 1)][0];
+    const troops = Math.floor(spare.troops * 0.45 + (i ? 0 : draftable));
+    if (createArmy(s, c, { region: spot.id, troops, tanks: Math.floor(spare.tanks * 0.45) })) createArmy(s, c, { region: spot.id, troops: Math.floor(spare.troops * 0.45), tanks: Math.floor(spare.tanks * 0.45) });
+  }
+  if (!(fronts.length && mine.length < 6) && ratio < 0.8 && mine.length && c.reserves > 20) {
     // Feed reservists into the weakest army on the front
     const weakest = mine.filter((a) => !a.sea && friendlyGround(s, c.id, s.regions[a.region].ctrl)).sort((x, y) => x.troops - y.troops)[0];
     if (weakest) {
@@ -287,43 +299,69 @@ function war(s, c, gar) {
       weakest.org = Math.max(30, weakest.org - 8);
     }
   }
+  // Fortify the most threatened front while there is time (and the capital, if the enemy is near it)
+  if (invaded || defending) fortifyFront(s, c, fronts, enemySet);
 
-  // Orders: liberate our land first, then hold the most threatened front, and counter-attack if much stronger
+  // Allies at war with the same enemy, with fronts of their own: send an expeditionary army to stand with them
+  const allyFronts = Object.values(s.regions).filter((reg) => reg.ctrl !== c.id && onSameSide(s, c.id, reg.ctrl) && friendlyGround(s, c.id, reg.ctrl)
+    && GEO[reg.id].adj.some((a) => enemySet.has(s.regions[a]?.ctrl)));
+  expedition(s, c, fronts, allyFronts, enemySet, ratio);
+
+  // Orders: break out of any ring; liberate our land with every army that can reach it; hold the most threatened
+  // front (ours or our allies'); and counter-attack if much stronger
   const occupied = Object.values(s.regions).filter((reg) => reg.owner === c.id && enemySet.has(reg.ctrl));
   // Troops already heading to each front, so armies spread out instead of all chasing the emptiest one
   const bound = new Map();
   for (const a of Object.values(s.armies)) {
     if (a.owner === c.id && !a.sea && a.op.kind === 'hold' && a.region !== a.op.target) bound.set(a.op.target, (bound.get(a.op.target) ?? 0) + a.troops);
   }
+  const assigned = new Set();
+  // Surrounded: break out while there is strength left, else fly supplies in
   for (const a of Object.values(s.armies)) {
-    if (a.owner !== c.id || a.sea) continue;
+    if (a.owner !== c.id || a.sea || !a.pocket || a.pocketSea) continue;
+    assigned.add(a.id);
+    if (a.org >= 22 && !(a.breakout > s.week) && breakOut(s, c, a) === null) continue;
+    const free = c.aircraft - c.airOps.reduce((t, o) => t + o.aircraft, 0) - (c.airlifts ?? []).reduce((t, o) => t + o.aircraft, 0);
+    if (!(c.airlifts ?? []).some((x) => x.army === a.id) && free > 30) setAirlift(s, c, a, Math.floor(Math.min(free * 0.5, a.troops * 1.3)));
+  }
+  // A failing attack is called off: the army pulls back and regroups instead of bleeding away
+  for (const a of Object.values(s.armies)) {
+    if (a.owner !== c.id || a.sea || !a.attacking || assigned.has(a.id)) continue;
+    const b = s.regions[a.attacking]?.battle;
+    if (!b || b.by !== c.id) continue;
+    if ((b.trend === 'repulsed' && a.org < 55) || (b.weeks > 5 && b.prog < 25 && b.trend !== 'advancing')) {
+      if (!orderArmy(s, c, a, { kind: 'hold', target: a.region })) { a.orderedAt = s.week; assigned.add(a.id); }
+    }
+  }
+  // Counter-offensives: every army within reach joins in, so their weight together breaks the enemy's hold
+  liberate(s, c, occupied, gar, assigned, bound);
+  const myFronts = [...fronts, ...allyFronts.filter((reg) => Object.values(s.armies).some((a) => a.owner === c.id && (a.region === reg.id || a.op.target === reg.id)))];
+  for (const a of Object.values(s.armies)) {
+    if (a.owner !== c.id || a.sea || assigned.has(a.id)) continue;
     const busy = a.op.kind === 'attack' && a.path.length && enemySet.has(s.regions[a.op.target].ctrl);
     if (busy && (s.week - (a.orderedAt ?? 0)) < 12) continue;
     const odds = (id) => armyAttackEstimate(s, a, id) / Math.max(1, defenceEstimate(s, id, gar));
-    const near = (list) => list
-      .map((reg) => [reg, route(s, c.id, a.region, reg.id, { offensive: true })])
-      .filter(([, path]) => path && path.length <= 4)
-      .sort((x, y) => x[1].length - y[1].length || odds(y[0].id) - odds(x[0].id));
     let order = null;
-    const lib = near(occupied).find(([reg, path]) => odds(path[0] ?? reg.id) >= 0.9);
-    if (lib) order = { kind: 'attack', target: lib[0].id, aggr: 'balanced' };
     if (!order && ratio > 1.4 && c.gov !== 'democracy' || !order && ratio > 1.8) {
-      const targets = Object.values(s.regions).filter((reg) => enemySet.has(reg.ctrl) && GEO[reg.id].adj.some((x) => s.regions[x]?.ctrl === c.id));
+      const targets = Object.values(s.regions).filter((reg) => enemySet.has(reg.ctrl) && GEO[reg.id].adj.some((x) => s.regions[x]?.ctrl === c.id || (s.regions[x] && allied(s, c.id, s.regions[x].ctrl))));
       // Worth = output and resources: empty deserts and tundra are taken only when nothing better is in reach
       const avgGdp = targets.reduce((t, reg) => t + reg.gdp, 0) / Math.max(1, targets.length) || 1;
       const worth = (reg) => 0.3 + 0.7 * Math.min(1.5, reg.gdp / avgGdp) + Object.keys(reg.res).length * 0.15;
-      const best = targets.filter((reg) => odds(reg.id) >= 1.3).map((reg) => [reg, odds(reg.id) * worth(reg)]).sort((x, y) => y[1] - x[1])[0];
+      const best = targets.filter((reg) => GEO[reg.id].adj.includes(a.region) || route(s, c.id, a.region, reg.id, { offensive: true })?.length <= 3)
+        .filter((reg) => odds(reg.id) >= 1.3).map((reg) => [reg, odds(reg.id) * worth(reg)]).sort((x, y) => y[1] - x[1])[0];
       if (best) order = { kind: 'attack', target: best[0].id, aggr: 'balanced' };
     }
     if (!order) {
       // How badly each front needs troops, not counting this army itself. It only moves for a front that needs
       // them clearly more than the one it holds: otherwise every army shuttles back and forth between the two
-      // emptiest fronts each week.
+      // emptiest fronts each week. A province under attack right now needs them most.
       const mineThere = (id) => (a.region === id ? a.troops : 0) + (a.op.kind === 'hold' && a.op.target === id && a.region !== id ? a.troops : 0);
-      const need = (id) => threatTo(s, c.id, id, enemySet) - defenceHere(s, c.id, id) - (bound.get(id) ?? 0) + mineThere(id);
-      const threatened = fronts.map((reg) => [reg, need(reg.id)]).sort((x, y) => y[1] - x[1])[0];
+      const underAttack = (id) => { const b = s.regions[id].battle; return b && enemySet.has(b.by) ? 80 + b.prog * 2 : 0; };
+      const need = (id) => threatTo(s, c.id, id, enemySet) + underAttack(id) - defenceHere(s, c.id, id) - (bound.get(id) ?? 0) + mineThere(id);
+      const reachable = myFronts.filter((reg) => reg.id === a.region || route(s, c.id, a.region, reg.id, { offensive: false }));
+      const threatened = reachable.map((reg) => [reg, need(reg.id)]).sort((x, y) => y[1] - x[1])[0];
       const here = a.op.kind === 'hold' ? a.op.target : a.region;
-      const stay = fronts.some((reg) => reg.id === here) ? need(here) : -Infinity;
+      const stay = myFronts.some((reg) => reg.id === here) ? need(here) : -Infinity;
       if (threatened && here !== threatened[0].id && threatened[1] > stay + Math.max(30, Math.abs(stay) * 0.3)) {
         order = { kind: 'hold', target: threatened[0].id, aggr: 'balanced' };
         bound.set(threatened[0].id, (bound.get(threatened[0].id) ?? 0) + a.troops);
@@ -403,6 +441,138 @@ function war(s, c, gar) {
       makePeace(s, c.id, e, Math.abs(myLoss - theirLoss) > 0.1 ? { cede } : {});
     }
   }
+}
+
+/* ---------- Fighting back ---------- */
+
+// Counter-offensives to win back our land. Each target is weighed against every army of ours that could join in
+// (three marches away at most, not already defending a province under attack): if together they can beat its
+// defenders, as many as it takes are sent. They gather next to it first and go in together, so the enemy meets
+// their combined weight, not one army after another.
+function liberate(s, c, occupied, gar, assigned, bound) {
+  c.ai.ops ??= {};
+  const enemies = enemiesOf(s, c.id);
+  // Operations already under way: wait for the team to gather, then attack all at once
+  for (const [target, op] of Object.entries(c.ai.ops)) {
+    const reg = s.regions[target];
+    op.team = op.team.filter((id) => s.armies[id] && !s.armies[id].sea);
+    if (!reg || !enemies.has(reg.ctrl) || !op.team.length || s.week - op.since > 14) { delete c.ai.ops[target]; continue; }
+    for (const id of op.team) assigned.add(id);
+    const team = op.team.map((id) => s.armies[id]);
+    if (op.launched) {
+      // Called off: the attack failed and the armies came back to hold
+      if (team.every((a) => a.op.kind !== 'attack')) { c.ai.calledOff = { ...(c.ai.calledOff ?? {}), [target]: s.week }; delete c.ai.ops[target]; }
+      continue;
+    }
+    const gathered = team.every((a) => GEO[target].adj.includes(a.region) || a.region === target);
+    if (!gathered && s.week - op.since < 4) continue;
+    op.launched = true;
+    for (const a of team) if (!orderArmy(s, c, a, { kind: 'attack', target, aggr: 'allout' })) a.orderedAt = s.week;
+    if (team.length > 1) news(s, `${c.name} launches a counter-offensive to retake ${regionName(target)} with ${team.length} armies.`, 'war', [c.id, reg.ctrl]);
+  }
+  if (!occupied.length) return;
+  const ready = Object.values(s.armies).filter((a) => a.owner === c.id && !a.sea && !assigned.has(a.id) && a.org >= 35
+    && !(s.regions[a.region].battle && enemies.has(s.regions[a.region].battle.by) && s.regions[a.region].ctrl === c.id));
+  const plans = [];
+  for (const reg of occupied) {
+    if (c.ai.ops[reg.id]) continue;
+    // A target we just failed to take is left alone for a while unless the odds are much better now
+    const failed = s.week - (c.ai.calledOff?.[reg.id] ?? -99) < 8;
+    const def = Math.max(1, defenceEstimate(s, reg.id, gar));
+    const near = ready.map((a) => [a, route(s, c.id, a.region, reg.id, { offensive: true })]).filter(([, p]) => p && p.length <= 3)
+      .sort((x, y) => x[1].length - y[1].length);
+    if (!near.length) continue;
+    let total = 0;
+    const team = [];
+    for (const [a] of near) {
+      team.push(a);
+      total += armyAttackEstimate(s, a, reg.id);
+      if (total / def >= 1.7) break;
+    }
+    const odds = total / def;
+    // Our own land, our capital most of all, and the richest provinces first
+    const worth = (CAPITALS.has(reg.id) || reg.id === c.id ? 3 : 1) + reg.gdp / 400;
+    if (odds >= (failed ? 1.8 : 1.3)) plans.push({ reg, team, odds, score: odds * worth });
+  }
+  plans.sort((a, b) => b.score - a.score);
+  for (const p of plans) {
+    if (p.team.some((a) => assigned.has(a.id))) continue;
+    // Gather in our provinces next to the target, each army at the one nearest it
+    const staging = GEO[p.reg.id].adj.filter((id) => s.regions[id] && friendlyGround(s, c.id, s.regions[id].ctrl));
+    for (const a of p.team) {
+      assigned.add(a.id);
+      if (GEO[p.reg.id].adj.includes(a.region) || !staging.length) continue;
+      const spot = staging.map((id) => [id, route(s, c.id, a.region, id, { offensive: false })]).filter(([, path]) => path).sort((x, y) => x[1].length - y[1].length)[0];
+      if (spot && !orderArmy(s, c, a, { kind: 'hold', target: spot[0], aggr: 'balanced' })) a.orderedAt = s.week;
+    }
+    c.ai.ops[p.reg.id] = { team: p.team.map((a) => a.id), since: s.week, launched: false };
+  }
+}
+const CAPITALS = new Set(PROVINCES.filter((p) => p.capital).map((p) => p.id));
+
+// Dig in on the most threatened front: fortifications where the enemy is massing, and round the capital if they
+// are close to it
+function fortifyFront(s, c, fronts, enemySet) {
+  if ((s.week - (c.ai.fortAt ?? -99)) < 3 || c.projects.length >= maxProjects(c)) return;
+  const spots = fronts.filter((reg) => reg.fort < 4 && !c.projects.some((p) => p.region === reg.id && p.kind === 'fort'))
+    .map((reg) => [reg, threatTo(s, c.id, reg.id, enemySet) * (CAPITALS.has(reg.id) || reg.id === c.id ? 2 : 1) + reg.gdp / 50])
+    .sort((a, b) => b[1] - a[1]);
+  const pick = spots[0]?.[0];
+  if (!pick) return;
+  const cost = (pick.fort + 1) * 0.6 * costFactor(c);
+  if (cost > (c.milFunds + c.treasury) * 0.3) return;
+  const fromFunds = Math.min(c.milFunds, cost);
+  c.milFunds -= fromFunds;
+  c.treasury -= cost - fromFunds;
+  c.projects.push({ id: `pj${s.nextId++}`, kind: 'fort', region: pick.id, left: 8, total: 8, cost });
+  c.ai.fortAt = s.week;
+}
+
+// An ally fighting our common enemy on a front of its own, with none of ours there: send an army to stand beside
+// it. It forms up in our province closest to that front and marches over friendly ground.
+function expedition(s, c, fronts, allyFronts, enemySet, ratio) {
+  if (!allyFronts.length || (s.week - (c.ai.expeditionAt ?? -99)) < 6) return;
+  const abroad = Object.values(s.armies).filter((a) => a.owner === c.id && !a.sea && s.regions[a.region].ctrl !== c.id);
+  if (abroad.length >= (fronts.length ? 1 : 3)) return;
+  // Only with troops to spare once our own fronts are held
+  const spare = freeForces(s, c);
+  const need = fronts.reduce((t, reg) => t + threatTo(s, c.id, reg.id, enemySet), 0);
+  if (spare.troops - need * 0.5 < 40 || (fronts.length && ratio < 1)) return;
+  // The ally front under most pressure
+  const press = (reg) => threatTo(s, c.id, reg.id, enemySet) + (reg.battle && enemySet.has(reg.battle.by) ? 150 + reg.battle.prog * 2 : 0);
+  const targets = allyFronts.map((reg) => [reg, press(reg)]).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const homes = Object.values(s.regions).filter((reg) => reg.ctrl === c.id && reg.owner === c.id && !(reg.battle && enemySet.has(reg.battle.by)));
+  for (const [front] of targets) {
+    const g = GEO[front.id];
+    const start = homes.map((reg) => [reg, Math.hypot(GEO[reg.id].x - g.x, GEO[reg.id].y - g.y)]).sort((a, b) => a[1] - b[1]).slice(0, 5)
+      .map(([reg]) => [reg, route(s, c.id, reg.id, front.id, { offensive: false })]).find(([, p]) => p && p.length <= 14);
+    if (!start) continue;
+    const troops = Math.floor(Math.min(spare.troops * 0.4, Math.max(40, press(front) * 1.2)));
+    if (troops < 20) return;
+    if (createArmy(s, c, { region: start[0].id, troops, tanks: Math.floor(spare.tanks * 0.4), name: `Expeditionary Force ${nameOf(s, front.ctrl).split(' ')[0]}`.slice(0, 28) })) return;
+    const army = Object.values(s.armies).filter((a) => a.owner === c.id && a.region === start[0].id).sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+    if (!army) return;
+    army.assist = true;
+    orderArmy(s, c, army, { kind: 'hold', target: front.id, aggr: 'balanced' });
+    army.orderedAt = s.week;
+    c.ai.expeditionAt = s.week;
+    news(s, `${c.name} sends ${army.name} (about ${Math.round(troops / 5) * 5}K troops) to fight beside ${nameOf(s, front.ctrl)}.`, 'war', [c.id, front.ctrl]);
+    alert(s, front.ctrl, `${c.name} is sending an army of about ${Math.round(troops / 5) * 5}K troops to help us hold ${regionName(front.id)}.`, 'good', { region: front.id });
+    return;
+  }
+}
+
+// A hostile country's coastguard stops the cargoes of a secret line it has found in its waters
+function stopLines(s, c) {
+  const lines = c.ai.stopLines;
+  if (!lines) return;
+  for (const sh of s.shipments ?? []) {
+    const id = sh.lane?.route;
+    if (!id || !lines[id] || !coastguardCanStop(s, c.id, sh)) continue;
+    if ((sh.coast ?? []).some((o) => o.by === c.id)) continue;
+    orderCoastguard(s, c, sh, 'seize');
+  }
+  for (const id of Object.keys(lines)) if (!s.routes?.[id] || s.routes[id].closed) delete lines[id];
 }
 
 /* ---------- The home front ---------- */
@@ -539,6 +709,16 @@ function standing(s, c) {
     const partner = others.filter((o) => !(o.minor && ftas(o.id) >= 4) && rel(s, c.id, o.id) > 30 && !treaty(s, 'fta', c.id, o.id) && !sanctioning(s, c.id, o.id) && !sanctioning(s, o.id, c.id) && !Object.values(s.proposals).some((p) => p.from === c.id && p.to === o.id))
       .sort((a, b) => b.gdp - a.gdp)[0];
     if (partner && !(partner.human && chance(s, 0.6))) propose(s, c.id, partner.id, 'fta');
+  }
+  // A shipping line to its biggest free-trade partner overseas
+  if (!c.minor && chance(s, 0.04) && Object.values(s.routes ?? {}).filter((r) => r.by === c.id && !r.closed).length < 2) {
+    const partner = s.treaties.filter((t) => t.kind === 'fta' && (t.a === c.id || t.b === c.id)).map((t) => (t.a === c.id ? t.b : t.a))
+      .map((id) => s.countries[id]).filter((o) => o && alive(s, o.id)).sort((a, b) => b.gdp - a.gdp)[0];
+    if (partner) {
+      const mine = Object.values(s.regions).filter((r) => r.ctrl === c.id && GEO[r.id]?.coast).sort((a, b) => b.gdp - a.gdp)[0];
+      const theirs = Object.values(s.regions).filter((r) => r.ctrl === partner.id && GEO[r.id]?.coast).sort((a, b) => b.gdp - a.gdp)[0];
+      if (mine && theirs && !planRoute(s, c, { from: { region: mine.id }, to: { region: theirs.id } }).error && c.treasury > c.gdp * 0.02) openRoute(s, c, { from: { region: mine.id }, to: { region: theirs.id } });
+    }
   }
   // A defence pact with a close friend who shares a rival
   const pacts = alliancesOf(s, c.id, 'military');

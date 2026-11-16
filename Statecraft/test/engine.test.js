@@ -258,8 +258,8 @@ test('a purchase ships the cargo; it is delivered, or stopped with both sides to
     for (let i = 0; i < 10 * 8 && !sh.done; i++) { g.step(0.125); if ((g.s.stepped ?? 0) >= 0.999) g.tick(); }
     if (sh.done && sh.left > 0) {
       stopped++;
-      if (g.s.countries[seller.id]) assert.ok(g.s.countries[seller.id].inbox.some((m) => /China stopped your shipment of oil to Japan/.test(m.text)), 'the seller is told');
-      assert.ok(g.s.countries.jpn.inbox.some((m) => /China stopped the shipment of oil/.test(m.text)), 'the buyer is told');
+      if (g.s.countries[seller.id]) assert.ok(g.s.countries[seller.id].inbox.some((m) => /China (seized|sank) your shipment of oil to Japan/.test(m.text)), 'the seller is told');
+      assert.ok(g.s.countries.jpn.inbox.some((m) => /China (seized|sank) the shipment of oil/.test(m.text)), 'the buyer is told');
     } else {
       for (let i = 0; i < 8 && !sh.done; i++) g.tick();
       if (sh.done) delivered++;

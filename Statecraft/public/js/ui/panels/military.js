@@ -13,15 +13,16 @@ import { CONSCRIPTION } from '../../engine/government.js';
 import { RANGE_KINDS, rangeCost, RANGE_WEEKS } from '../../engine/science.js';
 import { navy, blockadeDialog, myFleets } from './navy.js';
 import { airOps } from './air.js';
+import { doctrine } from './doctrine.js';
 
 export function military(ctx) {
   const tab = ctx.sub('military', 'overview');
-  const tabs = [['overview', 'Overview'], ['armies', 'Troops'], ['navy', 'Navy'], ['weapons', 'Weapons'], ['logistics', 'Logistics'], ['ops', 'Air & sea'], ['wars', 'Wars']];
+  const tabs = [['overview', 'Overview'], ['armies', 'Troops'], ['navy', 'Navy'], ['doctrine', 'Doctrine'], ['weapons', 'Weapons'], ['logistics', 'Logistics'], ['ops', 'Air & sea'], ['wars', 'Wars']];
   return h('div',
     h('div.panel-title', h('h2', 'Military'), h('span.muted.small', `${money(ctx.state.you.milFunds)} defence funds`)),
     deployable(ctx),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('military', id) }, label))),
-    ({ overview, armies, navy, weapons, logistics, ops, wars, forces: overview, build: weapons }[tab] ?? overview)(ctx));
+    ({ overview, armies, navy, doctrine, weapons, logistics, ops, wars, forces: overview, build: weapons }[tab] ?? overview)(ctx));
 }
 
 // Always on top: what the leader can actually send into battle right now
@@ -157,7 +158,9 @@ export function armyCard(ctx, a, compact = false) {
     h('div.item-head', h('span.swatch', { style: { background: 'var(--accent)' } }), h('span.name', a.name), h('span.mono.small', troops(a.troops))),
     h('div.meta', `${a.gen.name} · `, h('span', { title: 'Skill' }, stars), ` · ${trait?.name ?? ''}`, h('span.faint', ` (${trait?.note ?? ''})`)),
     h('div.meta', `${a.sea ? 'At sea' : regionName(a.region)} · ${num(a.tanks)} tanks · supply ${Math.round(a.supply * 100)}%`),
-    a.speed != null && !a.sea ? h('div.meta', { title: 'Over open plains. Faster with Land warfare and Industry research, more tanks per thousand men, enough oil, and factories that keep up with the war. Hills, forests and mountains slow it; good roads speed it up.' }, `Marches about ${a.speed.toLocaleString('en-US')} km a week`) : null,
+    a.speed != null && !a.sea ? h('div.meta', { title: 'Over open plains. Faster with Land warfare and Industry research, more tanks per thousand men, enough oil, and factories that keep up with the war. Hills, forests and mountains slow it; good roads speed it up.' }, `Marches about ${a.speed.toLocaleString('en-US')} km a week`,
+      a.breakthrough != null ? h('span.faint', { title: 'How well it breaks through a line and runs on behind it: tanks per thousand men, land-warfare research and our doctrine. A high-breakthrough army attacking at good odds tears through faster, bypasses garrisons and keeps its momentum.' }, ` · breakthrough ${Math.round(a.breakthrough * 100)}`) : null) : null,
+    a.pocket && !a.sea ? pocketBlock(ctx, a) : null,
     h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span.muted', 'Organisation'), h('div.grow', bar(a.org, 100, a.org < 30 ? 'bad' : a.org < 60 ? 'warn' : 'good')), h('span.mono', `${a.org}%`)),
     h('div.meta', { style: { color: 'var(--ink)' } }, a.status),
     a.fuel ? h('div.meta', { title: 'Oil burned each week. Fighting burns the most (tanks, trucks, generators); holding a province very little. Without the oil, tanks stall and the army slows to a crawl.' },
@@ -169,6 +172,10 @@ export function armyCard(ctx, a, compact = false) {
       h('label.row.gap', { style: { cursor: 'pointer', alignItems: 'center' }, title: 'The army takes one enemy province after another, nearest first, until no country at war with us holds ground within reach, or it is destroyed.' },
         h('input', { type: 'checkbox', checked: Boolean(a.auto), onchange: (e) => ctx.send({ type: 'armyAuto', id: a.id, on: e.target.checked }) }),
         h('span', h('b', 'Automatic capture'), h('span.muted', a.auto ? ': on. It will keep attacking.' : ': off')))),
+    a.sea ? null : h('div.row.gap.small', { style: { marginTop: '4px' }, onclick: (e) => e.stopPropagation() },
+      h('label.row.gap', { style: { cursor: 'pointer', alignItems: 'center' }, title: "When a province next to it, ours or an ally's, comes under attack, it moves in to defend it; when an ally attacks an enemy province next to it, it joins in." },
+        h('input', { type: 'checkbox', checked: Boolean(a.assist), onchange: (e) => ctx.send({ type: 'armyAssist', id: a.id, on: e.target.checked }) }),
+        h('span', h('b', 'Support the front'), h('span.muted', a.assist ? ': on. It helps wherever the fighting is next to it.' : ': off')))),
     a.sea ? null : h('div.actions', { onclick: (e) => e.stopPropagation() },
       h('button.btn.small.primary', { onclick: () => ctx.selectArmy(a.id, true) }, 'Send…'),
       canPrepareLanding(ctx, a) ? h('button.btn.small.ghost', { onclick: () => prepareLanding(ctx, a) }, 'Prepare a landing…') : null,
@@ -176,6 +183,41 @@ export function armyCard(ctx, a, compact = false) {
       others.length ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'armyMerge', ids: [a.id, ...others.map((o) => o.id)] }) }, 'Merge here') : null,
       h('button.btn.small.ghost', { onclick: () => rename(ctx, a) }, 'Rename'),
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Disband ${a.name}?`, 'Its troops return to the home garrisons.')) ctx.send({ type: 'armyDisband', id: a.id }); } }, 'Disband')));
+}
+
+// Surrounded: the pocket's clock, and the ways out
+function pocketBlock(ctx, a) {
+  const s = ctx.state;
+  if (a.pocketSea) return h('div.pocket-card.sea', h('b', '⚓ Cut off by land'), h('span', ' Supplies are still coming in by sea. If the enemy wins the waters off this coast, the army will be truly surrounded.'));
+  const p = (s.pockets ?? []).find((x) => x.id === a.pocket);
+  const weeks = a.pocketWeeks ?? 0;
+  return h('div.pocket-card', { onclick: (e) => e.stopPropagation() },
+    h('div.row.gap', h('b', `⭕ Encircled${p ? ` in the ${p.name} pocket` : ''}`), h('span.chip.bad', { style: { marginLeft: 'auto' } }, weeks ? `${weeks} week${weeks === 1 ? '' : 's'}` : 'just now')),
+    h('div.small', `Cut off from supply: organisation falls about 10 points a week, fuel is running out and men are lost every week${a.airlift ? `. The airlift (${a.lift} aircraft) covers ${Math.round(a.airlift * 100)}% of its needs` : ''}. Once it is spent, it may surrender.`),
+    h('div.actions',
+      h('button.btn.small.primary', { title: 'Attack toward our lines with everything: a quarter harder for three weeks, at a heavy price.', onclick: () => ctx.send({ type: 'armyBreakout', id: a.id }).then((err) => { if (!err) ctx.toast(`${a.name} is breaking out.`, 'info'); }) }, 'Break out'),
+      h('button.btn.small', { title: 'Fly supplies in with aircraft from the air force, as at Stalingrad. The enemy air force shoots some down every week.', onclick: () => airliftDialog(ctx, a) }, a.lift ? `Airlift (${a.lift})…` : 'Airlift…'),
+      h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Surrender ${a.name}?`, `About ${troops(a.troops)} soldiers go into captivity. It ends their suffering, and the army is lost.`, { ok: 'Surrender', danger: true })) ctx.send({ type: 'armySurrender', id: a.id }); } }, 'Surrender')),
+    h('div.faint.small', 'Or relieve it: attack from outside to reopen a corridor to the pocket.'));
+}
+
+function airliftDialog(ctx, a) {
+  const s = ctx.state;
+  const me = s.you;
+  const busy = (me.airOps ?? []).reduce((t, o) => t + o.aircraft, 0) + (me.airlifts ?? []).filter((x) => x.army !== a.id).reduce((t, o) => t + o.aircraft, 0);
+  const free = Math.max(0, me.aircraft - busy);
+  const doc = s.doctrines?.[s.me]?.picks?.air === 'transport' ? 2 : 1;
+  const need = Math.ceil(a.troops / (0.8 * doc));
+  const f = numberField('Aircraft on the airlift', { value: Math.min(free, a.lift || need), min: 0, max: free, step: 10 });
+  const note = h('p.small.muted');
+  const upd = () => { const n = Number(f.input.value) || 0; note.textContent = `${n} aircraft cover about ${Math.min(100, Math.round((n * 0.8 * doc) / Math.max(20, a.troops) * 100))}% of ${a.name}'s needs (${need} would cover all of it). ${free} aircraft are free. The enemy's fighters and flak shoot some down every week. Set 0 to end the airlift.`; };
+  f.input.addEventListener('input', upd);
+  upd();
+  modal({
+    title: `Airlift to ${a.name}`,
+    body: h('div.stack', f.el, note),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Fly it in', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'armyAirlift', id: a.id, aircraft: Number(f.input.value) || 0 })) || false }],
+  });
 }
 
 // Oil in millions of barrels (the market counts it in millions of barrels a day; a week of that is 7 million)

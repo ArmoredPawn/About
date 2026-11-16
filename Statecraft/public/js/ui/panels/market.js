@@ -1,7 +1,7 @@
 // The market: world prices, buying from a chosen country (or around sanctions), selling, the cargoes at sea and
 // on the road, and the straits they pass through.
 
-import { h, flag, money, nationName, spark, RES_COLORS, RES_LETTERS, num } from '../dom.js';
+import { h, flag, money, nationName, regionName, spark, RES_COLORS, RES_LETTERS, num } from '../dom.js';
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { CHOKEPOINTS } from '../../engine/data/world.js';
 import { fmtQty, TOLLS, STRAIT_POLICIES, PATROL_MODES } from '../../engine/trade.js';
@@ -159,6 +159,7 @@ function ships(ctx) {
   const card = (x, canStop) => h('div.item',
     h('div.item-head', resDot(x.res), h('span.name', `${nationName(s, x.seller)} → ${nationName(s, x.buyer)}`), x.covert ? h('span.chip.warn', 'covert') : null,
       x.secret ? h('span.chip.warn', 'secret deal') : x.deal ? h('span.chip', 'deal convoy') : null,
+      x.line ? h('span.chip', { title: 'It sails a shipping line opened between the two countries' }, (s.routes ?? []).find((r) => r.id === x.line)?.private ? 'secret line' : 'line') : null,
       enemies.has(x.buyer) || enemies.has(x.seller) ? h('span.chip.bad', 'enemy trade') : null, h('span.muted.small', { style: { marginLeft: 'auto' } }, `${x.left} wk left`)),
     h('div.meta', `${fmtQty(x.res, x.qty)} of ${RESOURCE_INFO[x.res].name.toLowerCase()} worth ${money(x.cost)} · ${x.mode === 'land' ? `overland${x.transit?.length ? ` through ${x.transit.map((t) => nationName(s, t)).join(', ')}` : ''}` : `by sea${x.straits?.length ? ` through the ${x.straits.map((k) => CHOKEPOINTS[k].name).join(', ')}` : ''}`}`),
     x.hunter ? h('div.hunt-status',
@@ -166,7 +167,7 @@ function ships(ctx) {
         x.hunter.weeks != null ? `: they meet in about ${daysText(x.hunter.weeks)}.` : ': it can no longer catch it.'),
       h('button.btn.small.ghost', { style: { marginLeft: 'auto' }, onclick: () => ctx.send({ type: 'huntCancel', fleet: x.hunter.fleet }) }, 'Call off'))
       : canStop && x.mode === 'sea' ? huntSummary(s, x) : null,
-    canStop && !x.hunter && (x.mode !== 'sea' || (x.hunt ?? []).some((o) => o.weeks != null)) ? h('div.actions',
+    canStop && !x.hunter && (x.mode !== 'sea' || (x.hunt ?? []).some((o) => o.weeks != null) || x.spawn || (x.coastguard && !x.coastWaiting)) ? h('div.actions',
       h('button.btn.small', { onclick: () => stop(ctx, x, 'seize') }, 'Seize it'),
       h('button.btn.small.danger', { onclick: () => stop(ctx, x, 'sink') }, x.mode === 'land' ? 'Destroy it' : 'Sink it')) : null);
   // A cargo picked on the map comes first, picked out
@@ -178,13 +179,13 @@ function ships(ctx) {
       h('div.how-it-works',
         h('div', h('b', 'How stopping a cargo works')),
         h('ol',
-          h('li', 'Pick a ship below (or click one on the map) and choose Seize or Sink, then which fleet to send.'),
-          h('li', 'The fleet sails to a point on the ship\'s route ahead of it and waits there. A fleet too far away can\'t get there before the ship docks, and won\'t be offered.'),
+          h('li', 'Pick a ship below (or click one on the map) and choose Seize or Sink. You are offered every fleet that can reach it in time, best first, or a new fleet put to sea from our port nearest its route.'),
+          h('li', 'The fleet sails to a point on the ship\'s route ahead of it and waits there. A fleet too far away can\'t get there before the ship docks. To catch every enemy cargo crossing a sea, send a fleet to hunt shipping there (click it, then click the sea).'),
           h('li', 'When the ship reaches it, the two sides\' warships count: if the buyer\'s, seller\'s or their allies\' warships near it are stronger, it gets through. Otherwise you have the odds shown.')),
         h('div', h('b', 'Seize'), ': board it and bring the cargo home. It goes into our stockpile, but a prize can slip away, so the odds are lower.'),
         h('div', h('b', 'Sink'), ': surer, but the cargo is lost to everyone. Their trade is starved all the same.'),
-        h('div.faint', 'In peacetime either one is piracy: both countries turn hostile (sinking more so). Fleets at war with the buyer or seller, blockades and strait patrols stop cargoes on their own. Overland, a cargo can be stopped where it crosses our territory.')),
-      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : myFleets(s).length > 0)))) : h('div.empty', 'No cargoes in sight.')));
+        h('div.faint', 'In peacetime either one is piracy: both countries turn hostile (sinking more so). Fleets at war with the buyer or seller, blockades and strait patrols stop cargoes on their own, seizing or sinking as each fleet is set to (its card). Overland, a cargo can be stopped where it crosses our territory.')),
+      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : myFleets(s).length > 0 || Boolean(x.spawn) || Boolean(x.coastguard))))) : h('div.empty', 'No cargoes in sight.')));
 }
 
 async function stop(ctx, x, how) {
@@ -196,20 +197,65 @@ async function stop(ctx, x, how) {
     if (!err) ctx.toast('Orders sent: it will be stopped where it crosses our territory.', 'info');
     return;
   }
-  // At sea: a fleet has to sail out to meet it. Only fleets that can get there in time, soonest first.
+  huntDialog(ctx, x, how);
+}
+
+// Every way we could go after a cargo at sea, the best first: our fleets that can reach it in time, a new fleet
+// from the port nearest its route (if warships are waiting in port), and our coastguard if it sails a secret line
+// through our waters. Best = the surest to succeed, then the soonest; fleets already on a mission sort last.
+export function huntChoices(s, x, how) {
   const odds = new Map((x.hunt ?? []).map((o) => [o.fleet, o]));
-  const fleets = myFleets(s).map((f) => ({ f, o: odds.get(f.id) })).filter(({ o }) => o?.weeks != null).sort((a, b) => a.o.weeks - b.o.weeks);
-  if (!fleets.length) return ctx.hint(myFleets(s).length ? 'None of our fleets can reach it before it docks. A fleet nearer its route might catch the next one.' : 'We have no fleet to send.', 'bad');
-  const pick = selectField('Send', fleets.map(({ f, o }) => [f.id, `${f.name} (${f.ships} warships${f.carriers ? `, ${f.carriers} carriers` : ''}): meets it in ${daysText(o.weeks)}, ${o[how]}% to ${how} it`]));
-  const best = fleets[0].o;
+  const out = [];
+  for (const f of myFleets(s)) {
+    const o = odds.get(f.id);
+    if (!o || o.weeks == null) { out.push({ kind: 'fleet', id: f.id, f, o: null, chance: -1 }); continue; }
+    out.push({ kind: 'fleet', id: f.id, f, o, chance: o[how], busy: o.busy });
+  }
+  if (x.spawn) out.push({ kind: 'new', id: 'new', o: x.spawn, chance: x.spawn[how] });
+  if (x.coastguard && !x.coastWaiting) out.push({ kind: 'coastguard', id: 'coastguard', o: { weeks: null }, chance: 101 });
+  const score = (c) => (c.chance < 0 ? -1e9 : c.chance * 10 - (c.o?.weeks ?? 0) * 4 - (c.busy ? 60 : 0) - (c.kind === 'new' ? 8 : 0));
+  return out.sort((a, b) => score(b) - score(a));
+}
+
+function huntDialog(ctx, x, how) {
+  const s = ctx.state;
+  const choices = huntChoices(s, x, how);
+  const usable = choices.filter((c) => c.chance >= 0);
+  if (!usable.length) return ctx.hint(myFleets(s).length ? 'None of our fleets can reach it before it docks, and no warships are waiting in port. A fleet nearer its route might catch the next one.' : 'We have no warships to send. Build some in Military → Weapons.', 'bad', 7000);
+  let pick = usable[0];
+  const verb = how === 'sink' ? 'sink' : 'seize';
+  const card = (c, i) => {
+    const disabled = c.chance < 0;
+    let title;
+    let detail;
+    if (c.kind === 'fleet') {
+      title = `${c.f.name} · ${num(c.f.ships)} warships${c.f.carriers ? `, ${c.f.carriers} carriers` : ''}`;
+      detail = disabled ? 'Too far: it cannot get there before the ship docks.'
+        : `Meets it in ${daysText(c.o.weeks)} · ${c.o.escort > 0 ? `escorts ${c.o.escort} against our ${c.o.attack}` : 'no escorts near'}${c.busy ? ` · pulls it off its ${c.busy === 'raid' ? 'hunt' : c.busy}` : ''}`;
+    } else if (c.kind === 'new') {
+      title = `Form a new fleet at ${regionName(c.o.port)} · ${num(c.o.ships)} warships${c.o.carriers ? `, ${c.o.carriers} carriers` : ''} from port`;
+      detail = `Our port nearest the cargo's route. Puts to sea at once and meets it in ${daysText(c.o.weeks)} · ${c.o.escort > 0 ? `escorts ${c.o.escort} against ${c.o.attack}` : 'no escorts near'}`;
+    } else {
+      title = 'Our coastguard, in our own waters';
+      detail = 'It sails a secret line through our waters that we found out about: our patrol boats board it as it passes, no fleet needed.';
+    }
+    const el = h('button.pick-card', { type: 'button', disabled, 'aria-pressed': String(c === pick), class: disabled ? 'off' : '' },
+      h('span.pick-icon', { 'aria-hidden': 'true' }, c.kind === 'new' ? '＋' : c.kind === 'coastguard' ? '🛟' : '⚓'),
+      h('span.pick-text', h('b', title, i === 0 && !disabled ? h('span.chip.good', { style: { marginLeft: '6px' } }, 'Best') : null), h('span', detail)),
+      disabled ? null : h('span.pick-odds', { class: c.chance >= 70 ? 'good' : c.chance >= 40 ? 'warn' : 'bad' }, c.kind === 'coastguard' ? 'in our waters' : `${c.chance}%`));
+    if (!disabled) el.addEventListener('click', () => { pick = c; for (const n of list.children) n.setAttribute('aria-pressed', String(n === el)); });
+    return el;
+  };
+  const list = h('div.pick-list', choices.map(card));
   modal({
-    title: `${how === 'sink' ? 'Sink' : 'Seize'} the ${RESOURCE_INFO[x.res].name.toLowerCase()} cargo`,
-    body: h('div.stack', pick.el,
-      h('p.muted.small', `The fleet sails ahead of the ship on its way to ${nationName(s, x.buyer)} (${x.left} week${x.left === 1 ? '' : 's'} from port) and waits for it. ${best.escort > 0 ? `Warships guarding it near there: strength ${best.escort} against our ${best.attack}.` : 'No warships are guarding it near there.'}`),
+    title: `${how === 'sink' ? 'Sink' : 'Seize'} the ${RESOURCE_INFO[x.res].name.toLowerCase()} cargo bound for ${nationName(s, x.buyer)}`,
+    body: h('div.stack',
+      h('p.muted.small', `Who to send, best first: the surest to ${verb} it, then the soonest. The fleet sails ahead of the ship (${x.left} week${x.left === 1 ? '' : 's'} from port) and waits on its route.`),
+      list,
       h('p.muted.small', how === 'seize' ? 'If we take it, the cargo goes into our stockpile.' : 'If we sink it, the cargo is lost to everyone.')),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send the fleet', kind: how === 'sink' ? 'danger' : 'primary', onClick: async () => {
-      const err = await ctx.send({ type: 'intercept', id: x.id, fleet: pick.input.value, how });
-      if (!err) ctx.toast('The fleet is on its way to intercept.', 'info');
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send', kind: how === 'sink' ? 'danger' : 'primary', onClick: async () => {
+      const err = await ctx.send({ type: 'intercept', id: x.id, fleet: pick.id, how });
+      if (!err) ctx.toast(pick.kind === 'coastguard' ? 'Our coastguard will board it as it passes through our waters.' : pick.kind === 'new' ? `A new fleet is putting to sea from ${regionName(pick.o.port)} to ${verb} it.` : `${pick.f.name} is on its way to ${verb} it.`, 'info');
       return !err || false;
     } }],
   });
@@ -221,14 +267,14 @@ function daysText(weeks) {
   return d < 14 ? `${d} day${d === 1 ? '' : 's'}` : `${Math.round(weeks)} weeks`;
 }
 
-// What our best fleet could do about a cargo at sea
+// What our best way of going after a cargo at sea could do
 function huntSummary(s, x) {
-  const ok = (x.hunt ?? []).filter((o) => o.weeks != null).sort((a, b) => a.weeks - b.weeks);
-  if (!ok.length) return h('div.meta.faint', 'None of our fleets can reach it before it docks.');
-  const o = ok[0];
-  const f = myFleets(s).find((y) => y.id === o.fleet);
-  if (o.sink === 0) return h('div.meta.faint', `${f?.name ?? 'Our nearest fleet'} could meet it in ${daysText(o.weeks)}, but its escorts are stronger: it would get through.`);
-  return h('div.meta', `${f?.name ?? 'Our nearest fleet'} could meet it in ${daysText(o.weeks)}: ${o.seize}% to seize it, ${o.sink}% to sink it.`);
+  if (x.coastguard) return h('div.meta', x.coastWaiting ? 'Our coastguard is waiting for it in our waters.' : 'It sails a secret line through our waters: our coastguard can board it there.');
+  const best = huntChoices(s, x, 'sink').find((c) => c.chance >= 0);
+  if (!best) return h('div.meta.faint', 'None of our fleets can reach it before it docks, and no warships are waiting in port.');
+  const who = best.kind === 'new' ? `A new fleet from ${regionName(best.o.port)}` : best.f.name;
+  if (best.o.sink === 0) return h('div.meta.faint', `${who} could meet it in ${daysText(best.o.weeks)}, but its escorts are stronger: it would get through.`);
+  return h('div.meta', `${who} could meet it in ${daysText(best.o.weeks)}: ${best.o.seize}% to seize it, ${best.o.sink}% to sink it.`);
 }
 
 /* ---------- Straits ---------- */

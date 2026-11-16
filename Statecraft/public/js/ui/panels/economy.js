@@ -5,6 +5,7 @@ import { h, flag, money, pct, nationName, regionName, spark, bar, RES_COLORS, RE
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { modal, numberField, confirmBox } from '../dialogs.js';
 import { markets } from './markets.js';
+import { routesTab } from './routes.js';
 
 const SPEND = [
   ['defence', 'Defence', 'Upkeep of the armed forces; any surplus buys equipment.'],
@@ -18,11 +19,12 @@ const SPEND = [
 export function economy(ctx) {
   const tab = ctx.sub('economy', 'budget');
   const crisis = ctx.state.you.finance?.debtCrisis;
-  const tabs = [['budget', 'Budget'], ['markets', crisis ? 'Markets ⚠' : 'Markets'], ['resources', 'Resources'], ['projects', 'Projects'], ['trade', 'Trade']];
+  const lines = (ctx.state.routes ?? []).filter((r) => r.by === ctx.state.me || r.partner === ctx.state.me).length;
+  const tabs = [['budget', 'Budget'], ['markets', crisis ? 'Markets ⚠' : 'Markets'], ['resources', 'Resources'], ['projects', 'Projects'], ['trade', 'Trade'], ['routes', `Routes${lines ? ` (${lines})` : ''}`]];
   return h('div',
     h('div.panel-title', h('h2', 'Economy'), h('span.muted.small', `${money(ctx.state.you.gdp)} GDP`)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('economy', id) }, label))),
-    ({ budget, markets, resources, projects, trade }[tab] ?? budget)(ctx));
+    ({ budget, markets, resources, projects, trade, routes: routesTab }[tab] ?? budget)(ctx));
 }
 
 /* ---------- Budget ---------- */

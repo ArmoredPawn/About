@@ -7,7 +7,8 @@ import { WorldMap, INDEX, CAPITALS } from './ui/map.js';
 import { renderHud, liveDate } from './ui/hud.js';
 import { Chat } from './ui/chat.js';
 import { toast, confirmBox, closeModal } from './ui/dialogs.js';
-import { showRegion, showArmy, showFleet, closeInspector, airStrike, missile } from './ui/inspector.js';
+import { showRegion, showArmy, showFleet, showCity, closeInspector, airStrike, missile } from './ui/inspector.js';
+import { openHelp } from './ui/help.js';
 import { orderDialog, waterOff } from './ui/panels/navy.js';
 import { overview } from './ui/panels/overview.js';
 import { economy } from './ui/panels/economy.js';
@@ -194,7 +195,7 @@ const ctx = {
   target(opts) {
     if (!opts.keep) closeInspector();
     map.startTargeting(opts);
-    $('target-bar').replaceChildren(h('span', opts.text), opts.extra ?? '', h('button.btn.small', { onclick: () => ctx.endTarget() }, 'Cancel'));
+    $('target-bar').replaceChildren(h('span', opts.text), opts.extra ?? '', h('button.btn.small', { onclick: () => { opts.onCancel?.(); ctx.endTarget(); } }, 'Cancel'));
     $('target-bar').hidden = false;
     if (window.matchMedia('(max-width: 900px)').matches) closePanel();
   },
@@ -211,6 +212,12 @@ const ctx = {
   },
   toast: (text, kind, onClick) => toast(text, kind, onClick),
   hint: (text, kind, ms) => hint(text, kind, ms),
+  // A shipping line being placed, drawn on the map: { from, to, pts } or null
+  previewRoute: (p) => map.previewRoute(p),
+  focusRoutes: (list) => map.focusRoutes(list),
+  focusPoint: (p) => map.focusPoint(p),
+  openCity: (region, name) => { map.select(region); showCity(ctx, region, name); },
+  help: (topic) => openHelp(topic),
   newsLog: () => [...app.newsLog.values()].sort((a, b) => b.id - a.id),
   tickAge: () => (app.lastTick ? (performance.now() - app.lastTick) / app.tickMs : 0),
   tickMs: () => app.tickMs,
@@ -225,6 +232,7 @@ const map = new WorldMap($('map'), {
   onArmy: (id) => ctx.selectArmy(id),
   onFleet: (id) => ctx.selectFleet(id),
   onCargo: (id) => { app.ui.cargo = id; ctx.go('market', 'ships'); },
+  onCity: (region, name) => ctx.openCity(region, name),
   onViewChange: () => renderMapTools(),
   onContext: (id) => quickOrder(id),
   onTargetHint: (text) => hint(text, 'bad', 0),
@@ -380,6 +388,7 @@ function onLive(m) {
   const s = app.state;
   if (!s || app.screen !== 'game' || m.week !== s.week) return;
   s.armies = m.armies;
+  if (m.battleInfo) s.battleInfo = m.battleInfo;
   // Cargo ships move on between weekly updates
   if (m.ships && s.shipments) {
     const at = new Map(m.ships.map((x) => [x[0], x]));
@@ -428,7 +437,7 @@ function frontNews(m, me) {
 function onAlert(item) {
   if (app.state) frontNews(item, app.state.me);
   const kind = item.kind === 'war' ? 'war' : item.kind;
-  const go = item.decision ? () => openDecision(ctx, item.decision) : item.region ? () => ctx.openRegion(item.region, true) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
+  const go = item.decision ? () => openDecision(ctx, item.decision) : item.region ? () => ctx.openRegion(item.region, true) : item.sea ? () => map.focusPoint({ x: item.sea[0], y: item.sea[1] }) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
   toast(item.text, kind, go);
 }
 
@@ -680,7 +689,7 @@ $('solo-continue').addEventListener('click', () => {
   net.open({ name: app.myName, restore: true });
   toast('Game loaded. The world carries on from where you left it.', 'info');
 });
-$('help-btn').addEventListener('click', () => $('help').showModal());
+$('help-btn').addEventListener('click', () => openHelp());
 $('help').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === $('help')) $('help').close(); });
 
 $('lobby-leave').addEventListener('click', leave);

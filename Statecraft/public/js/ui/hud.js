@@ -1,5 +1,6 @@
 // The bar across the top: your country, the clock and the numbers that matter most.
 
+import { openHelp } from './help.js';
 import { $, h, flag, money, pct, tone } from './dom.js';
 import { START, WEEK_MS } from '../engine/core.js';
 
@@ -34,7 +35,7 @@ export function renderHud(ctx) {
   const unread = ctx.chatUnread();
   const actions = h('div.hud-actions',
     h('button.btn.small.rel', { onclick: () => ctx.toggleChat(), title: 'Diplomatic channels' }, '💬 Chat', unread ? h('span.badge', unread > 99 ? '99+' : String(unread)) : null),
-    h('button.btn.small.ghost', { onclick: () => $('help').showModal(), title: 'How to play' }, '?'),
+    h('button.btn.small.ghost.help-btn', { onclick: () => openHelp(), title: 'How to play: rules, diagrams and tips' }, 'How to Play'),
     h('button.btn.small.ghost', { onclick: () => ctx.leave(), title: 'Leave the game' }, 'Leave'),
   );
 

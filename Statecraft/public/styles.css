@@ -490,3 +490,126 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .city.fallen .city-area { opacity: 0.5; }
 .map.city-view .front-line { stroke-width: 1.6; stroke-dasharray: 3 2; }
 .map .fallout { pointer-events: none; }
+
+/* ---------- How to Play ---------- */
+.help { width: min(900px, calc(100vw - 24px)); }
+.help-body { padding: 0 20px 20px; }
+.help-tabs { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; padding: 12px 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.help-tabs button { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-soft); padding: 5px 10px; border-radius: 999px; font: 600 12px var(--font); cursor: pointer; }
+.help-tabs button:hover { color: var(--ink); border-color: var(--line-strong); }
+.help-tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.help-page { line-height: 1.55; }
+.help-page .lead { color: var(--ink); font-size: 15px; }
+.help-page ol.steps { padding-left: 20px; display: grid; gap: 4px; }
+.help-fig { margin: 12px 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.help-fig figcaption { margin-top: 8px; font-size: 12.5px; color: var(--ink-faint); }
+.help-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 8px 0; }
+.help-cards > div { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); font-size: 12.5px; }
+.diagram { width: 100%; height: auto; display: block; font-family: var(--font); }
+.diagram .d-text, .diagram .d-sub { fill: var(--ink-soft); font-size: 12px; }
+.diagram .d-title { fill: var(--ink); font-size: 13px; font-weight: 700; }
+.diagram .d-faint { fill: var(--ink-faint); font-size: 11px; }
+.diagram .d-box { fill: var(--surface-3); stroke: var(--line-strong); stroke-width: 1.2; }
+.diagram .d-box.blue { stroke: #6f8cff; fill: rgb(111 140 255 / 0.14); }
+.diagram .d-box.red { stroke: var(--bad); fill: var(--bad-soft); }
+.diagram .d-box.amber { stroke: var(--warn); fill: var(--warn-soft); }
+.diagram .d-box.green { stroke: var(--good); fill: var(--good-soft); }
+.diagram .d-arrow { fill: none; stroke: var(--ink-soft); stroke-width: 2; }
+.diagram .d-arrow.thin { stroke-width: 1.3; stroke: var(--ink-faint); }
+.diagram .d-arrow.big { stroke: var(--accent); stroke-width: 4; }
+.diagram .d-arrow.enemy { stroke: var(--bad); stroke-width: 3; }
+.diagram .d-arrow.good { stroke: var(--good); stroke-width: 2.5; }
+.diagram marker path { fill: var(--ink-soft); }
+.diagram .d-zone.bad { fill: var(--bad-soft); stroke: var(--bad); }
+.diagram .d-zone.warn { fill: var(--warn-soft); stroke: var(--warn); }
+.diagram .d-zone.good { fill: var(--good-soft); stroke: var(--good); }
+.diagram .d-tick { stroke: var(--ink-faint); }
+.diagram .d-land { fill: #2a3142; stroke: #3a4356; }
+.diagram .d-sea { fill: var(--ocean); }
+.diagram .d-held { fill: rgb(143 149 255 / 0.3); }
+.diagram .d-front { fill: none; stroke: #ffd27a; stroke-width: 3; stroke-dasharray: 6 3; }
+.diagram .d-city { fill: #e8ebf3; stroke: #0b0f1a; stroke-width: 2; }
+.diagram .d-city.fallen { fill: #8f95ff; stroke: var(--bad); stroke-dasharray: 3 2; }
+.diagram .d-city.street { fill: #ffd27a; }
+.diagram .d-ring { fill: none; stroke: var(--bad); stroke-width: 2; stroke-dasharray: 4 3; }
+.diagram .d-target { fill: rgb(242 112 106 / 0.18); stroke: var(--bad); stroke-width: 1.5; }
+.diagram .d-angle { fill: none; stroke: var(--warn); stroke-width: 2; }
+.diagram .d-cell { stroke: var(--bg); stroke-width: 2; }
+.diagram .d-cell.home { fill: rgb(111 140 255 / 0.45); }
+.diagram .d-cell.enemy { fill: rgb(242 112 106 / 0.4); }
+.diagram .d-cell.pocket { fill: rgb(111 140 255 / 0.28); }
+.diagram .d-pocket { fill: none; stroke: var(--bad); stroke-width: 3; stroke-dasharray: 7 4; }
+.diagram .d-dotted { fill: none; stroke: var(--ink-soft); stroke-width: 1.6; stroke-dasharray: 2 4; }
+.diagram .d-lane { fill: none; stroke: #d89a3a; stroke-width: 2; stroke-dasharray: 6 5; opacity: 0.8; }
+.diagram .d-ship { fill: #d89a3a; stroke: #0b0f1a; stroke-width: 2; }
+.diagram .d-ship.hit { fill: var(--bad); }
+.diagram .d-escort { fill: rgb(76 195 138 / 0.12); stroke: var(--good); stroke-dasharray: 4 3; }
+.diagram .d-meet { fill: #fff; }
+.diagram .d-fleet { fill: var(--accent); }
+.diagram .d-raid { fill: rgb(143 149 255 / 0.08); stroke: var(--accent); stroke-dasharray: 6 4; }
+.diagram .d-eez { fill: rgb(240 180 76 / 0.1); stroke: var(--warn); stroke-dasharray: 4 3; }
+.diagram .d-route { fill: none; stroke: #c99bff; stroke-width: 3; }
+.diagram .d-route.private { stroke-dasharray: 2 5; stroke-linecap: round; }
+.diagram .d-port { fill: #c99bff; stroke: #0b0f1a; stroke-width: 2; }
+.diagram .d-pane { fill: var(--surface); stroke: var(--line-strong); }
+.hud-actions .help-btn { font-weight: 600; }
+
+/* ---------- Doctrine ---------- */
+.doctrine-head { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.doctrine-head .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.doctrine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
+.doctrine-cell { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.pick-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; margin-top: 6px; }
+.doc-opt { display: grid; gap: 4px; align-content: start; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: inherit; cursor: pointer; font: inherit; }
+.doc-opt:hover { border-color: var(--line-strong); }
+.doc-opt.current { border-style: dashed; }
+.doc-opt[aria-pressed="true"] { border-color: var(--accent); border-style: solid; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.fx-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.fx { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--ink-soft); white-space: nowrap; }
+.fx.good { background: var(--good-soft); color: var(--good); }
+.fx.bad { background: var(--bad-soft); color: var(--bad); }
+.doctrine-cost { display: grid; gap: 4px; margin: 8px 0; font-size: 12.5px; }
+.syn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.syn-card { display: grid; gap: 5px; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); }
+.syn-card.close { border-color: rgb(240 180 76 / 0.6); }
+.syn-card.have { border-color: rgb(76 195 138 / 0.6); background: rgb(76 195 138 / 0.06); }
+.syn-card .need { display: inline-block; margin: 0 4px 3px 0; padding: 1px 6px; border-radius: 999px; border: 1px dashed var(--line-strong); color: var(--ink-faint); font-size: 11px; }
+.syn-card .need.ok { border-style: solid; border-color: var(--good); color: var(--good); }
+.matrix-wrap { overflow-x: auto; }
+.matrix { border-collapse: separate; border-spacing: 2px; font-size: 11.5px; width: 100%; }
+.matrix th { font-weight: 600; color: var(--ink-soft); text-align: left; padding: 4px 6px; }
+.matrix thead th { text-align: center; }
+.matrix th.ours { color: var(--accent); text-decoration: underline; }
+.matrix th.theirs { color: var(--bad); outline: 1px solid var(--bad); outline-offset: -1px; border-radius: 4px; }
+.matrix td { text-align: center; padding: 5px 4px; border-radius: 4px; font-family: var(--mono); color: var(--ink); }
+.matrix td.live { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+/* ---------- Pockets, shipping choices, routes ---------- */
+.pocket-card { display: grid; gap: 6px; margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid rgb(242 112 106 / 0.5); background: var(--bad-soft); font-size: 12.5px; }
+.pocket-card.sea { border-color: rgb(240 180 76 / 0.5); background: var(--warn-soft); display: block; }
+.pick-card.off { opacity: 0.45; cursor: not-allowed; }
+.pick-odds { margin-left: auto; align-self: center; font: 700 15px var(--mono); padding-left: 8px; white-space: nowrap; }
+.pick-odds.good { color: var(--good); }
+.pick-odds.warn { color: var(--warn); }
+.pick-odds.bad { color: var(--bad); }
+.route-summary { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line); }
+.route-summary > div { display: grid; }
+.route-arrow { font-size: 20px; color: var(--accent); }
+.city-row:hover b { color: var(--accent); }
+
+/* ---------- On the map ---------- */
+.map .route-line { fill: none; stroke: #c99bff; opacity: 0.9; stroke-linecap: round; }
+.map .route-line.other { stroke: #9aa4b8; opacity: 0.6; }
+.map .route-line.found { stroke: #f0b44c; }
+.map .route-line.preview { stroke: #ffffff; opacity: 0.95; }
+.map .route-end { fill: #c99bff; stroke: #0b0f1a; }
+.map .route-end.other { fill: #9aa4b8; }
+.map .route-end.preview { fill: none; stroke: #fff; }
+.map .pocket-area { fill: rgb(242 112 106 / 0.08); stroke: #ff5a5a; stroke-width: 2.2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; animation: pocket-pulse 2.4s ease-in-out infinite; }
+.map .pocket-area.sea { stroke: #f0b44c; fill: rgb(240 180 76 / 0.05); animation: none; }
+.map .pocket-label { fill: #ffb3ae; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: rgb(5 8 14 / 0.9); stroke-linejoin: round; }
+.map .street-ring { fill: none; stroke: #ff5a5a; vector-effect: non-scaling-stroke; animation: street-pulse 1.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+.map .battle-tag { fill: #ffd27a; font-weight: 700; paint-order: stroke; stroke: rgb(5 8 14 / 0.9); stroke-linejoin: round; pointer-events: none; }
+@keyframes pocket-pulse { 50% { stroke-opacity: 0.45; } }
+@keyframes street-pulse { from { opacity: 1; transform: scale(0.6); } to { opacity: 0; transform: scale(1.3); } }
+@media (prefers-reduced-motion: reduce) { .map .pocket-area, .map .street-ring { animation: none; } }

@@ -4,7 +4,7 @@
 
 import { h, flag, nationName, regionName, num, bar } from '../dom.js';
 import { modal, numberField, selectField, confirmBox } from '../dialogs.js';
-import { NODES, PATROL_MODES, nodeName, isStrait, fleetSpeed, MAX_FLEETS, PORTS, seaAt, seaRoute, routeLength, mapDistance, nearestWater, isWater, KM_PER_PX, OFF_COAST } from '../../engine/navy.js';
+import { NODES, PATROL_MODES, RAID_MODES, nodeName, isStrait, fleetSpeed, MAX_FLEETS, PORTS, seaAt, seaRoute, routeLength, mapDistance, nearestWater, isWater, KM_PER_PX, OFF_COAST } from '../../engine/navy.js';
 
 export const myFleets = (s) => (s.fleets ?? []).filter((f) => f.owner === s.me);
 const enemySet = (s) => new Set(s.wars.filter((w) => w.a === s.me || w.b === s.me).map((w) => (w.a === s.me ? w.b : w.a)));
@@ -38,6 +38,8 @@ const where = (f) => (f.moving ? `At sea in the ${nodeName(f.at)}` : `In the ${n
 function missionText(s, f) {
   if (f.mission === 'blockade' && f.target) return `Blockading ${nationName(s, f.target)}`;
   if (f.mission === 'patrol') return `Patrolling: ${PATROL_MODES[f.mode]?.toLowerCase() ?? ''}`;
+  if (f.mission === 'raid') return `Hunting shipping in the ${nodeName(f.raidSea ?? f.at)}`;
+  if (f.mission === 'intercept') return 'Hunting a cargo';
   return f.moving ? 'On the move' : 'Holding position';
 }
 
@@ -62,7 +64,7 @@ export function navy(ctx) {
     h('div.howto',
       h('div', h('b', '1. Select'), ' a fleet: click it on the map, or "Send…" below.'),
       h('div', h('b', '2. Click'), ' anywhere on the water, a strait (◆) or an enemy coast.'),
-      h('div', h('b', '3. Choose'), ' what it does there: hold, blockade, or patrol.')),
+      h('div', h('b', '3. Choose'), ' what it does there: hold, blockade, patrol, or hunt enemy shipping across that whole sea.')),
     h('p.muted.small', { style: { marginTop: '6px' } }, 'Enemy fleets that come within about 450 km fight. To land an army overseas, a fleet of ours must be lying off that coast, at least as strong as the enemy\'s there.'),
     h('div.list', { style: { marginTop: '10px' } }, mine.length ? mine.map((f) => fleetCard(ctx, f)) : [h('div.empty', 'No fleets at sea.')]),
     h('div.actions', { style: { marginTop: '8px' } },
@@ -89,6 +91,9 @@ export function fleetCard(ctx, f, compact = false) {
     mine && f.moving && f.dest ? h('div.meta', `Arrives in ${weeksText(sailWeeks(s, f, f.dest))}`) : null,
     mine ? h('div.row.gap.small', { style: { marginTop: '6px' } }, h('span.muted', 'Readiness'), h('div.grow', bar(f.org, 100, f.org < 30 ? 'bad' : f.org < 60 ? 'warn' : 'good')), h('span.mono', `${f.org}%`)) : null,
     mine && f.status ? h('div.meta', { style: { color: 'var(--ink)' } }, f.status) : null,
+    mine ? h('div.row.gap.small', { style: { marginTop: '6px' }, onclick: (e) => e.stopPropagation(), title: 'What this fleet does with an enemy cargo it catches: when hunting shipping, when blockading, or whenever an enemy ship passes it at war.' },
+      h('span.muted', 'Enemy cargo'),
+      h('div.seg.grow', [['seize', 'Seize it'], ['sink', 'Sink it']].map(([k, label]) => h('button', { 'aria-pressed': String((f.raid ?? 'seize') === k), onclick: () => ctx.send({ type: 'fleetRaid', id: f.id, how: k }) }, label)))) : null,
     mine ? h('div.actions', { onclick: (e) => e.stopPropagation() },
       h('button.btn.small.primary', { onclick: () => ctx.selectFleet(f.id, true) }, 'Send…'),
       h('button.btn.small', { onclick: () => destinationDialog(ctx, f) }, 'To a sea or strait…'),
@@ -125,6 +130,10 @@ function missionsAt(ctx, x, y, node) {
     }
   }
   for (const e of coastsNear(ctx, x, y)) out.push({ mission: 'blockade', target: e, label: `Blockade ${nationName(s, e)}`, note: `Lie off ${nationName(s, e)}'s coast and cut its trade by sea. Its fleets and coastal missiles fight back.` });
+  // Hunt shipping anywhere in this body of water: the fleet goes after every enemy cargo it can catch there
+  const seaName = nodeName(sea);
+  out.push({ mission: 'raid', mode: 'enemies', label: `Hunt enemy shipping in the ${seaName}`, note: `Wait on the sea lanes and go after every cargo bound to or from our enemies that it can catch anywhere in the ${seaName}. It seizes or sinks them as set on its card.` });
+  out.push({ mission: 'raid', mode: 'hostile', label: `Hunt enemy and sanctioned shipping in the ${seaName}`, note: 'The same, and cargoes of countries we sanction too. Stopping those in peacetime is piracy: they and the world will turn against us.' });
   return out;
 }
 
@@ -142,7 +151,7 @@ export function orderDialog(ctx, f, { x, y, node, prefer } = {}) {
   const weeks = sailWeeks(s, f, [x, y]);
   const list = h('div.pick-list', options.map((o) => {
     const card = h('button.pick-card', { type: 'button', 'aria-pressed': String(o === pick) },
-      h('span.pick-icon', { 'aria-hidden': 'true' }, o.mission === 'blockade' ? '⛔' : o.mission === 'patrol' ? '🛡' : '⚓'),
+      h('span.pick-icon', { 'aria-hidden': 'true' }, o.mission === 'blockade' ? '⛔' : o.mission === 'patrol' ? '🛡' : o.mission === 'raid' ? '🎯' : '⚓'),
       h('span.pick-text', h('b', o.label), h('span', o.note)));
     card.addEventListener('click', () => { pick = o; for (const c of list.children) c.setAttribute('aria-pressed', String(c === card)); });
     return card;

@@ -40,7 +40,7 @@ function provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from }
     list.map((c) => {
       const holder = fallen.has(c.name) ? battleBy : ctrl;
       const national = gdpOf(holder);
-      return h('div.row.between.small', { style: { padding: '2px 0' } },
+      return h('div.row.between.small.city-row', { style: { padding: '2px 0', cursor: 'pointer' }, title: 'Open the city', onclick: () => ctx.openCity(id, c.name) },
         h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${(c.pop / 1000).toFixed(1)}M people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `taken by ${nationName(s, battleBy)}`) : holder !== owner ? h('span.chip.warn', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : null),
         h('span.mono', `${money(c.share * gdp)}${national ? ` · ${((c.share * gdp) / national * 100).toFixed(1)}% of ${nationName(s, holder)}` : ''}`));
     }),
@@ -129,6 +129,72 @@ export function showRegion(ctx, id) {
       h('div.list', armiesHere.map((a) => a.owner === me ? armyCard(ctx, a, true) : foreignArmy(ctx, a)))) : null,
     actions.length ? h('div.row.wrap.gap', { style: { marginTop: '12px' } }, actions) : null,
   );
+  $('inspector').hidden = false;
+}
+
+// A city, close up: who holds it, what it makes, who is fighting for it, and what we can do about it
+export function showCity(ctx, id, name) {
+  const s = ctx.state;
+  const row = s.regions[ctx.regionIndex[id]];
+  if (!row) return closeInspector();
+  const [owner, ctrl, dmg, , fort, battleBy, prog, , gar, gdp, pop] = row;
+  const list = citiesIn(id, pop);
+  const city = list.find((c) => c.name === name);
+  if (!city) return showRegion(ctx, id);
+  const me = s.me;
+  const from = row[12];
+  let fallen = false;
+  let depth = null;
+  if (battleBy && from && GEO[from]) {
+    const depths = cityDepths(id, GEO[from], list);
+    depth = depths[list.indexOf(city)];
+    fallen = prog > 0 && depth <= prog / 100;
+  }
+  const holder = fallen ? battleBy : ctrl;
+  const output = city.share * gdp * (1 - dmg / 100);
+  const national = s.countries[holder]?.gdp;
+  const info = s.battleInfo?.[id];
+  const street = info?.street === name;
+  const atWarWith = (x) => s.wars.some((w) => (w.a === me && w.b === x) || (w.b === me && w.a === x));
+  const res = s.resources[id] ?? {};
+  // A city's share of the province's people: roughly its share of the garrison and the home guard too
+  const popShare = Math.min(1, city.pop / Math.max(1, pop * 1000));
+  const fact = (label, value) => h('div', h('span', label), h('b', value));
+  const armies = s.armies.filter((a) => !a.sea && (a.region === id || a.attacking === id));
+  const status = !battleBy ? (holder === owner ? 'Quiet' : `Occupied by ${nationName(s, holder)}`)
+    : fallen ? `Taken by ${nationName(s, battleBy)} in the fighting`
+      : street ? `Street fighting: ${nationName(s, ctrl)}'s defenders are fighting for every block`
+        : depth != null && depth - prog / 100 < 0.15 ? `The front is closing in: ${nationName(s, battleBy)} is ${Math.max(1, Math.round((depth - prog / 100) * 100))}% of the province away`
+          : `Behind the front: ${nationName(s, battleBy)} is attacking ${regionName(id)} (${prog}% taken)`;
+  const actions = [];
+  if (atWarWith(holder)) {
+    actions.push(h('button.btn.small.primary', { onclick: () => attackDialog(ctx, { target: id }) }, 'Attack the province…'));
+    actions.push(h('button.btn.small', { onclick: () => airStrike(ctx, id) }, 'Bomb its industry…'));
+    actions.push(h('button.btn.small', { onclick: () => missile(ctx, id) }, 'Missile strike…'));
+  }
+  if (holder === me) actions.push(h('button.btn.small', { onclick: () => fortify(ctx, id, fort) }, `Fortify the province (${fort}/5)`));
+  actions.push(h('button.btn.small.ghost', { onclick: () => ctx.openRegion(id) }, `${regionName(id)} (province)`));
+  fill($('inspector'),
+    h('button.icon-btn.close', { onclick: () => ctx.closeSelection(), 'aria-label': 'Close' }, '✕'),
+    h('div.faint.small', { style: { textTransform: 'uppercase', letterSpacing: '0.06em' } }, city.capital ? 'Capital city' : 'City'),
+    h('h2', name),
+    h('div.row.gap.sub', flag(holder), h('span', nationName(s, holder)), h('span.faint', `· ${regionName(id)}`), holder !== owner ? h('span.chip.warn', `${nationName(s, owner)}'s`) : null),
+    h('div', { class: `warning ${street || fallen ? 'bad' : battleBy ? 'warn' : ''}`, style: { marginTop: '10px' } }, status),
+    h('div.facts',
+      fact('People', people(city.pop / 1000)),
+      fact('Output', `${money(output)} a year`),
+      fact('Share of the province', `${Math.round(city.share * 100)}%`),
+      fact(`Share of ${nationName(s, holder)}`, national ? `${((output / national) * 100).toFixed(2)}%` : '—'),
+      fact('Garrison nearby', holder === me ? troops(gar * popShare) : `~${troops(Math.max(1, Math.round((gar * popShare) / 5) * 5))}`),
+      fact('Home guard', info?.militia >= 1 && !fallen ? troops(info.militia * popShare * 2) : '—'),
+      fact('War damage', `${dmg}%`),
+      fact('Fortifications', `${fort}/5`)),
+    Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'WHAT THE PROVINCE AROUND IT PRODUCES'),
+      h('div.row.wrap.gap', Object.entries(res).filter(([, [cur]]) => cur > 0).map(([r, [cur]]) => h('span.chip', h('span.res-dot', { style: { background: RES_COLORS[r], display: 'inline-grid', width: '14px', height: '14px', marginRight: '4px' } }, RES_LETTERS[r]), `${RESOURCE_INFO[r].name} ${cur}`)))) : null,
+    armies.length ? h('div', { style: { marginTop: '10px' } }, h('h3.small.muted', { style: { marginBottom: '6px' } }, 'ARMIES FIGHTING HERE'),
+      h('div.list', armies.map((a) => (a.owner === me ? armyCard(ctx, a, true) : foreignArmy(ctx, a))))) : null,
+    h('p.muted.small', { style: { marginTop: '8px' } }, 'A city works for whoever holds it. In a battle the front takes the cities one by one, and a big city in its path means street fighting: the attack slows to a crawl while its defenders hold out.'),
+    h('div.row.wrap.gap', { style: { marginTop: '12px' } }, actions));
   $('inspector').hidden = false;
 }
 

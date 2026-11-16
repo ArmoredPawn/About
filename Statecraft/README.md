@@ -16,7 +16,7 @@ every few seconds, armies glide across the map and front lines creep through con
   provinces of their own with little worth taking.
 - **Market:** buy from the country you choose, or around sanctions through intermediaries; sell surplus or list it
   for other leaders. Every cargo sails through the real straits or goes overland, and can be seized or sunk on the
-  way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes.
+  way, with both sides told who did it. Hold a strait's shores to close it, charge a toll or attack enemy cargoes. Send any fleet that can reach a cargo (best first) or a new one from the nearest port; fleets can hunt shipping across a whole sea, seizing or sinking as each is set to.
 - **Navies:** every fleet sits at its exact spot on the water. Form one at any of your ports, click it, then click
   anywhere on the sea: it sails the shortest way round the land (through the straits and canals) to hold position,
   blockade an enemy's coast or patrol a strait to escort friends or stop everyone else. Enemy fleets that come within
@@ -61,10 +61,22 @@ every few seconds, armies glide across the map and front lines creep through con
   from a base. Air missions (close air support, interdiction of supply lines, strategic bombing) and missile strikes
   on armies, forts, airbases or industry, each reported by the air staff; blockades, nuclear weapons, peace treaties
   and armistices.
+- **Encirclement:** every province draws supply over friendly ground from the capital and heartland. Cut the last path
+  and the forces beyond are a pocket: organisation, fuel and men drain every week until they break out, are relieved,
+  are kept alive by an airlift (as at Stalingrad) or surrender. Coastal pockets whose waters the enemy doesn't hold are
+  supplied by sea. Attacks from two sides are pincers; mechanised armies break through, bypass garrisons and keep
+  rolling. Invaded peoples raise a home guard, and big cities in the front's path mean street fighting.
+- **Doctrine** (Military → Doctrine): build the way the army fights from five choices (attack, defence, air power,
+  logistics, command), develop and train it in, and master it in battle. Each attack concept fares better against some
+  defences than others; mastered combinations become new ways of war (Blitzkrieg, Deep operations, AirLand Battle…),
+  and the first country to develop one is its pioneer.
+- **Shipping lines** (Economy → Routes): place two points on the map to open a line to a port abroad. All trade
+  between the two sails it, faster. Public lines lift both economies; private ones are hidden, but the countries whose
+  waters they cross are likely to find them, and can then board their cargoes there.
 - **Computer-run countries** trade, sign deals and pacts (some secret), spy on rivals and pick their own fights with
   weak neighbours. The smaller nations found regional trade blocs (the East African Community, the Caribbean
   Community…), ask friendly great powers for protection against a threatening rival, and fight old feuds (Armenia and
-  Azerbaijan, Serbia and Kosovo, Venezuela and Guyana…). Invaded, they mobilise, conscript, draft every reservist and call on their friends.
+  Azerbaijan, Serbia and Kosovo, Venezuela and Guyana…). Invaded, they mobilise, conscript, draft every reservist, fortify, gather their armies for counter-offensives and call on their friends; allies send expeditionary armies to the front.
 - **Diplomacy:** public or secret alliances and trade blocs, free trade, non-aggression pacts, military access, resource
   deals, loans, aid, sanctions, tariffs, UN resolutions with P5 vetoes.
 - **Spies:** plant agents abroad; once settled in they relay armies on the move, weapons being built, secret pacts and

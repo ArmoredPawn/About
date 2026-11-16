@@ -192,17 +192,48 @@ export function sellerTerms(s, buyerId, sellerId, r) {
 }
 
 
-// How a cargo would travel: prefer a short land route, else the sea. Cached for the week.
+// A trade route opened between two countries (routes.js) that their cargoes can sail now, or null. Read straight
+// from the state, so this module needn't know how routes are drawn.
+export function activeRoute(s, a, b) {
+  for (const r of Object.values(s.routes ?? {})) {
+    if (r.closed || !((r.by === a && r.partner === b) || (r.by === b && r.partner === a))) continue;
+    if (s.regions[r.from]?.ctrl !== r.by || s.regions[r.to]?.ctrl !== r.partner) continue;
+    if (atWar(s, r.by, r.partner) || sanctioning(s, r.by, r.partner) || sanctioning(s, r.partner, r.by)) continue;
+    if ((r.straits ?? []).some((k) => !straitOpen(s, k, a, b))) continue;
+    return r;
+  }
+  return null;
+}
+
+// Weeks at sea between two countries, before the cargo's real lane is known: their biggest coasts, as the crow
+// flies and a third again for the way round the land, at a freighter's 2,200 km a week
+function seaWeeks(s, a, b) {
+  const main = (id) => {
+    let best = null;
+    for (const reg of Object.values(s.regions)) if (reg.ctrl === id && GEO[reg.id]?.coast && (!best || reg.gdp > best.gdp)) best = reg;
+    return best ? GEO[best.id] : null;
+  };
+  const pa = main(a);
+  const pb = main(b);
+  if (!pa || !pb) return 2;
+  const km = Math.hypot((pa.lon - pb.lon) * Math.cos(((pa.lat + pb.lat) / 2) * Math.PI / 180), pa.lat - pb.lat) * 111 * 1.35;
+  return Math.max(1, Math.round(km / 2200));
+}
+
+// How a cargo would travel: prefer a short land route, else the sea; a trade route opened between the two
+// always goes by sea. Cached for the week.
 const routeCache = { week: -1, seed: null, map: new Map() };
 export function routeFor(s, from, to) {
   if (routeCache.week !== s.week || routeCache.seed !== s) { routeCache.week = s.week; routeCache.seed = s; routeCache.map = new Map(); }
   const key = `${from}>${to}`;
   if (routeCache.map.has(key)) return routeCache.map.get(key);
-  const land = landRoute(s, from, to, 8);
+  const line = activeRoute(s, from, to);
+  const land = line ? null : landRoute(s, from, to, 8);
   const sea = seaRoute(s, from, to);
   let out = null;
-  if (land && (!sea || land.hops <= 6)) out = { mode: 'land', weeks: 1 + Math.ceil(land.hops / 4), transit: land.transit, straits: [] };
-  else if (sea) out = { mode: 'sea', weeks: 1 + Math.ceil(sea.length / 2), transit: [], straits: sea.straits };
+  if (line) out = { mode: 'sea', weeks: Math.max(1, Math.round((line.km / 2200) * 0.8)), transit: [], straits: line.straits ?? [], line: line.id };
+  else if (land && (!sea || land.hops <= 6)) out = { mode: 'land', weeks: 1 + Math.ceil(land.hops / 4), transit: land.transit, straits: [] };
+  else if (sea) out = { mode: 'sea', weeks: seaWeeks(s, from, to), transit: [], straits: sea.straits };
   routeCache.map.set(key, out);
   return out;
 }
@@ -294,7 +325,7 @@ export function ship(s, { seller, buyer, res, qty, cost, covert = false, secret 
   s.shipments ??= [];
   const sh = {
     id: nextId(s, 'sh'), seller, buyer, res, qty, cost, covert, secret, deal, payment, mode: route.mode, straits: route.straits, transit: route.transit,
-    left: route.weeks, total: route.weeks, since: s.week,
+    left: route.weeks, total: route.weeks, since: s.week, line: route.line ?? null,
   };
   s.shipments.push(sh);
   return sh;
@@ -327,7 +358,7 @@ export function interceptProblem(s, c, sh) {
   if (!sh || sh.done) return 'That shipment has arrived or been stopped.';
   if (sh.seller === c.id || sh.buyer === c.id) return 'That is your own trade.';
   if (allied(s, c.id, sh.buyer) || allied(s, c.id, sh.seller)) return 'You can\'t seize an ally\'s cargo.';
-  if (sh.mode === 'sea' && !Object.values(s.fleets ?? {}).some((f) => f.owner === c.id)) return 'You need a fleet at sea to go after it.';
+  if (sh.mode === 'sea' && !Object.values(s.fleets ?? {}).some((f) => f.owner === c.id) && !(c.ships + c.carriers >= 1)) return 'You need warships to go after it.';
   if (sh.mode === 'land' && !shipmentReach(s, c, sh)) return 'It doesn\'t cross your territory.';
   return null;
 }
@@ -364,9 +395,10 @@ export function escortPower(s, sh) {
   return p;
 }
 
-export function stopShipment(s, sh, by, how, where) { return stop(s, sh, by, how, where); }
+export function stopShipment(s, sh, by, how, where, at) { return stop(s, sh, by, how, where, at); }
 
-function stop(s, sh, by, how, where) {
+function stop(s, sh, by, how, where, at = null) {
+  const sea = at ? { sea: at } : {};
   const what = RESOURCE_INFO[sh.res].name.toLowerCase();
   const buyer = s.countries[sh.buyer];
   if (buyer && !sh.deal) buyer.treasury += sh.cost; // the escrow comes back
@@ -375,11 +407,11 @@ function stop(s, sh, by, how, where) {
   if (seized && taker) taker.stock[sh.res] = (taker.stock[sh.res] ?? 0) + sh.qty;
   const verb = seized ? 'seized' : 'sank';
   news(s, `${nameOf(s, by)} ${verb} a cargo of ${what} from ${nameOf(s, sh.seller)} to ${nameOf(s, sh.buyer)}${where ? ` ${where}` : ''}.`, 'trade', [by, sh.seller, sh.buyer]);
-  alert(s, sh.seller, `${nameOf(s, by)} stopped your shipment of ${what} to ${nameOf(s, sh.buyer)}${where ? ` ${where}` : ''}. The cargo is lost.`, 'bad');
-  alert(s, sh.buyer, `${nameOf(s, by)} stopped the shipment of ${what} from ${nameOf(s, sh.seller)} to us${where ? ` ${where}` : ''}. Our payment was refunded.`, 'bad');
+  alert(s, sh.seller, `${nameOf(s, by)} ${verb} your shipment of ${what} to ${nameOf(s, sh.buyer)}${where ? ` ${where}` : ''}. The cargo is lost.`, 'bad', sea);
+  alert(s, sh.buyer, `${nameOf(s, by)} ${verb} the shipment of ${what} from ${nameOf(s, sh.seller)} to us${where ? ` ${where}` : ''}.${sh.deal ? '' : ' Our payment was refunded.'}`, 'bad', sea);
   alert(s, by, seized
-    ? `We seized ${fmtQty(sh.res, sh.qty)} of ${what} bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}.`
-    : `We sank ${/^[aeiou]/.test(what) ? "an" : "a"} ${what} cargo bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}.`, 'good');
+    ? `Seized: ${fmtQty(sh.res, sh.qty)} of ${what} bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}${where ? ` ${where}` : ''}. It is in our stockpile.`
+    : `Sunk: ${/^[aeiou]/.test(what) ? "an" : "a"} ${what} cargo bound for ${nameOf(s, sh.buyer)} from ${nameOf(s, sh.seller)}${where ? ` ${where}` : ''}.`, 'good', sea);
   // Piracy in peacetime is an outrage
   for (const victim of [sh.buyer, sh.seller]) {
     if (!atWar(s, by, victim)) {
@@ -462,8 +494,7 @@ export function tradeTick(s) {
       const p = sh.mode === 'land' ? 0.95 : clamp(mine / (mine + escortPower(s, sh) + 0.5), 0.15, 0.95);
       if (chance(s, p)) stop(s, sh, h.by, h.how, sh.mode === 'land' ? 'at the border' : sh.straits[0] ? where(sh.straits[0]) : 'at sea');
       else {
-        alert(s, h.by, `Our attempt to stop a ${RESOURCE_INFO[sh.res].name.toLowerCase()} cargo bound for ${nameOf(s, sh.buyer)} failed: its escorts drove us off.`, 'warn');
-        alert(s, sh.buyer, `${nameOf(s, h.by)} tried to stop a ${RESOURCE_INFO[sh.res].name.toLowerCase()} shipment bound for us. The escorts got it through.`, 'warn');
+        alert(s, h.by, `Failed to ${h.how} a ${RESOURCE_INFO[sh.res].name.toLowerCase()} cargo bound for ${nameOf(s, sh.buyer)}: its escorts drove us off.`, 'bad');
       }
     }
     sh.hunted = [];
