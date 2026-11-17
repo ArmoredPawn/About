@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../public/js/engine/game.js';
-import { updatePockets, breakthroughOf } from '../public/js/engine/military.js';
+import { updatePockets, breakthroughOf, placeArmy, pocketCells } from '../public/js/engine/military.js';
+import { provinceCell, CELLS_OF, holderAt } from '../public/js/engine/land.js';
 import { fx, planDoctrine, doctrineTick, SYNERGIES } from '../public/js/engine/doctrine.js';
 import { shipAt, spawnOption } from '../public/js/engine/shipping.js';
 import { routeShape } from '../public/js/engine/routes.js';
@@ -21,42 +22,45 @@ function game(seed = 1, leader = 'usa') {
 }
 const week = (g) => { for (let i = 0; i < 8; i++) g.step(0.125); g.tick(); };
 
-// Russia holds Warsaw and Silesia: Eastern Poland is cut off from the rest of the country
+// Germany holds Lower Silesia, Silesia and Warsaw, joined to Germany itself: Eastern Poland is cut off from the
+// rest of the country
 function polishPocket(seed = 2) {
   const g = game(seed, 'pol');
   const s = g.s;
-  startWar(s, 'rus', 'pol');
-  s.regions['pol-wa'].ctrl = 'rus';
-  s.regions['pol-si'].ctrl = 'rus';
+  startWar(s, 'deu', 'pol');
+  for (const id of ['pol-lw', 'pol-si', 'pol-wa']) s.regions[id].ctrl = 'deu';
   assert.equal(g.command('pol', { type: 'armyCreate', region: 'pol-ea', troops: 60, tanks: 0 }), null);
   const a = Object.values(s.armies).find((x) => x.owner === 'pol' && x.region === 'pol-ea');
   return { g, s, a };
 }
+// The pocket a province's heart is in, if any
+const pocketOf = (s, id) => Object.values(s.pocketList ?? {}).find((p) => pocketCells(p).includes(provinceCell(id)));
 
-test('a province cut off from the heartland is a pocket, and the armies in it weaken every week', () => {
+test('ground cut off from the heartland is a pocket, and the armies in it weaken every week', () => {
   const { g, s, a } = polishPocket();
   updatePockets(s);
-  assert.ok(s.pockets['pol-ea'], 'Eastern Poland is encircled');
-  assert.equal(s.pockets['pol-ea'].holder, 'pol');
-  assert.ok(!s.pockets['pol-wp'], 'the rest of Poland is still supplied');
-  assert.ok(s.news.some((n) => /Encircled: Poland's forces around Eastern Poland/.test(n.text)), 'the world hears of it');
+  const p = pocketOf(s, 'pol-ea');
+  assert.ok(p, 'Eastern Poland is encircled');
+  assert.equal(p.holder, 'pol');
+  assert.ok(!pocketOf(s, 'pol-wp'), 'the rest of Poland is still supplied');
+  assert.ok(s.news.some((n) => /Encircled: Poland's forces around/.test(n.text)), 'the world hears of it');
   const org = a.org;
   const men = a.troops;
-  a.op = { kind: 'hold', target: a.region, aggr: 'balanced' };
+  a.op = { kind: 'hold', target: a.region, at: [a.x, a.y], aggr: 'balanced' };
   week(g);
   assert.ok(a.pocket, 'the army knows it is surrounded');
   assert.ok(a.supply <= 0.25, `supply runs dry (${a.supply})`);
   assert.ok(a.org < org, 'organisation drains');
   assert.ok(a.troops < men, 'men are lost');
   const view = g.view('pol');
-  assert.ok(view.pockets.some((p) => p.regions.includes('pol-ea')), 'the pocket is on the map');
+  assert.ok(view.pockets.some((x) => x.id === a.pocket && x.runs.length), 'the pocket is on the map');
   assert.ok(view.armies.find((x) => x.id === a.id).pocket, 'and on the army card');
 });
 
 test('an airlift keeps a surrounded army supplied, at a cost in aircraft', () => {
   const { g, s, a } = polishPocket(3);
   updatePockets(s);
-  a.op = { kind: 'hold', target: a.region, aggr: 'balanced' };
+  a.op = { kind: 'hold', target: a.region, at: [a.x, a.y], aggr: 'balanced' };
   week(g);
   const before = a.supply;
   const planes = s.countries.pol.aircraft;
@@ -73,7 +77,7 @@ test('a surrounded army can break out toward its lines, or surrender', () => {
   updatePockets(s);
   week(g);
   assert.equal(g.command('pol', { type: 'armyBreakout', id: a.id }), null);
-  assert.equal(a.op.kind, 'attack', 'it attacks through the ring');
+  assert.equal(a.op.kind, 'advance', 'it attacks through the ring');
   assert.ok(a.breakout > s.week, 'with the strength of desperation');
   assert.match(a.status, /Breaking out/);
   const troops = s.countries.pol.troops;
@@ -84,33 +88,46 @@ test('a surrounded army can break out toward its lines, or surrender', () => {
 });
 
 test('a corridor reopened to the pocket relieves it', () => {
-  const { g, s } = polishPocket(5);
+  const { s } = polishPocket(5);
   updatePockets(s);
-  assert.ok(s.pockets['pol-ea']);
+  assert.ok(pocketOf(s, 'pol-ea'));
   s.regions['pol-si'].ctrl = 'pol';
   updatePockets(s);
-  assert.ok(!s.pockets['pol-ea'], 'no longer cut off');
-  assert.ok(s.news.some((n) => /pocket around Eastern Poland is relieved/.test(n.text)));
+  assert.ok(!pocketOf(s, 'pol-ea'), 'no longer cut off');
+  assert.ok(s.news.some((n) => /is relieved/.test(n.text)));
 });
 
-test('attacking a province from two sides is a pincer, and hits harder', () => {
+test('ground inside a ring with no army to hold it falls to the encircler', () => {
+  const { g, s, a } = polishPocket(6);
+  delete s.armies[a.id];
+  updatePockets(s);
+  assert.ok(pocketOf(s, 'pol-ea'));
+  for (let i = 0; i < 3; i++) week(g);
+  const held = [...CELLS_OF['pol-ea']].filter((i) => holderAt(s, i) === 'deu').length;
+  assert.ok(held > CELLS_OF['pol-ea'].length * 0.8, `its garrisons give up (${held} of ${CELLS_OF['pol-ea'].length} cells)`);
+  assert.ok(s.news.some((n) => /cut off with no army to relieve them, surrender/.test(n.text)));
+});
+
+test('attacking an army from two sides is a pincer, and hits harder', () => {
   const g = game(6, 'deu');
   const s = g.s;
   justify(g, 'deu', 'pol');
   assert.equal(g.command('deu', { type: 'war', target: 'pol', goal: 'conquest' }), null);
-  // Armies go in on Silesia from two sides at once
-  s.regions['pol-wp'].ctrl = 'deu';
-  assert.equal(g.command('deu', { type: 'armyCreate', region: 'pol-wp', troops: 120, tanks: 120 }), null);
-  assert.equal(g.command('deu', { type: 'armyCreate', region: 'deu-sx', troops: 120, tanks: 120 }), null);
-  const mine = Object.values(s.armies).filter((x) => x.owner === 'deu');
-  // One comes down from Warsaw, the other from Lower Silesia in the west: about a hundred degrees apart
+  // A Polish army in Silesia; German armies come at it from Warsaw (north-east) and Lower Silesia (west)
+  s.countries.pol.human = { name: 'Warsaw' };
+  assert.equal(g.command('pol', { type: 'armyCreate', region: 'pol-si', troops: 80 }), null);
+  const p = Object.values(s.armies).find((x) => x.owner === 'pol');
   s.regions['pol-wa'].ctrl = 'deu';
   s.regions['pol-lw'].ctrl = 'deu';
-  mine[0].region = 'pol-wa';
-  mine[1].region = 'pol-lw';
-  for (const a of mine) assert.equal(g.command('deu', { type: 'armyOrder', id: a.id, kind: 'attack', target: 'pol-si' }), null);
+  assert.equal(g.command('deu', { type: 'armyCreate', region: 'pol-wa', troops: 120, tanks: 120 }), null);
+  assert.equal(g.command('deu', { type: 'armyCreate', region: 'pol-lw', troops: 120, tanks: 120 }), null);
+  const mine = Object.values(s.armies).filter((x) => x.owner === 'deu');
+  // Both close enough to strike, from about a hundred degrees apart
+  placeArmy(mine[0], p.x + 5, p.y - 5);
+  placeArmy(mine[1], p.x - 7, p.y + 1);
+  for (const a of mine) assert.equal(g.command('deu', { type: 'armyOrder', id: a.id, kind: 'attack', enemy: p.id }), null);
   for (let i = 0; i < 4; i++) g.step(0.125);
-  const b = s.regions['pol-si'].battle;
+  const b = Object.values(s.battles).find((x) => x.def === p.id);
   assert.ok(b?.pincer, 'the attacks converge');
   assert.ok(s.news.some((n) => /Pincer movement/.test(n.text)));
   assert.ok(breakthroughOf(s, mine[0]) > 0.2, 'German armour breaks through');
@@ -121,12 +138,16 @@ test('a people defending its homeland raises a home guard', () => {
   const s = g.s;
   justify(g, 'rus', 'pol');
   assert.equal(g.command('rus', { type: 'war', target: 'pol', goal: 'conquest' }), null);
+  s.countries.pol.human = { name: 'Warsaw' };
+  assert.equal(g.command('pol', { type: 'armyCreate', region: 'pol-wp', troops: 60 }), null);
+  const p = Object.values(s.armies).find((x) => x.owner === 'pol');
   assert.equal(g.command('rus', { type: 'armyCreate', region: 'rus-kl', troops: 200, tanks: 500 }), null);
   const a = Object.values(s.armies).find((x) => x.owner === 'rus');
-  assert.equal(g.command('rus', { type: 'armyOrder', id: a.id, kind: 'attack', target: 'pol-wp' }), null);
-  for (let i = 0; i < 4; i++) g.step(0.125);
-  assert.ok(s.regions['pol-wp'].battle.militia > 5, `the Poles take up arms (${s.regions['pol-wp'].battle.militia}K)`);
-  assert.match(a.status, /home guard|winning/);
+  assert.equal(g.command('rus', { type: 'armyOrder', id: a.id, kind: 'attack', enemy: p.id }), null);
+  let b = null;
+  for (let i = 0; i < 16 && !b; i++) { g.step(0.125); b = Object.values(s.battles ?? {}).find((x) => x.def === p.id && x.started); }
+  assert.ok(b?.militia > 5, `the Poles take up arms (${b?.militia}K)`);
+  assert.match(a.status, /home guard|pushing/);
 });
 
 test('a new doctrine is developed, trained in, and changes how the army fights', () => {

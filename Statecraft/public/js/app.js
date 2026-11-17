@@ -26,7 +26,8 @@ import { RESOURCES, RESOURCE_INFO } from './engine/data/regions.js';
 import { GEO } from './engine/data/geo.js';
 import { route } from './engine/military.js';
 import { fauxState } from './ui/map.js';
-import { sendArmy, canGo, goBlocker, goPath } from './ui/attack.js';
+import { sendArmy, sendArmyTo, pointPreview } from './ui/attack.js';
+import { PORTS } from './engine/navy.js';
 
 const NAME_KEY = 'statecraft.name';
 const TABS = [
@@ -159,20 +160,24 @@ const ctx = {
     const live = () => app.state.armies.find((x) => x.id === army.id) ?? army;
     ctx.target({
       keep,
-      text: `Click anywhere on the map to send ${army.name} there`,
-      get from() { return live().region; },
-      kind: 'attack',
-      filter: (id) => canGo(ctx, live(), id),
-      reason: (id) => goBlocker(ctx, live(), id),
-      onReject: (id) => sendArmy(ctx, live(), id),
-      path: (id) => goPath(ctx, live(), id),
-      // Clicking an army: one of ours selects it instead; a foreign one is a target like its province
+      text: `Click anywhere to send ${army.name}: our ground to move there, enemy ground to advance and take it, an enemy army to attack it`,
+      // The route to the point under the pointer, drawn as it moves
+      pointPath: (x, y) => pointPreview(ctx, live(), x, y),
+      // Clicking an army: one of ours selects it instead; a foreign one is attacked
       onArmy: (aid) => {
         const x = app.state.armies.find((y) => y.id === aid);
         if (!x) return false;
         if (x.owner === app.state.me) { if (aid !== army.id) ctx.selectArmy(aid); return true; }
-        if (!x.sea) { ctx.endTarget(); sendArmy(ctx, live(), x.region); }
+        if (!x.sea) { ctx.endTarget(); sendArmyTo(ctx, live(), { enemy: aid }); }
         return true;
+      },
+      onPoint: (x, y) => { ctx.endTarget(); sendArmyTo(ctx, live(), { x, y }); },
+      // A click on the sea next to a coast: a landing there
+      onWater: (x, y) => {
+        const coast = Object.keys(PORTS).filter((rid) => Math.hypot(PORTS[rid][0] - x, PORTS[rid][1] - y) < 25).sort((a, b) => Math.hypot(PORTS[a][0] - x, PORTS[a][1] - y) - Math.hypot(PORTS[b][0] - x, PORTS[b][1] - y))[0];
+        if (!coast) return hint('Armies go over land. To land overseas, click the coast you want to land on.', 'info', 5000);
+        ctx.endTarget();
+        sendArmy(ctx, live(), coast);
       },
       onPick: (id) => { ctx.endTarget(); sendArmy(ctx, live(), id); },
     });
@@ -388,6 +393,11 @@ function onLive(m) {
   if (!s || app.screen !== 'game' || m.week !== s.week) return;
   s.armies = m.armies;
   if (m.battleInfo) s.battleInfo = m.battleInfo;
+  // Battles, the ground armies hold (only when it has changed), and the pockets
+  if (m.fights) s.fights = m.fights;
+  if (m.occ) { s.occ = m.occ; s.occRev = m.occRev; }
+  if (m.ctrl) m.ctrl.forEach((h, i) => { if (s.regions[i]) s.regions[i][1] = h; });
+  if (m.pockets) s.pockets = m.pockets;
   // Cargo ships move on between weekly updates
   if (m.ships && s.shipments) {
     const at = new Map(m.ships.map((x) => [x[0], x]));

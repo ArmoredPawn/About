@@ -617,3 +617,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 @keyframes pocket-pulse { 50% { stroke-opacity: 0.45; } }
 @keyframes street-pulse { from { stroke-opacity: 1; } to { stroke-opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .map .pocket-area, .map .street-ring { animation: none; } }
+
+/* ---------- The land war: occupied ground, fronts, armies at their positions ---------- */
+.map .occ-fill { stroke: none; fill-opacity: 0.96; }
+.map .occ-hatch { stroke: none; pointer-events: none; }
+.map .front-line { stroke: #ffd27a; stroke-dasharray: none; }
+.map.city-view .front-line { stroke-dasharray: none; }
+.map .zoc-ring { fill: none; stroke-opacity: 0.55; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.map .army.fighting rect { stroke: #ff5a5a; stroke-width: 1.2; }
+.map .army.trapped rect { stroke: #ff5a5a; stroke-dasharray: 2 1.5; stroke-width: 1.4; }
+.map .arrow.route { opacity: 0.85; }
+.map .target-dot { fill: rgb(255 255 255 / 0.25); stroke: #fff; vector-effect: non-scaling-stroke; }
+.map .target-dot.attack { fill: rgb(255 138 128 / 0.35); stroke: #ff8a80; }
+.map .target-dot.bad { fill: rgb(229 72 77 / 0.35); stroke: #e5484d; }
+.map .target-label { fill: #fff; font-weight: 700; paint-order: stroke; stroke: rgb(5 8 14 / 0.9); stroke-linejoin: round; dominant-baseline: central; pointer-events: none; }
+.map .battle.repulsed circle { stroke: #4cc38a; }

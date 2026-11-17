@@ -166,11 +166,16 @@ function access(s, id, world) {
 
 /* ---------- The world market ---------- */
 
+// The share of a province's output a country gets: all of it if it holds the province outright; when the front
+// runs through it, the share of its ground and cities it holds (land.js)
+export const heldShare = (reg, id) => (reg.held ? reg.held[id] ?? 0 : reg.ctrl === id ? 1 : 0);
+
 export function production(s, nationId, r, index) {
   let total = 0;
   for (const reg of index ? index.get(nationId) ?? [] : Object.values(s.regions)) {
-    if (reg.ctrl !== nationId || !reg.res[r]) continue;
-    total += reg.res[r][0] * regionEfficiency(reg, nationId) * (r === 'food' ? climateYield(s, reg.id) : 1);
+    const share = heldShare(reg, nationId);
+    if (!(share > 0) || !reg.res[r]) continue;
+    total += reg.res[r][0] * share * regionEfficiency(reg, nationId) * (r === 'food' ? climateYield(s, reg.id) : 1);
   }
   return r === 'food' && s.winterUntil > s.week ? total * 0.6 : total;
 }
@@ -179,8 +184,8 @@ export function production(s, nationId, r, index) {
 const EFFICIENCY = { oil: 0.015, gas: 0.012, coal: 0.02, iron: 0.008, food: 0, rare: 0.004, uran: 0, metal: 0.006, chip: 0 };
 
 export function regionEfficiency(reg, holder) {
-  // A province being fought over works at half pace, and the cities already lost to the attack not at all
-  const battle = reg.battle ? Math.max(0.1, 0.5 - 0.6 * (reg.battle.fallenShare ?? 0)) : 1;
+  // A province with a battle in it works at half pace; one the front merely runs through, a little slower
+  const battle = reg.battle?.fighting ? 0.5 : reg.battle ? 0.85 : 1;
   // Whoever holds a province takes all it produces; an occupied people's unrest and the war damage cut it
   return (1 - reg.dmg) * battle * (1 - reg.unrest / 200);
 }
@@ -213,7 +218,8 @@ export function marketTick(s) {
   const index = new Map();
   for (const reg of Object.values(s.regions)) {
     if (!Object.keys(reg.res).length) continue;
-    (index.get(reg.ctrl) ?? index.set(reg.ctrl, []).get(reg.ctrl)).push(reg);
+    // A province split by the front counts for each side that holds part of it
+    for (const h of reg.held ? Object.keys(reg.held) : [reg.ctrl]) (index.get(h) ?? index.set(h, []).get(h)).push(reg);
   }
 
   const exclusives = new Set(s.treaties.filter((t) => t.kind === 'deal' && t.exclusive).map((t) => `${t.a}>${t.res}`));
@@ -379,13 +385,13 @@ function output(s, c, mods) {
   let pot = 0;
   let pop = 0;
   for (const reg of Object.values(s.regions)) {
-    if (reg.ctrl !== c.id) continue;
-    // An occupied province works for its occupier, not its home country: all its output counts here, cut
-    // only by the damage, the unrest of a conquered people, and any uprising
-    pot += reg.gdp * (1 - 0.8 * reg.dmg) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1)
-      // Cities already lost to an attack still in progress produce nothing for us
-      * (1 - (reg.battle?.fallenShare ?? 0));
-    pop += reg.pop;
+    const share = heldShare(reg, c.id);
+    if (!(share > 0)) continue;
+    // Occupied ground works for its occupier, not its home country: what we hold of a province counts here (its
+    // cities and its countryside), cut only by the damage, the unrest of a conquered people, any uprising, and
+    // the fighting if the front runs through it
+    pot += reg.gdp * share * (1 - 0.8 * reg.dmg) * (1 - reg.unrest / 250) * (reg.revolt ? 0.4 : 1) * (reg.policy === 'autonomy' ? 0.92 : 1) * (reg.battle?.fighting ? 0.7 : 1);
+    pop += reg.pop * share;
   }
   c.pot = pot;
   c.pop = pop || c.pop * 0.99;

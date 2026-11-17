@@ -10,7 +10,9 @@ import { route } from '../engine/military.js';
 import { NODES, PORTS, seaRoute, mapDistance } from '../engine/navy.js';
 import { PIPELINES, PIPELINE_PROJECTS } from '../engine/data/energy.js';
 import { riskOf } from '../engine/climate.js';
-import { citiesIn, cityDepths, CITIES_OF } from '../engine/cities.js';
+import { citiesIn, CITIES_OF } from '../engine/cities.js';
+import { cityCell, GW as GRID_W, CELL as GRID_CELL } from '../engine/land.js';
+import { LandView } from './land-view.js';
 
 const PIPE_DEFS = Object.fromEntries([...PIPELINES, ...PIPELINE_PROJECTS].map((p) => [p.id, p]));
 import { svg, colorOf, RES_COLORS, RES_LETTERS, regionName } from './dom.js';
@@ -61,6 +63,9 @@ export class WorldMap {
     this.targeting = null;
     this.uses = new Map();
     this.fills = new Map();
+    // Who holds each cell of ground, the occupied land and the front lines (land-view.js)
+    this.land = new LandView();
+    this.pointPreview = null;
   }
 
   async load() {
@@ -71,6 +76,8 @@ export class WorldMap {
     this.defs = svg('defs');
     this.d = Object.fromEntries(ORDER.map((id) => [id, data.regions[id] ?? '']));
     markerDefs = this.defs;
+    // Fine diagonal stripes over ground an army has taken from its owner
+    this.defs.append(svg('pattern', { id: 'occ-hatch', width: 3, height: 3, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svg('rect', { width: 0.9, height: 3, fill: 'rgb(0 0 0 / 0.28)' })));
     el.append(this.defs);
     el.append(svg('rect', { class: 'ocean', x: -W, y: -H, width: W * 3, height: H * 3 }));
     el.append(svg('path', { class: 'graticule', d: data.graticule }));
@@ -112,6 +119,7 @@ export class WorldMap {
   update(state, { live = false } = {}) {
     this.state = state;
     this.moving = true;
+    this.land.sync(state);
     this.#paint();
     this.#drawEnemies();
     this.#drawArmies();
@@ -119,8 +127,8 @@ export class WorldMap {
     if (!live) { this.#drawLabels(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawOverlays(); }
     else this.#moveShips();
     this.#drawBattles();
-    // Cities change hands as a front passes them, so the close-up follows the battles
-    if (!live || this.fronts.size) this.#drawCities();
+    // Cities change hands as the front passes them, so the close-up follows the battles
+    if (!live || (state.fights ?? []).length) this.#drawCities();
     this.#animate();
   }
 
@@ -128,7 +136,7 @@ export class WorldMap {
   setView(view) {
     this.view2 = ['cities', 'strategic'].includes(view) ? view : 'auto';
     this.#syncView();
-    if (this.state) { this.#drawCities(); for (const [id, f] of this.fronts) this.#placeFront(id, f); }
+    if (this.state) { this.#drawCities(); this.#drawFront(true); }
   }
 
   // Whether the city close-up is showing now
@@ -159,19 +167,12 @@ export class WorldMap {
     if (!r) return [];
     const list = citiesIn(id, r.pop);
     if (!list.length) return [];
-    const fallen = new Set();
-    if (r.battleBy && r.prog > 0) {
-      const f = this.fronts.get(id);
-      const origin = f?.origin ?? (r.from ? GEO[r.from] : null);
-      const depth = cityDepths(id, origin, list);
-      const shown = (f?.shown ?? r.prog) / 100;
-      list.forEach((c, i) => { if (depth[i] <= shown) fallen.add(c.name); });
-    }
-    // A city's output goes to whoever holds it, so its share is of that country's economy
+    // A city's output goes to whoever holds the ground it stands on, so its share is of that country's economy
     return list.map((c) => {
-      const holder = fallen.has(c.name) ? r.battleBy : r.ctrl;
+      const cell = cityCell(id, c.name);
+      const holder = cell >= 0 ? this.land.holder(this.state, cell) ?? r.ctrl : r.ctrl;
       const national = this.state.countries[holder]?.gdp ?? this.state.minors?.[holder]?.gdp ?? null;
-      return { ...c, output: c.share * r.gdp, national: national ? (c.share * r.gdp) / national : null, holder, fallen: fallen.has(c.name) };
+      return { ...c, output: c.share * r.gdp, national: national ? (c.share * r.gdp) / national : null, holder, fallen: holder !== r.owner };
     });
   }
 
@@ -197,10 +198,9 @@ export class WorldMap {
     // Nothing the close-up shows has changed (the view, who holds what, how far each battle has got): leave it.
     // It is asked to redraw every second while there is fighting anywhere in the world.
     const st = this.state;
-    const key = [unit, x0, y0, x1, y1, st.week, ...near.map((id) => {
+    const key = [unit, x0, y0, x1, y1, st.week, this.land.rev, ...near.map((id) => {
       const r = this.#region(id);
-      const f = r.battleBy ? this.fronts.get(id) : null;
-      return `${r.ctrl}${politicalColor(st, r.ctrl)}${r.gdp}${r.battleBy ? `${r.battleBy}${politicalColor(st, r.battleBy)}${Math.round(f?.shown ?? r.prog)}${st.battleInfo?.[id]?.street ?? ''}` : ''}`;
+      return `${r.ctrl}${politicalColor(st, r.ctrl)}${r.gdp}${st.battleInfo?.[id]?.street ?? ''}`;
     })].join('|');
     if (key === this.citiesKey) return;
     this.citiesKey = key;
@@ -544,18 +544,31 @@ export class WorldMap {
   #drawPockets() {
     const s = this.state;
     const out = [];
+    const unit = this.#unit();
     for (const p of s.pockets ?? []) {
-      for (const id of p.regions ?? []) {
-        if (!this.d[id]) continue;
-        out.push(svg('path', { d: this.d[id], class: `pocket-area${p.sea ? ' sea' : ''}` }));
+      // The ground inside the ring, cell by cell, clipped to the coast, with its outline drawn red
+      let d = '';
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (const [i, len] of p.runs ?? []) {
+        let start = i;
+        let left = len;
+        while (left > 0) {
+          const gx = start % GRID_W;
+          const gy = Math.floor(start / GRID_W);
+          const run = Math.min(left, GRID_W - gx);
+          d += `M${gx * GRID_CELL} ${gy * GRID_CELL}h${run * GRID_CELL}v${GRID_CELL}h${-run * GRID_CELL}z`;
+          sx += (gx + run / 2) * GRID_CELL * run;
+          sy += (gy + 0.5) * GRID_CELL * run;
+          n += run;
+          start += run;
+          left -= run;
+        }
       }
-      const main = GEO[p.regions?.[0]];
-      if (!main) continue;
-      const g = p.regions.map((id) => GEO[id]).filter(Boolean);
-      const cx = g.reduce((t, q) => t + q.x, 0) / g.length;
-      const cy = g.reduce((t, q) => t + q.y, 0) / g.length;
-      const unit = this.#unit();
-      out.push(svg('text', { class: 'pocket-label', x: cx, y: cy - 22 / unit, 'font-size': 10 / unit, 'stroke-width': 2.4 / unit }, `${p.sea ? '⚓ Cut off' : '⭕ Encircled'}: ${p.name} (${s.countries[p.holder]?.name ?? p.holder})`));
+      if (!n) continue;
+      out.push(svg('path', { d, class: `pocket-area${p.sea ? ' sea' : ''}` }));
+      out.push(svg('text', { class: 'pocket-label', x: sx / n, y: sy / n - 14 / unit, 'font-size': 10 / unit, 'stroke-width': 2.4 / unit }, `${p.sea ? '⚓ Cut off' : '⭕ Encircled'}: ${p.name} (${s.countries[p.holder]?.name ?? p.holder})`));
     }
     this.gPockets.replaceChildren(...out);
   }
@@ -584,7 +597,6 @@ export class WorldMap {
   #paint() {
     const s = this.state;
     const me = s.me;
-    const occ = [];
     let maxRes = 0;
     let maxDensity = 0;
     if (this.mode === 'resources') for (const id of ORDER) maxRes = Math.max(maxRes, s.resources[id]?.[this.resource]?.[0] ?? 0);
@@ -635,170 +647,41 @@ export class WorldMap {
         this.uses.get(id).setAttribute('fill', fill);
         this.fills.set(id, fill);
       }
-      if (r.battleBy && r.prog > 0 && this.mode !== 'resources' && this.mode !== 'economy') occ.push(id);
     }
-    this.#syncFronts(occ);
+    this.#drawFront();
   }
 
-  /* ---------- Front lines inside contested provinces ---------- */
+  /* ---------- The front: occupied ground and the lines where armies meet ---------- */
 
-  // Points around a province's outline, for measuring how far a front has moved across it
-  #outline(id) {
-    if (this.samples.has(id)) return this.samples.get(id);
-    const el = this.uses.get(id);
-    const pts = [];
-    try {
-      const len = el.getTotalLength();
-      for (let i = 0; i < 72; i++) { const p = el.getPointAtLength((len * i) / 72); pts.push([p.x, p.y]); }
-    } catch { pts.push([GEO[id].x - 5, GEO[id].y - 5], [GEO[id].x + 5, GEO[id].y + 5]); }
-    this.samples.set(id, pts);
-    return pts;
-  }
-
-  // Which way the attack is coming from: the attacker's own province, or the provinces it holds next door
-  #attackFrom(id, by) {
+  // Ground taken by armies is painted in the colour of whoever holds it now (clipped to the coastline), and a front
+  // line runs wherever two countries at war meet. It changes only when ground changes hands.
+  #drawFront(force = false) {
     const s = this.state;
-    const r = this.#region(id);
-    const sameSide = (h) => h === by || s.alliances.some((al) => al.kind === 'military' && al.members.includes(h) && al.members.includes(by));
-    if (r.from && GEO[r.from] && sameSide(this.#region(r.from)?.ctrl)) return GEO[r.from];
-    const near = GEO[id].adj.filter((x) => sameSide(this.#region(x)?.ctrl));
-    if (near.length) return { x: near.reduce((t, x) => t + GEO[x].x, 0) / near.length, y: near.reduce((t, x) => t + GEO[x].y, 0) / near.length };
-    const army = s.armies.find((a) => a.owner === by && (a.attacking === id || a.sea?.to === id));
-    const src = army ? GEO[army.sea?.from ?? army.region] : null;
-    return src && src !== GEO[id] ? src : { x: GEO[id].x - 10, y: GEO[id].y };
-  }
-
-  #syncFronts(ids) {
-    const now = performance.now();
-    const live = new Set(ids);
-    for (const [id, f] of this.fronts) if (!live.has(id)) { f.g.remove(); this.fronts.delete(id); }
-    for (const id of ids) {
-      const r = this.#region(id);
-      let f = this.fronts.get(id);
-      const color = this.mode === 'alliances' ? blocColor(this.state, relationIndex(this.state), r.battleBy) : politicalColor(this.state, r.battleBy);
-      if (!f || f.by !== r.battleBy) {
-        f?.g.remove();
-        const clipId = `front-${id}`;
-        const clip = svg('clipPath', { id: clipId }, svg('path', { d: this.d[id] }));
-        const area = svg('polygon', { fill: color, 'fill-opacity': 0.95 });
-        const shade = svg('polyline', { class: 'front-shadow' });
-        const line = svg('polyline', { class: 'front-line' });
-        const labelA = svg('text', { class: 'front-label' });
-        const labelB = svg('text', { class: 'front-label' });
-        const g = svg('g', { 'clip-path': `url(#${clipId})` }, area, shade, line);
-        const outer = svg('g', {}, clip, g, labelA, labelB);
-        this.gOcc.append(outer);
-        f = { g: outer, area, shade, line, labelA, labelB, by: r.battleBy, shown: r.prog, from: r.prog, to: r.prog, t0: now };
-        this.fronts.set(id, f);
-      }
-      f.area.setAttribute('fill', color);
-      if (f.to !== r.prog) { f.from = f.shown; f.to = r.prog; f.t0 = now; }
-      f.origin = this.#attackFrom(id, r.battleBy);
-      f.holder = r.ctrl;
-      this.#placeFront(id, f);
-    }
-  }
-
-  // The frame for a front across a province: t runs along the attack (lo = the edge it comes in from,
-  // hi = the far edge), u across it. `value` is the battle's progress, 0-100.
-  #frontFrame(id, origin, value) {
-    const g = GEO[id];
-    let dx = g.x - origin.x;
-    let dy = g.y - origin.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    const nx = -dy;
-    const ny = dx;
-    let lo = Infinity;
-    let hi = -Infinity;
-    let wlo = Infinity;
-    let whi = -Infinity;
-    for (const [x, y] of this.#outline(id)) {
-      const t = x * dx + y * dy;
-      const u = x * nx + y * ny;
-      lo = Math.min(lo, t); hi = Math.max(hi, t); wlo = Math.min(wlo, u); whi = Math.max(whi, u);
-    }
-    const v = Math.max(0.02, Math.min(1, value / 100));
-    const front = lo + (hi - lo) * v;
-    // Where the front actually crosses the province: the outline points closest to the line
-    let clo = Infinity;
-    let chi = -Infinity;
-    const band = Math.max(0.6, (hi - lo) * 0.05);
-    for (const [x, y] of this.#outline(id)) {
-      if (Math.abs(x * dx + y * dy - front) > band) continue;
-      const u = x * nx + y * ny;
-      clo = Math.min(clo, u); chi = Math.max(chi, u);
-    }
-    if (!(chi > clo)) { clo = wlo; chi = whi; }
-    const mid = (clo + chi) / 2;
-    // A ragged front, not a ruler line: each province has its own pattern of bulges and dents, which shifts
-    // as the fighting moves, with a salient where the attack pushes hardest. It flattens out at the edges so
-    // it never pokes past the province.
-    const seed = [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
-    const ph = (k) => ((seed >>> (k * 5)) % 628) / 100;
-    const width = Math.max(1, whi - wlo);
-    const depthT = hi - lo;
-    const edge = Math.min(1, v * 100 / 12, (1 - v) * 100 / 12);
-    const amp = depthT * 0.08 * edge;
-    const p = value / 100;
-    const jag = (u) => {
-      const x = (u - wlo) / width * Math.PI * 2;
-      const wave = 0.5 * Math.sin(x * 2.3 + ph(1) + p * 4.4) + 0.32 * Math.sin(x * 5.2 + ph(2) - p * 6.1) + 0.18 * Math.sin(x * 11.7 + ph(3) + p * 9.3);
-      const salient = 0.9 * Math.exp(-(((u - mid) / (width * 0.22)) ** 2));
-      return amp * (wave + salient);
-    };
-    const at = (t, u) => [t * dx + u * nx, t * dy + u * ny];
-    if (this.cityShown) {
-      // Close up: street by street. Many more kinks, and around each city near the line a pocket: still held
-      // (the line bends back around it) or taken (the line pushes out past it)
-      const pockets = [];
-      for (const c of this.#cityInfo(id)) {
-        const t = c.x * dx + c.y * dy;
-        if (Math.abs(t - front) > depthT * 0.35) continue;
-        pockets.push({ u: c.x * nx + c.y * ny, w: width * (0.05 + Math.min(0.08, c.pop / 60000)), sign: t < front ? 1 : -1, near: 1 - Math.abs(t - front) / (depthT * 0.35) });
-      }
-      const fine = (u) => {
-        const x = (u - wlo) / width * Math.PI * 2;
-        let v = 0.5 * Math.sin(x * 2.3 + ph(1) + p * 4.4) + 0.3 * Math.sin(x * 5.2 + ph(2) - p * 6.1) + 0.18 * Math.sin(x * 11.7 + ph(3) + p * 9.3)
-          + 0.1 * Math.sin(x * 23.3 + ph(4) - p * 13) + 0.06 * Math.sin(x * 41.9 + ph(5) + p * 17) + 0.035 * Math.sin(x * 77.1 + ph(6));
-        v += 0.7 * Math.exp(-(((u - mid) / (width * 0.22)) ** 2));
-        for (const k of pockets) v -= k.sign * 1.1 * k.near * Math.exp(-(((u - k.u) / k.w) ** 2));
-        return depthT * 0.08 * edge * v;
-      };
-      return { dx, dy, nx, ny, lo, hi, wlo, whi, front, mid, jag: fine, at, depth: depthT, fine: true };
-    }
-    return { dx, dy, nx, ny, lo, hi, wlo, whi, front, mid, jag, at, depth: depthT };
-  }
-
-  #placeFront(id, f) {
-    const F = this.#frontFrame(id, f.origin, f.shown);
-    const { lo, wlo, whi, front, at, jag, mid, hi } = F;
-    const pad = (hi - lo) + (whi - wlo) + 10;
-    const line = [];
-    const n = F.fine ? 160 : 36;
-    for (let i = 0; i <= n; i++) {
-      const u = wlo - 2 + ((whi - wlo + 4) * i) / n;
-      line.push(at(front + jag(u), u));
-    }
-    const pts = (list) => list.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ');
-    f.area.setAttribute('points', pts([at(lo - pad, wlo - pad), at(front, wlo - pad), ...line, at(front, whi + pad), at(lo - pad, whi + pad)]));
-    for (const ln of [f.shade, f.line]) ln.setAttribute('points', pts(line));
-    // Name each side once zoomed in: "Spain holds this side, Portugal that one". Off to one side of the
-    // middle, where the attacking army stands.
+    const geom = this.land.geometry(s);
     const unit = this.#unit();
-    const show = unit >= 2;
-    const off = Math.min(18 / unit, (hi - lo) * 0.25 + 4 / unit);
-    const lu = Math.min(whi - 4 / unit, mid + 30 / unit);
-    const name = (x) => shortName(this.state.countries[x]?.name ?? this.state.minors[x]?.name ?? '');
-    for (const [el, t, who] of [[f.labelA, front + jag(lu) - off, f.by], [f.labelB, front + jag(lu) + off, f.holder]]) {
-      el.setAttribute('display', show ? 'inline' : 'none');
-      if (!show) continue;
-      const [x, y] = at(t, lu);
-      el.setAttribute('x', x); el.setAttribute('y', y);
-      el.setAttribute('font-size', 9 / unit);
-      el.setAttribute('stroke-width', 2.2 / unit);
-      el.textContent = name(who);
+    const showFills = !['resources', 'economy', 'climate'].includes(this.mode);
+    const colors = [...geom.fills.keys()].map((h) => this.#holderColor(h)).join(',');
+    const key = `${this.land.geomKey}|${this.mode}|${colors}|${unit}`;
+    if (!force && key === this.frontKey) return;
+    this.frontKey = key;
+    const out = [];
+    if (showFills && geom.fills.size) {
+      // The coast is kept: occupied cells are clipped to the provinces they lie in
+      const clip = svg('clipPath', { id: 'occ-clip' }, ...[...geom.regions].map((k) => svg('path', { d: this.d[ORDER[k]] })));
+      const fills = [...geom.fills].map(([h, d]) => svg('path', { d, class: 'occ-fill', fill: this.#holderColor(h) }, svg('title', {}, `Held by ${s.countries[h]?.name ?? s.minors?.[h]?.name ?? h}`)));
+      out.push(clip, svg('g', { 'clip-path': 'url(#occ-clip)' }, ...fills, ...[...geom.fills.values()].map((d) => svg('path', { d, class: 'occ-hatch', fill: 'url(#occ-hatch)' }))));
     }
+    const line = (pts) => pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join('');
+    const d = geom.fronts.map(line).join('');
+    if (d) {
+      out.push(svg('path', { d, class: 'front-shadow', 'stroke-width': 4.2 / unit }));
+      out.push(svg('path', { d, class: 'front-line', 'stroke-width': 1.8 / unit }));
+    }
+    this.gOcc.replaceChildren(...out);
+  }
+
+  #holderColor(h) {
+    return this.mode === 'alliances' ? blocColor(this.state, relationIndex(this.state), h) : politicalColor(this.state, h);
   }
 
   /* ---------- Enemies: a red line around everything held by a country at war with us ---------- */
@@ -824,13 +707,6 @@ export class WorldMap {
     const step = () => {
       const now = performance.now();
       let busy = false;
-      for (const [id, f] of this.fronts) {
-        const k = Math.min(1, (now - f.t0) / ((this.stepMs ?? this.tickMs) * 0.95));
-        const shown = f.from + (f.to - f.from) * k;
-        // Re-placed once it has moved enough to see (a quarter of a percent of the province), not every frame
-        if (Math.abs(shown - f.shown) > 0.25 || (k >= 1 && shown !== f.shown)) { f.shown = shown; this.#placeFront(id, f); }
-        if (k < 1) busy = true;
-      }
       // Cargo ships sail at an even speed
       for (const n of this.tradeShips.values()) {
         const a = n.glide;
@@ -904,85 +780,87 @@ export class WorldMap {
   #drawArmies() {
     const s = this.state;
     const unit = this.#unit();
-    const byRegion = new Map();
-    for (const a of s.armies) {
-      const at = a.sea ? (a.attacking ?? a.sea.to) : a.region;
-      (byRegion.get(at) ?? byRegion.set(at, []).get(at)).push(a);
-    }
-    // Armies attacking each province, side by side along its front
-    const atFront = new Map();
-    for (const a of s.armies) if (a.attacking && !a.sea) (atFront.get(a.attacking) ?? atFront.set(a.attacking, []).get(a.attacking)).push(a.id);
     const arrows = [];
+    const rings = [];
     const friendly = (owner) => owner === s.me || s.alliances.some((al) => al.kind === 'military' && al.members.includes(owner) && al.members.includes(s.me));
-    for (const a of s.armies) {
-      const pts = [];
-      const from = GEO[a.sea ? a.sea.from ?? a.region : a.region];
-      if (a.exact && a.sea && a.sea.from) {
-        pts.push(GEO[a.sea.from], GEO[a.sea.to]);
-        arrows.push(arrowPath(pts, colorOf(a.owner), unit, true));
-      } else if (a.exact && a.path?.length) {
-        // Ours and our allies', and an enemy's when our spies are deep inside its government
-        pts.push(from, ...a.path.map((id) => GEO[id]));
-        arrows.push(arrowPath(pts, colorOf(a.owner), unit, a.op?.kind !== 'attack'));
-      } else if (a.attacking && !a.sea) {
-        arrows.push(arrowPath([from, GEO[a.attacking]], colorOf(a.owner), unit, false));
+    const byId = new Map(s.armies.map((a) => [a.id, a]));
+    const w = 34 / unit;
+    const hgt = 14 / unit;
+    // Where each army stands; armies at sea are drawn on the way to their landing
+    const spot = new Map();
+    const placed = [];
+    for (const a of [...s.armies].sort((x, y) => (x.owner === s.me ? -1 : 0) - (y.owner === s.me ? -1 : 0))) {
+      let x = a.x ?? GEO[a.region]?.x;
+      let y = a.y ?? GEO[a.region]?.y;
+      if (a.sea && a.sea.from && GEO[a.sea.to]) {
+        const f = GEO[a.sea.from];
+        const g = GEO[a.sea.to];
+        const k = 1 / (1 + Math.max(0, a.sea.left ?? 1));
+        x = f.x + (g.x - f.x) * k;
+        y = f.y + (g.y - f.y) * k;
       }
+      if (x == null) continue;
+      // Armies standing together are fanned out so none hides another
+      const near = placed.filter((p) => Math.abs(p[0] - x) < w * 0.9 && Math.abs(p[1] - y) < hgt * 0.9).length;
+      placed.push([x, y]);
+      spot.set(a.id, [x + (near % 2) * (w + 2 / unit) - (near ? (w + 2 / unit) / 2 : 0), y + Math.floor(near / 2) * (hgt + 2 / unit)]);
+    }
+    for (const a of s.armies) {
+      const at = spot.get(a.id);
+      if (!at) continue;
+      if (a.exact && a.sea && a.sea.from && GEO[a.sea.to]) {
+        arrows.push(arrowPath([{ x: at[0], y: at[1] }, GEO[a.sea.to]], colorOf(a.owner), unit, true));
+      } else if (a.exact && a.path?.length && !a.battle) {
+        // Ours and our allies', and an enemy's when our spies are deep inside its government: its route
+        const pts = [{ x: a.x, y: a.y }, ...a.path.map(([x, y]) => ({ x, y }))];
+        arrows.push(routeLine(pts, colorOf(a.owner), unit, a.op?.kind === 'move' || a.op?.kind === 'hold'));
+      }
+      // Attacking: an arrow at the army it is fighting
+      const fight = a.battle ? (s.fights ?? []).find((b) => b.id === a.battle) : null;
+      if (fight && fight.def !== a.id) {
+        const d = byId.get(fight.def);
+        if (d?.x != null) arrows.push(arrowPath([{ x: a.x, y: a.y }, { x: (a.x + d.x * 2) / 3, y: (a.y + d.y * 2) / 3 }], colorOf(a.owner), unit, false));
+      }
+      // The ground the selected army holds around it
+      if (this.selectedArmy === a.id && a.zoc && !a.sea) rings.push(svg('circle', { class: 'zoc-ring', cx: a.x, cy: a.y, r: a.zoc, stroke: colorOf(a.owner), 'stroke-width': 1.2 / unit }));
     }
     const now = performance.now();
     const seen = new Set();
-    for (const [at, list] of byRegion) {
-      const g = GEO[at];
-      list.forEach((a, i) => {
-        const w = 34 / unit;
-        const hgt = 14 / unit;
-        let cx = g.x + (i % 2) * (w + 2 / unit) - (list.length > 1 ? (w + 2 / unit) / 2 : 0);
-        let cy = g.y + Math.floor(i / 2) * (hgt + 2 / unit) + 6 / unit;
-        // Attacking armies stand right on the front line and advance with it as the battle goes their way
-        if (a.attacking && !a.sea && GEO[a.attacking]) {
-          const r = this.#region(a.attacking);
-          const origin = r.battleBy ? this.#attackFrom(a.attacking, r.battleBy) : g;
-          const F = this.#frontFrame(a.attacking, origin === GEO[a.attacking] ? g : origin, r.battleBy ? r.prog : 0);
-          const side = atFront.get(a.attacking);
-          const j = side.indexOf(a.id);
-          const u = F.mid + (j - (side.length - 1) / 2) * (w + 3 / unit);
-          [cx, cy] = F.at(F.front + F.jag(u) - hgt * 0.75, u);
-        }
-        if (a.sea && a.sea.from && a.sea.left != null && !a.attacking) {
-          const f = GEO[a.sea.from];
-          const k = 1 / (1 + Math.max(0, a.sea.left));
-          cx = f.x + (g.x - f.x) * k;
-          cy = f.y + (g.y - f.y) * k;
-        }
-        seen.add(a.id);
-        const mine = friendly(a.owner);
-        let n = this.armyNodes.get(a.id);
-        if (!n) {
-          n = { g: svg('g', { 'data-army': a.id }), x: cx, y: cy, fx: cx, fy: cy, tx: cx, ty: cy, t0: now, dur: 1 };
-          this.armyNodes.set(a.id, n);
-          this.gArmies.append(n.g);
-        }
-        if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
-          n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
-          n.dur = this.moving ? (this.stepMs ?? this.tickMs) * 0.95 : 250;
-        }
-        n.g.setAttribute('class', `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}`);
-        n.g.setAttribute('opacity', a.sea ? '0.85' : '1');
-        n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
-        // Rebuilt only when what it shows changes: rebuilding it every second made its tooltip flicker
-        const text = (a.exact || a.seen ? '' : '~') + armyLabel(a.troops);
-        const tip = `${a.name} (${s.countries[a.owner]?.name ?? ''})${a.status ? `: ${a.status}` : ''}`;
-        const key = `${unit}|${colorOf(a.owner)}|${text}|${tip}`;
-        if (n.key !== key) {
-          n.key = key;
-          n.g.replaceChildren(
-            svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
-            svg('text', { x: 0, y: 0, 'font-size': 9 / unit }, text),
-            svg('title', {}, tip));
-        }
-      });
+    for (const a of s.armies) {
+      const at = spot.get(a.id);
+      if (!at) continue;
+      const [cx, cy] = at;
+      seen.add(a.id);
+      const mine = friendly(a.owner);
+      let n = this.armyNodes.get(a.id);
+      if (!n) {
+        n = { g: svg('g', { 'data-army': a.id }), x: cx, y: cy, fx: cx, fy: cy, tx: cx, ty: cy, t0: now, dur: 1 };
+        this.armyNodes.set(a.id, n);
+        this.gArmies.append(n.g);
+      }
+      if (Math.abs(n.x - cx) > W / 2) { n.x = n.fx = n.tx = cx; n.y = n.fy = n.ty = cy; }
+      if (Math.abs(n.tx - cx) > 0.01 || Math.abs(n.ty - cy) > 0.01) {
+        n.fx = n.x; n.fy = n.y; n.tx = cx; n.ty = cy; n.t0 = now;
+        n.dur = this.moving ? (this.stepMs ?? this.tickMs) * 0.95 : 250;
+      }
+      n.g.setAttribute('class', `army${this.selectedArmy === a.id ? ' sel' : ''}${mine ? '' : ' foe'}${a.battle ? ' fighting' : ''}${a.pocket ? ' trapped' : ''}`);
+      n.g.setAttribute('opacity', a.sea ? '0.85' : '1');
+      n.g.setAttribute('transform', `translate(${n.x} ${n.y})`);
+      // Rebuilt only when what it shows changes: rebuilding it every second made its tooltip flicker
+      const text = (a.exact || a.seen ? '' : '~') + armyLabel(a.troops);
+      const tip = `${a.name} (${s.countries[a.owner]?.name ?? ''})${a.status ? `: ${a.status}` : ''}`;
+      const key = `${unit}|${colorOf(a.owner)}|${text}|${tip}|${a.op?.kind}`;
+      if (n.key !== key) {
+        n.key = key;
+        const stance = a.op?.kind === 'advance' || a.op?.kind === 'attack' ? '▲' : a.op?.kind === 'hold' ? '■' : '►';
+        n.g.replaceChildren(
+          svg('rect', { x: -w / 2, y: -hgt / 2, width: w, height: hgt, rx: 3 / unit, fill: colorOf(a.owner) }),
+          svg('text', { x: 0, y: 0, 'font-size': 9 / unit }, a.exact ? `${stance} ${text}` : text),
+          svg('title', {}, tip));
+      }
     }
     for (const [id, n] of this.armyNodes) if (!seen.has(id)) { n.g.remove(); this.armyNodes.delete(id); }
-    this.gArrows.replaceChildren(...arrows);
+    this.gArrows.replaceChildren(...rings, ...arrows);
   }
 
   /* ---------- Fleets and the seas ---------- */
@@ -1071,25 +949,27 @@ export class WorldMap {
     if (this.state) this.#drawFleets();
   }
 
+  // A battle where two armies meet: crossed swords, a ring in the attacker's colour showing the odds (full at 2:1
+  // or better), and what is special about it
   #drawBattles() {
     const unit = this.#unit();
     const out = [];
-    for (const id of ORDER) {
-      const r = this.#region(id);
-      if (!r.battleBy) continue;
-      const g = GEO[id];
-      const rad = 9 / unit;
-      const prog = Math.max(0.02, r.prog / 100);
-      const end = [g.x + rad * Math.sin(prog * 2 * Math.PI), g.y - rad * Math.cos(prog * 2 * Math.PI)];
-      const info = this.state.battleInfo?.[id];
-      const tags = [info?.pincer ? 'Pincer' : null, info?.street ? `Street fighting: ${info.street}` : null, info?.militia >= 1 ? `${Math.round(info.militia)}K home guard` : null].filter(Boolean);
-      if (tags.length && unit >= 1.4) {
-        out.push(svg('text', { class: 'battle-tag', x: g.x, y: g.y - 30 / unit, 'font-size': 8 / unit, 'stroke-width': 2.2 / unit, 'text-anchor': 'middle' }, tags.join(' · ')));
-      }
-      out.push(svg('g', { class: `battle${info?.pincer ? ' pincer' : ''}` },
-        svg('circle', { cx: g.x, cy: g.y - 16 / unit, r: rad, fill: 'rgb(12 14 22 / 0.85)', stroke: '#e5484d', 'stroke-width': 1 / unit }),
-        svg('path', { d: `M${g.x} ${g.y - 16 / unit - rad}A${rad} ${rad} 0 ${prog > 0.5 ? 1 : 0} 1 ${end[0]} ${end[1] - 16 / unit}`, fill: 'none', stroke: colorOf(r.battleBy), 'stroke-width': 2.2 / unit }),
-        svg('text', { x: g.x, y: g.y - 16 / unit, 'font-size': 10 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff' }, '⚔')));
+    const s = this.state;
+    for (const b of s.fights ?? []) {
+      if (b.x == null) continue;
+      const rad = 8 / unit;
+      const share = Math.max(0.03, Math.min(1, (b.ratio ?? 1) / 2));
+      const cy = b.y;
+      const end = [b.x + rad * Math.sin(share * 2 * Math.PI), cy - rad * Math.cos(share * 2 * Math.PI)];
+      const tags = [b.pincer ? 'Pincer' : null, b.street ? `Street fighting: ${b.street}` : null, b.militia >= 1 ? `${Math.round(b.militia)}K home guard` : null].filter(Boolean);
+      const name = (x) => s.countries[x]?.name ?? s.minors?.[x]?.name ?? x;
+      const tip = `${name(b.by)} attacking ${name(b.holder)}: ${b.trend === 'advancing' ? 'pushing them back' : b.trend === 'stalled' ? 'held up' : 'thrown back'} (odds ${b.ratio}:1, about ${b.attackTroops}K against ${b.defendTroops}K)${tags.length ? `. ${tags.join('; ')}` : ''}`;
+      if (tags.length && unit >= 1.4) out.push(svg('text', { class: 'battle-tag', x: b.x, y: cy - 14 / unit, 'font-size': 8 / unit, 'stroke-width': 2.2 / unit, 'text-anchor': 'middle' }, tags.join(' · ')));
+      out.push(svg('g', { class: `battle${b.pincer ? ' pincer' : ''} ${b.trend ?? ''}` },
+        svg('circle', { cx: b.x, cy, r: rad, fill: 'rgb(12 14 22 / 0.85)', stroke: '#e5484d', 'stroke-width': 1 / unit }),
+        svg('path', { d: `M${b.x} ${cy - rad}A${rad} ${rad} 0 ${share > 0.5 ? 1 : 0} 1 ${end[0]} ${end[1]}`, fill: 'none', stroke: colorOf(b.by), 'stroke-width': 2.2 / unit }),
+        svg('text', { x: b.x, y: cy, 'font-size': 9 / unit, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff' }, '⚔'),
+        svg('title', {}, tip)));
     }
     for (const id of ORDER) {
       const r = this.#region(id);
@@ -1163,6 +1043,30 @@ export class WorldMap {
     this.targeting = null;
     this.el.classList.remove('targeting');
     this.gPreview.replaceChildren();
+    clearTimeout(this.pointTimer);
+  }
+
+  // The way an army would go to the point under the pointer (targeting.pointPath gives it), drawn at most a few
+  // times a second
+  #previewPoint(mx, my) {
+    const t = this.targeting;
+    if (!t?.pointPath) return;
+    clearTimeout(this.pointTimer);
+    this.pointTimer = setTimeout(() => {
+      if (this.targeting !== t) return;
+      const res = t.pointPath(((mx % W) + W) % W, my);
+      const unit = this.#unit();
+      if (!res) { this.gPreview.replaceChildren(); this.onTargetHint?.(null); return; }
+      this.onTargetHint?.(res.why ?? null);
+      const nodes = [];
+      if (res.path?.length) {
+        const pts = [res.from, ...res.path].map(([x, y]) => ({ x, y }));
+        nodes.push(routeLine(pts, res.attack ? '#ff8a80' : '#ffffff', unit, !res.attack));
+      }
+      nodes.push(svg('circle', { cx: res.to?.[0] ?? mx, cy: res.to?.[1] ?? my, r: 5 / unit, class: `target-dot${res.why ? ' bad' : res.attack ? ' attack' : ''}`, 'stroke-width': 1.5 / unit }));
+      if (res.label && unit >= 1) nodes.push(svg('text', { class: 'target-label', x: (res.to?.[0] ?? mx) + 8 / unit, y: res.to?.[1] ?? my, 'font-size': 9 / unit, 'stroke-width': 2.4 / unit }, res.label));
+      this.gPreview.replaceChildren(...nodes);
+    }, 60);
   }
 
   #preview(id) {
@@ -1229,7 +1133,7 @@ export class WorldMap {
         if (unit === this.drawnUnit) { this.#drawCities(); return; }
         this.drawnUnit = unit;
         this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities();
-        for (const [id, f] of this.fronts) this.#placeFront(id, f);
+        this.#drawFront(true);
       });
     }
   }
@@ -1326,12 +1230,13 @@ export class WorldMap {
         }
       }
       const id = e.target?.dataset?.id ?? null;
+      if (this.targeting?.pointPath) { const [mx, my] = this.#toMap(e.clientX, e.clientY); this.#previewPoint(mx, my); }
       if (id !== hover) {
         if (hover) this.uses.get(hover)?.classList.remove('hover');
         hover = id;
         if (id) this.uses.get(id)?.classList.add('hover');
         this.onHover?.(id);
-        if (this.targeting) this.#preview(id);
+        if (this.targeting && !this.targeting.pointPath) this.#preview(id);
       }
     });
     const end = (e) => {
@@ -1347,6 +1252,8 @@ export class WorldMap {
         if (army && this.targeting.onArmy?.(army)) return;
         if (fleet && this.targeting.onFleet?.(fleet)) return;
         if (node && this.targeting.onNode?.(node)) return;
+        // Armies go to the exact point clicked
+        if (this.targeting.onPoint && (id || d.hit.city)) { const [mx, my] = this.#toMap(d.x, d.y); this.targeting.onPoint(((mx % W) + W) % W, my, id ?? d.hit.city?.id); return; }
         if (!id && !army && !fleet && !node && this.targeting.onWater) { const [mx, my] = this.#toMap(d.x, d.y); this.targeting.onWater(((mx % W) + W) % W, my); return; }
         if (id && (!this.targeting.filter || this.targeting.filter(id))) this.targeting.onPick(id);
         else if (id) this.targeting.onReject?.(id);
@@ -1465,20 +1372,50 @@ function arrowPath(points, color, unit, dashed) {
   });
 }
 
+// An army's route over the land: a dotted (march) or solid (attack) line through its waypoints, with an arrowhead
+function routeLine(points, color, unit, dashed) {
+  const x0 = points[0].x;
+  let d = '';
+  let px = x0;
+  points.forEach((p, i) => {
+    let x = p.x;
+    while (x - px > W / 2) x -= W;
+    while (px - x > W / 2) x += W;
+    d += `${i ? 'L' : 'M'}${x.toFixed(1)} ${p.y.toFixed(1)}`;
+    px = x;
+  });
+  return svg('path', {
+    class: 'arrow route', d, stroke: color, 'stroke-width': 2.6 / unit, 'stroke-dasharray': dashed ? `${4 / unit} ${3 / unit}` : null,
+    'stroke-linejoin': 'round', 'marker-end': `url(#${markerFor(color)})`, opacity: 0.9,
+  });
+}
+
+// Enough of the game state to run the engine's own checks and path-finding in the browser: who controls each
+// province, the ground armies hold (rebuilt only when it changes), the wars and alliances, and the armies
+let fauxOcc = { rev: null, occ: {} };
 export function fauxState(s) {
   const regions = {};
   for (const id of ORDER) {
     const row = s.regions[INDEX[id]];
-    regions[id] = { id, ctrl: row[1], owner: row[0], infra: row[3] };
+    regions[id] = { id, ctrl: row[1], owner: row[0], infra: row[3], fort: row[4], gdp: row[9], pop: row[10] };
+  }
+  if (fauxOcc.rev !== s.occRev) {
+    const occ = {};
+    for (const [i, n, h] of s.occ ?? []) for (let k = 0; k < n; k++) occ[i + k] = h;
+    fauxOcc = { rev: s.occRev, occ };
   }
   return {
     regions,
+    occ: fauxOcc.occ,
+    week: s.week,
     wars: s.wars,
     alliances: Object.fromEntries(s.alliances.map((a) => [a.id, a])),
     treaties: s.treaties,
     minors: Object.fromEntries(Object.entries(s.minors).map(([id, m]) => [id, { puppetOf: m.puppetOf }])),
     countries: s.countries,
     fleets: Object.fromEntries((s.fleets ?? []).map((f) => [f.id, f])),
+    armies: Object.fromEntries((s.armies ?? []).map((a) => [a.id, a])),
+    battles: {},
   };
 }
 

@@ -7,6 +7,7 @@ import { GEO, ORDER } from '../public/js/engine/data/geo.js';
 import { route, freeForces, bury } from '../public/js/engine/military.js';
 import { rel, setRel } from '../public/js/engine/core.js';
 import { shipAt } from '../public/js/engine/shipping.js';
+import { CELLS_OF, holderAt } from '../public/js/engine/land.js';
 
 // A war now needs a case prepared in advance (in secret, about 45 seconds); the tests skip the wait
 function justify(g, a, b) {
@@ -320,15 +321,16 @@ test('a leader\'s order goes at once: one click sends the army, and it attacks w
   const army = Object.values(g.s.armies).find((a) => a.owner === 'tur');
   // A friendly province: it just marches
   assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'tur-ea' }), null);
-  assert.equal(army.op.kind, 'hold');
+  assert.equal(army.op.kind, 'move');
   // An enemy province: war is declared and it attacks, even badly disorganised
   justify(g, 'tur', g.s.regions['irq-ms'].ctrl);
   assert.equal(g.command('tur', { type: 'armyOrder', id: army.id, kind: 'go', target: 'irq-ms', declare: true }), null);
   assert.ok(g.s.wars.some((w) => w.a === 'tur' && w.b === 'irq'), 'war declared');
-  assert.equal(army.op.kind, 'attack');
+  assert.equal(army.op.kind, 'advance');
   army.org = 5;
   let attacked = false;
-  for (let i = 0; i < 4 && !attacked; i++) { g.tick(); attacked = Boolean(army.attacking) || g.s.regions['irq-ms'].ctrl === 'tur'; }
+  const taken = () => [...CELLS_OF['irq-ms']].some((i) => holderAt(g.s, i) === 'tur');
+  for (let i = 0; i < 4 && !attacked; i++) { g.tick(); attacked = Boolean(army.battle) || taken(); }
   assert.ok(attacked, `attacked at once (status: ${army.status})`);
 });
 
@@ -412,12 +414,14 @@ test('every army is on every map, and a failing attack is explained in the news'
   assert.equal(seen.exact, false, 'in rough figures');
   g.command('ind', { type: 'armyCreate', region: 'ind-gj', troops: 60, tanks: 50 });
   const a = Object.values(s.armies).find((x) => x.owner === 'ind');
-  justify(g, 'ind', g.s.regions['pak-kr'].ctrl);
-  assert.equal(g.command('ind', { type: 'armyOrder', id: a.id, kind: 'go', target: 'pak-kr', declare: true }), null);
+  const pak = Object.values(s.armies).find((x) => x.owner === 'pak');
+  justify(g, 'ind', 'pak');
+  // India goes after the Pakistani army itself: being at war is not enough for a battle, an attack is
+  assert.equal(g.command('ind', { type: 'armyOrder', id: a.id, kind: 'attack', enemy: pak.id, declare: true }), null);
   s.fresh = [];
-  for (let i = 0; i < 9; i++) g.step(1 / 9);
-  assert.match(a.status, /Thrown back at Karachi/);
-  assert.ok(s.fresh.some((f) => f.type === 'news' && /throws back India's attack on Karachi/.test(f.text)), 'world news');
+  for (let i = 0; i < 36 && !/Thrown back/.test(a.status); i++) { g.step(1 / 9); if ((s.stepped ?? 0) >= 0.999) g.tick(); }
+  assert.match(a.status, /Thrown back near/);
+  assert.ok(s.fresh.some((f) => f.type === 'news' && /throws back India's attack near/.test(f.text)), 'world news');
   const report = s.countries.ind.inbox.find((m) => /being thrown back/.test(m.text));
   assert.ok(report?.front, 'a front report for the attacker');
   assert.match(report.text, /Pakistan's .* \(~\d+K\)/, 'naming the army in the way');
@@ -434,21 +438,22 @@ test('numbers count: a tired, hungry 3M army still beats 1M on open ground and i
     s.countries.rus.short = { oil: 1 };
     return { g, s, r: Object.values(s.armies).find((x) => x.owner === 'rus'), k: Object.values(s.armies).find((x) => x.owner === 'kaz') };
   };
-  // Worn out (organisation 15) and out of oil, the big army still takes the province
+  // Worn out (organisation 15) and out of oil, the big army still beats the small one and takes its ground
   {
-    const { g, s, r } = setup();
-    justify(g, 'rus', g.s.regions['kaz-at'].ctrl);
-    assert.equal(g.command('rus', { type: 'armyOrder', id: r.id, kind: 'go', target: 'kaz-at', declare: true }), null);
-    for (let w = 0; w < 6 && s.regions['kaz-at'].ctrl !== 'rus'; w++) { for (let i = 0; i < 9; i++) { r.org = Math.min(r.org, 15); g.step(1 / 9); } g.tick(); }
-    assert.equal(s.regions['kaz-at'].ctrl, 'rus');
+    const { g, s, r, k } = setup();
+    justify(g, 'rus', 'kaz');
+    assert.equal(g.command('rus', { type: 'armyOrder', id: r.id, kind: 'attack', enemy: k.id, declare: true }), null);
+    const held = () => [...CELLS_OF['kaz-at']].filter((i) => holderAt(s, i) === 'rus').length;
+    for (let w = 0; w < 6 && s.armies[k.id] && k.troops > 600; w++) { for (let i = 0; i < 9; i++) { r.org = Math.min(r.org, 15); g.step(1 / 9); } g.tick(); }
+    assert.ok(!s.armies[k.id] || k.troops <= 600, `the 1M army is beaten (${Math.round(k.troops ?? 0)}K left)`);
+    assert.ok(held() > 0, 'and its ground taken');
   }
   // And a fresh 1M attacking it gets nowhere
   {
     const { g, s, r, k } = setup();
     justify(g, 'rus', 'kaz');
     g.command('rus', { type: 'war', target: 'kaz', goal: 'conquest' });
-    g.command('kaz', { type: 'armyOrder', id: k.id, kind: 'go', target: 'rus-ur' });
-    k.op.kind = 'attack';
+    assert.equal(g.command('kaz', { type: 'armyOrder', id: k.id, kind: 'attack', enemy: r.id }), null);
     for (let w = 0; w < 6; w++) { for (let i = 0; i < 9; i++) { r.org = 15; g.step(1 / 9); } g.tick(); }
     assert.equal(s.regions['rus-ur'].ctrl, 'rus');
   }

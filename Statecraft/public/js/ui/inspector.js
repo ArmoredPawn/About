@@ -1,6 +1,8 @@
 // The card that opens over the map for a province, an army or a fleet.
 
-import { citiesIn, cityDepths } from '../engine/cities.js';
+import { citiesIn } from '../engine/cities.js';
+import { cityCell, holderAt, dist as mapDist } from '../engine/land.js';
+import { fauxState } from './map.js';
 import { $, h, flag, money, nationName, regionName, troops, num, people, RES_COLORS, RES_LETTERS, fill } from './dom.js';
 import { RESOURCE_INFO, TERRAIN, PROVINCES } from '../engine/data/regions.js';
 import { GEO } from '../engine/data/geo.js';
@@ -25,23 +27,22 @@ export function closeInspector() {
 }
 
 // The cities of a province: output, share of the national economy, and which have fallen in a battle
-function provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from }) {
+function provinceCities(ctx, id, { owner, ctrl, gdp, pop }) {
   const s = ctx.state;
   const list = citiesIn(id, pop);
   if (!list.length) return null;
-  const fallen = new Set();
-  if (battleBy && prog > 0 && from && GEO[from]) {
-    const depth = cityDepths(id, GEO[from], list);
-    list.forEach((c, i) => { if (depth[i] <= prog / 100) fallen.add(c.name); });
-  }
+  // Who holds each city: whoever holds the ground it stands on
+  const faux = fauxState(s);
+  const holderOf = (c) => holderAt(faux, cityCell(id, c.name)) ?? ctrl;
+  const fallen = new Set(list.filter((c) => holderOf(c) !== ctrl).map((c) => c.name));
   // Each city's output goes to whoever holds it: its share is of that country's economy
   const gdpOf = (x) => s.countries[x]?.gdp ?? null;
   const row = (c) => {
-    const holder = fallen.has(c.name) ? battleBy : ctrl;
+    const holder = holderOf(c);
     const national = gdpOf(holder);
     const size = c.pop >= 1000 ? `${(c.pop / 1000).toFixed(1)}M` : `${Math.round(c.pop)}K`;
     return h('div.row.between.small.city-row', { style: { padding: '2px 0', cursor: 'pointer' }, title: 'Open the city', onclick: () => ctx.openCity(id, c.name) },
-      h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${size} people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `taken by ${nationName(s, battleBy)}`) : holder !== owner ? h('span.chip.warn', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : null),
+      h('span', c.capital ? '◆ ' : '', h('b', c.name), h('span.faint', ` ${size} people`), fallen.has(c.name) ? h('span.chip.bad', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : holder !== owner ? h('span.chip.warn', { style: { marginLeft: '6px' } }, `held by ${nationName(s, holder)}`) : null),
       h('span.mono', `${money(c.share * gdp)}${national ? ` · ${((c.share * gdp) / national * 100).toFixed(1)}% of ${nationName(s, holder)}` : ''}`));
   };
   // The biggest cities, and the rest of the towns behind a toggle (those already taken in a battle always shown)
@@ -51,7 +52,7 @@ function provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from }
   return h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, `CITIES (${list.length})`),
     top.map(row),
     rest.length ? h('details', h('summary.small.muted', { style: { cursor: 'pointer', padding: '2px 0' } }, `${rest.length} more town${rest.length > 1 ? 's' : ''}`), rest.map(row)) : null,
-    h('p.muted.small', { style: { marginTop: '4px' } }, 'Output a year, and the share of the economy of the country that holds it: an occupied city works for its occupier. In a battle the front takes the cities one by one, each lost to the defender as it falls. Zoom in on the map for the city close-up.'));
+    h('p.muted.small', { style: { marginTop: '4px' } }, 'Output a year, and the share of the economy of the country that holds it: an occupied city works for its occupier. The front takes the cities one by one as armies advance, each lost to the defender as it falls. Zoom in on the map for the city close-up.'));
 }
 
 export function showRegion(ctx, id) {
@@ -108,7 +109,7 @@ export function showRegion(ctx, id) {
     h('button.icon-btn.close', { onclick: () => ctx.closeSelection(), 'aria-label': 'Close' }, '✕'),
     h('h2', regionName(id)),
     h('div.row.gap.sub', flag(owner), h('span', nationName(s, owner)), occupied ? h('span.chip.bad', `Held by ${nationName(s, ctrl)}`) : null, GEO[id].coast ? h('span.chip', 'Coastal') : h('span.chip', 'Landlocked')),
-    battleBy ? h('div.warning.bad', { style: { marginTop: '10px' } }, `Battle: ${nationName(s, battleBy)} is ${prog}% of the way to taking it. The dashed white line on the map is the front: ${nationName(s, battleBy)} holds the ground behind it.`, h('div', { style: { marginTop: '6px' } }, h('button.btn.small', { onclick: () => ctx.closeUp?.(id) }, 'Close-up of the battle'))) : null,
+    battleBy ? h('div.warning.bad', { style: { marginTop: '10px' } }, `The front runs through it: ${nationName(s, battleBy)} holds about ${prog}% of its ground and ${nationName(s, ctrl)} the rest. The dashed white line on the map is the front; each side gets the output of what it holds.${(s.fights ?? []).some((b) => b.region === id) ? ' There is fighting here now.' : ''}`, h('div', { style: { marginTop: '6px' } }, h('button.btn.small', { onclick: () => ctx.closeUp?.(id) }, 'Close-up'))) : null,
     rebels > 0 ? h('div.warning.bad', { style: { marginTop: '10px' } }, `🔥 Uprising: about ${troops(rebels)} armed rebels.`,
       ctrl === me ? h('div.actions',
         h('button.btn.small', { onclick: () => pickArmy(ctx, id) }, 'Send an army'),
@@ -121,7 +122,7 @@ export function showRegion(ctx, id) {
       fact('Infrastructure', `${infra}/10`), fact('Fortifications', `${fort}/5`),
       fact('War damage', `${dmg}%`), fact('Unrest', `${unrest}%`)),
     row[16] ? h('div.warning.bad', { style: { marginTop: '10px' } }, `☢ Radioactive fallout until week ${row[16]}: nothing can be mined, farmed or built here, and troops inside sicken.`) : null,
-    provinceCities(ctx, id, { owner, ctrl, battleBy, prog, gdp, pop, from: row[12] }),
+    provinceCities(ctx, id, { owner, ctrl, gdp, pop }),
     provincePeople(ctx, id),
     Object.keys(res).length ? h('div', h('h3.small.muted', { style: { margin: '10px 0 6px' } }, 'RESOURCES'), Object.entries(res).map(([r, [cur, pot]]) => {
       const info = RESOURCE_INFO[r];
@@ -144,20 +145,18 @@ export function showCity(ctx, id, name) {
   const s = ctx.state;
   const row = s.regions[ctx.regionIndex[id]];
   if (!row) return closeInspector();
-  const [owner, ctrl, dmg, , fort, battleBy, prog, , gar, gdp, pop] = row;
+  const [owner, ctrl, dmg, , fort, , , , gar, gdp, pop] = row;
   const list = citiesIn(id, pop);
   const city = list.find((c) => c.name === name);
   if (!city) return showRegion(ctx, id);
   const me = s.me;
-  const from = row[12];
-  let fallen = false;
-  let depth = null;
-  if (battleBy && from && GEO[from]) {
-    const depths = cityDepths(id, GEO[from], list);
-    depth = depths[list.indexOf(city)];
-    fallen = prog > 0 && depth <= prog / 100;
-  }
-  const holder = fallen ? battleBy : ctrl;
+  // Who holds the city: whoever holds the ground it stands on
+  const faux = fauxState(s);
+  const cell = cityCell(id, name);
+  const holder = holderAt(faux, cell) ?? ctrl;
+  const fallen = holder !== owner;
+  // The nearest battle, and how far the front is
+  const near = (s.fights ?? []).map((b) => ({ b, d: mapDist(b.x, b.y, city.x, city.y) })).sort((a, b) => a.d - b.d)[0];
   const output = city.share * gdp * (1 - dmg / 100);
   const national = s.countries[holder]?.gdp;
   const info = s.battleInfo?.[id];
@@ -167,12 +166,11 @@ export function showCity(ctx, id, name) {
   // A city's share of the province's people: roughly its share of the garrison and the home guard too
   const popShare = Math.min(1, city.pop / Math.max(1, pop * 1000));
   const fact = (label, value) => h('div', h('span', label), h('b', value));
-  const armies = s.armies.filter((a) => !a.sea && (a.region === id || a.attacking === id));
-  const status = !battleBy ? (holder === owner ? 'Quiet' : `Occupied by ${nationName(s, holder)}`)
-    : fallen ? `Taken by ${nationName(s, battleBy)} in the fighting`
-      : street ? `Street fighting: ${nationName(s, ctrl)}'s defenders are fighting for every block`
-        : depth != null && depth - prog / 100 < 0.15 ? `The front is closing in: ${nationName(s, battleBy)} is ${Math.max(1, Math.round((depth - prog / 100) * 100))}% of the province away`
-          : `Behind the front: ${nationName(s, battleBy)} is attacking ${regionName(id)} (${prog}% taken)`;
+  const armies = s.armies.filter((a) => !a.sea && a.x != null && mapDist(a.x, a.y, city.x, city.y) < 12);
+  const status = street ? `Street fighting: ${nationName(s, holder)}'s defenders are fighting for every block`
+    : near && near.d < 10 ? `Fighting about ${Math.round(near.d * 20)} km away: ${nationName(s, near.b.by)} is attacking ${nationName(s, near.b.holder)} (${near.b.ratio}:1)`
+      : fallen ? `Held by ${nationName(s, holder)}${holder === ctrl ? '' : ': taken in the fighting'}`
+        : holder === owner ? 'Quiet' : `Occupied by ${nationName(s, holder)}`;
   const actions = [];
   if (atWarWith(holder)) {
     actions.push(h('button.btn.small.primary', { onclick: () => attackDialog(ctx, { target: id }) }, 'Attack the province…'));
@@ -186,7 +184,7 @@ export function showCity(ctx, id, name) {
     h('div.faint.small', { style: { textTransform: 'uppercase', letterSpacing: '0.06em' } }, city.capital ? 'Capital city' : 'City'),
     h('h2', name),
     h('div.row.gap.sub', flag(holder), h('span', nationName(s, holder)), h('span.faint', `· ${regionName(id)}`), holder !== owner ? h('span.chip.warn', `${nationName(s, owner)}'s`) : null),
-    h('div', { class: `warning ${street || fallen ? 'bad' : battleBy ? 'warn' : ''}`, style: { marginTop: '10px' } }, status),
+    h('div', { class: `warning ${street || fallen ? 'bad' : near && near.d < 10 ? 'warn' : ''}`, style: { marginTop: '10px' } }, status),
     h('div.facts',
       fact('People', people(city.pop / 1000)),
       fact('Output', `${money(output)} a year`),

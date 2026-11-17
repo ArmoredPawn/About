@@ -6,6 +6,7 @@ import { GEO } from './data/geo.js';
 import { TECH_FIELDS } from './data/world.js';
 import { REGION_NAMES } from './names.js';
 import { clamp, news, alert, alive, nameOf, money, nextId, atWar, friendlyGround } from './core.js';
+import { nearestLand, holderAt } from './land.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, lineProblem, hasLine, LINE_SETUP } from './economy.js';
 import {
   createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setAuto, prepareLanding,
@@ -262,22 +263,25 @@ const HANDLERS = {
   // but only once the attack itself is known to be possible
   // kind 'go' sends the army to the province whatever it takes: marching through friendly ground, fighting
   // through enemy ground, or landing from the sea
-  armyOrder(s, c, { id, ids, kind, target, aggr, declare }) {
-    const list = (ids ?? [id]).map((x) => s.armies[x]);
+  // The target is a province, a point on the map (x, y), or an enemy army (enemy)
+  armyOrder(s, c, { id, ids, kind, target, x, y, enemy, aggr, declare }) {
+    const list = (ids ?? [id]).map((a) => s.armies[a]);
     if (!list.length || list.some((a) => !a)) return 'Pick an army.';
-    const holder = s.regions[target]?.ctrl;
-    if (declare && ['attack', 'invade', 'go'].includes(kind) && holder && holder !== c.id && !atWar(s, c.id, holder)
-      // "go" to an ally's or partner's province just marches there; an explicit attack on them is war
+    const order = { kind, target, x, y, enemy, aggr };
+    const point = Number.isFinite(Number(x)) && Number.isFinite(Number(y)) ? nearestLand(Number(x), Number(y)) : -1;
+    const holder = enemy ? s.armies[enemy]?.owner : point >= 0 ? holderAt(s, point) : s.regions[target]?.ctrl;
+    if (declare && ['attack', 'invade', 'go', 'advance'].includes(kind) && holder && holder !== c.id && !atWar(s, c.id, holder)
+      // "go" to an ally's or partner's ground just marches there; an explicit attack on them is war
       && !(kind === 'go' && friendlyGround(s, c.id, holder))) {
       for (const a of list) {
-        const err = checkOrder(s, c, a, { kind, target, aggr });
+        const err = checkOrder(s, c, a, order);
         if (err) return list.length > 1 ? `${a.name}: ${err}` : err;
       }
       const err = declareWar(s, c, holder, 'conquest', { leaveShared: true });
       if (err) return err;
     }
     for (const a of list) {
-      const err = orderArmy(s, c, a, { kind, target, aggr });
+      const err = orderArmy(s, c, a, order);
       if (err) return list.length > 1 ? `${a.name}: ${err}` : err;
       a.orderedAt = s.week;
     }

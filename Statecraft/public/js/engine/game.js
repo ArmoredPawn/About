@@ -5,7 +5,8 @@ import { RESOURCES } from './data/regions.js';
 import { createState, promoteMinors, calibrateUpkeep } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news, enemiesOf } from './core.js';
 import { marketTick, economyTick, debtRatio, debtLimit, upkeep, blockadeEffect } from './economy.js';
-import { militaryTick, militaryStep, garrisons, marchSpeed, armyFuel, breakthroughOf, airliftCover, pocketsView } from './military.js';
+import { militaryTick, militaryStep, garrisons, marchSpeed, armyFuel, breakthroughOf, airliftCover, pocketsView, zocOf, syncProvinces } from './military.js';
+import { occRuns } from './land.js';
 import { initDoctrine, doctrineTick, doctrineView } from './doctrine.js';
 import { routesTick, routesView, knowsRoute } from './routes.js';
 import { diplomacyTick } from './diplomacy.js';
@@ -212,8 +213,22 @@ export class Game {
     const sees = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
     const ships = (s.shipments ?? []).filter((x) => !x.done && x.mode === 'sea' && x.x != null && cargoSeen(s, cid, x, sees))
       .map((x) => [x.id, x.x, x.y]);
-    return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles, ships, battleInfo: battleInfo(s) };
+    // The ground armies hold, only when it has changed since this leader's last update
+    this.sentOcc ??= {};
+    const occ = this.sentOcc[cid] === (s.occRev ?? 0) ? null : occRuns(s);
+    this.sentOcc[cid] = s.occRev ?? 0;
+    // Who controls each province travels with the ground: a province that changes hands mid-week is redrawn at once
+    const ctrl = occ ? ORDER.map((id) => s.regions[id].ctrl) : null;
+    return { type: 'live', week: s.week, armies: armiesFor(s, cid), fleetMoves: fleets, battles, ships, battleInfo: battleInfo(s), fights: fightsFor(s), occ, occRev: s.occRev ?? 0, ctrl, pockets: pocketsView(s) };
   }
+}
+
+// The battles going on now, where they are and how they go: { id, x, y, def, att, by, holder, ratio, trend, pincer, street }
+function fightsFor(s) {
+  return Object.values(s.battles ?? {}).filter((b) => b.started).map((b) => ({
+    id: b.id, x: b.x, y: b.y, def: b.def, att: b.att, by: b.by, holder: b.holder, region: b.region, ratio: b.ratio, trend: b.trend,
+    pincer: Boolean(b.pincer), street: b.street ?? null, militia: b.militia ?? 0, attackTroops: approx(b.attackTroops ?? 0, 5), defendTroops: approx(b.defendTroops ?? 0, 5),
+  }));
 }
 
 // Can this leader see this cargo? Covert and secret cargoes, and those on a private shipping line, only by the two
@@ -229,10 +244,10 @@ function cargoSeen(s, cid, x, knows) {
 // What the map needs to show about each battle beyond the front line: a pincer, street fighting, the home guard
 function battleInfo(s) {
   const out = {};
-  for (const reg of Object.values(s.regions)) {
-    const b = reg.battle;
-    if (!b) continue;
-    out[reg.id] = { pincer: Boolean(b.pincer), street: b.street ?? null, militia: b.militia ?? 0, bt: b.bt ?? 0, trend: b.trend ?? null };
+  for (const b of Object.values(s.battles ?? {})) {
+    if (!b.started || !b.region) continue;
+    const was = out[b.region];
+    out[b.region] = { pincer: Boolean(b.pincer || was?.pincer), street: b.street ?? was?.street ?? null, militia: Math.max(b.militia ?? 0, was?.militia ?? 0), bt: b.bt ?? 0, trend: b.trend ?? null };
   }
   return out;
 }
@@ -248,11 +263,11 @@ function armiesFor(s, cid) {
   return Object.values(s.armies).map((a) => {
     const own = friend(a.owner) || knows(a.owner);
     return own
-      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: a.path, speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true,
+      ? { id: a.id, owner: a.owner, name: a.name, region: a.region, x: a.x, y: a.y, battle: a.battle ?? null, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: (a.path ?? []).map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]), zoc: r1(zocOf(a)), speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true,
         auto: Boolean(a.auto), assist: Boolean(a.assist), buildup: a.buildup ?? null, fuel: { now: armyFuel(a), hold: armyFuel(a, 'hold'), march: armyFuel(a, 'march'), fight: armyFuel(a, 'fight') },
         pocket: a.pocket ?? null, pocketSea: Boolean(a.pocketSea), pocketWeeks: a.pocketWeeks ?? 0, breakthrough: r1(breakthroughOf(s, a)), airlift: a.pocket ? r1(airliftCover(s, a)) : 0,
         lift: (s.countries[a.owner]?.airlifts ?? []).find((x) => x.army === a.id)?.aircraft ?? 0, breakout: (a.breakout ?? -1) > s.week, prepared: Boolean(a.assault?.prepared) }
-      : { id: a.id, owner: a.owner, name: a.name, region: a.region, troops: seen ? r0(a.troops) : approx(a.troops, 5), tanks: seen ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen, pocket: a.pocket ?? null };
+      : { id: a.id, owner: a.owner, name: a.name, region: a.region, x: a.x, y: a.y, battle: a.battle ?? null, zoc: r1(zocOf(a)), troops: seen ? r0(a.troops) : approx(a.troops, 5), tanks: seen ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen, pocket: a.pocket ?? null };
   });
 }
 
@@ -272,6 +287,11 @@ function upgrade(s) {
   if (!s.pipelines) initEnergy(s);
   initClimate(s);
   initSpace(s);
+  // Saved before the front ran through provinces: ground is held cell by cell from now on
+  s.occ ??= {};
+  delete s.pockets;
+  for (const reg of Object.values(s.regions)) if (reg.battle && reg.battle.fighting == null) reg.battle = null;
+  syncProvinces(s, true);
 }
 
 /* ---------- Rankings ---------- */
@@ -399,6 +419,9 @@ export function view(s, cid, { gar, ranks }) {
     routes: routesView(s, cid),
     pockets: pocketsView(s),
     battleInfo: battleInfo(s),
+    fights: fightsFor(s),
+    occ: occRuns(s),
+    occRev: s.occRev ?? 0,
     doctrines: Object.fromEntries(Object.keys(s.countries).filter((id) => id === cid || enemiesOf(s, cid).has(id) || (me && (me.intel[id] ?? -1) > s.week)).map((id) => [id, doctrineView(s, cid, id)])),
   };
 }

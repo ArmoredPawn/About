@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../public/js/engine/game.js';
-import { createArmy, orderArmy, capture } from '../public/js/engine/military.js';
+import { createArmy, CONTACT, zocOf } from '../public/js/engine/military.js';
+import { CELLS_OF, holderAt, neighbours4, isLand, cellX, cellY, dist } from '../public/js/engine/land.js';
 import { startWar } from '../public/js/engine/diplomacy.js';
 import { CITIES } from '../public/js/engine/data/cities.js';
 import { COUNTRIES } from '../public/js/engine/data/countries.js';
@@ -20,41 +21,62 @@ const army = (s, owner, region, troops = 40) => {
   return Object.values(s.armies).filter((a) => a.owner === owner && a.region === region).at(-1);
 };
 
-test('a computer-run army behind the line moves up to the front', () => {
+// Our ground next to an enemy's: where the front is
+const frontNear = (s, owner, enemy, x, y, r) => {
+  for (const i of [...CELLS_OF['deu-be'], ...CELLS_OF['deu-sx'], ...CELLS_OF['deu-by'], ...CELLS_OF['deu-bw']]) {
+    if (holderAt(s, i) !== owner || dist(cellX(i), cellY(i), x, y) > r) continue;
+    if (neighbours4(i).some((j) => isLand(j) && holderAt(s, j) === enemy)) return true;
+  }
+  return false;
+};
+
+test('a computer-run country at war puts an army on its front line', () => {
   const g = game(11);
   const s = g.s;
   startWar(s, 'deu', 'pol');
   // Baden-Württemberg borders only countries Germany is at peace with
   const a = army(s, 'deu', 'deu-bw');
-  steps(g, 3);
-  assert.ok(['deu-be', 'deu-sx'].includes(a.op.target), `it heads for the Polish front (${a.op.target})`);
-  assert.equal(a.op.kind, 'hold');
-  assert.match(a.status, /Holding the line|On the march/);
+  g.tick();
+  const at = a.op.at ?? [a.x, a.y];
+  // To hold a stretch of the line, or (Germany being the stronger) to push on into Poland
+  const ok = a.op.kind === 'advance' ? s.regions[a.op.target]?.owner === 'pol' : frontNear(s, 'deu', 'pol', at[0], at[1], CONTACT);
+  assert.ok(ok, `it is sent to the Polish front (${a.op.kind} near ${a.op.target})`);
+  assert.match(a.status, /Holding the line|On the march|Moving|Advancing/);
 });
 
-test('a computer-run army goes to defend the province next door when it is attacked', () => {
+test('only an army that means to attack starts a battle: two armies at war can face each other for weeks', () => {
   const g = game(12);
   const s = g.s;
   startWar(s, 'deu', 'pol');
-  const attacker = army(s, 'deu', 'deu-sx', 120);
-  assert.equal(orderArmy(s, s.countries.deu, attacker, { kind: 'attack', target: 'pol-lw', aggr: 'allout' }), null);
-  // Silesia is not on the front with Germany, but Lower Silesia next to it is about to be
-  const d = army(s, 'pol', 'pol-si');
-  steps(g, 6);
-  assert.ok(s.regions['pol-lw'].battle || s.regions['pol-lw'].ctrl === 'deu', 'the attack has begun');
-  assert.equal(d.op.target, 'pol-lw', 'the defenders move to meet it');
+  const d = army(s, 'deu', 'deu-be', 60);
+  const p = army(s, 'pol', 'pol-wp', 60);
+  // Both told to hold, close enough to fight: a phoney war
+  d.op = { kind: 'hold', target: d.region, at: [d.x, d.y], aggr: 'balanced' };
+  p.op = { kind: 'hold', target: p.region, at: [p.x, p.y], aggr: 'balanced' };
+  s.countries.deu.human = { name: 'Berlin' };
+  s.countries.pol.human = { name: 'Warsaw' };
+  steps(g, 8);
+  assert.equal(Object.keys(s.battles ?? {}).length, 0, 'no battle without an attack');
+  // One attacks: now they fight
+  assert.equal(g.command('deu', { type: 'armyOrder', id: d.id, kind: 'attack', enemy: p.id }), null);
+  for (let i = 0; i < 24 && !Object.keys(s.battles ?? {}).length; i++) { g.step(0.125); if ((s.stepped ?? 0) >= 0.999) g.tick(); }
+  assert.ok(Object.values(s.battles).some((b) => b.def === p.id && b.att.includes(d.id)), 'the attack starts a battle');
 });
 
-test('defenders driven out fall back onto the new line, connected to home, and hold there', () => {
-  const g = game(13);
+test('land no army holds is marched through and taken; ground an army holds must be won in battle', () => {
+  const g = game(13, 'deu');
   const s = g.s;
   startWar(s, 'deu', 'pol');
-  const d = army(s, 'pol', 'pol-lw');
-  d.op = { kind: 'hold', target: 'pol-lw', aggr: 'balanced' };
-  capture(s, 'pol-lw', 'deu');
-  assert.ok(['pol-si', 'pol-wp'].includes(d.region), `it falls back into Poland (${d.region})`);
-  assert.equal(d.op.target, d.region, 'and holds the province it fell back to');
-  assert.match(d.status, /Fell back/);
+  const d = army(s, 'deu', 'deu-be', 120);
+  assert.equal(g.command('deu', { type: 'armyOrder', id: d.id, kind: 'go', target: 'pol-wp' }), null);
+  assert.equal(d.op.kind, 'advance');
+  for (let i = 0; i < 24 && !Object.keys(s.battles ?? {}).length; i++) { g.step(0.125); if ((s.stepped ?? 0) >= 0.999) g.tick(); }
+  const taken = [...CELLS_OF['pol-wp']].filter((i) => holderAt(s, i) === 'deu').length;
+  assert.ok(taken > 5, `it takes the ground it crosses (${taken} cells of Pomerania)`);
+  // A Polish army in the way holds the ground around it
+  const p = army(s, 'pol', 'pol-wa', 80);
+  const inZone = [...CELLS_OF['pol-wa']].filter((i) => dist(cellX(i), cellY(i), p.x, p.y) < zocOf(p) * 0.8);
+  assert.ok(inZone.every((i) => holderAt(s, i) !== 'deu'), 'its zone is not simply walked into');
 });
 
 test("a leader's army stays where it is put, unless told to support the front", () => {
@@ -66,8 +88,9 @@ test("a leader's army stays where it is put, unless told to support the front", 
   assert.equal(a.region, 'deu-bw');
   assert.ok(!a.path.length, 'it waits for orders');
   assert.equal(g.command('deu', { type: 'armyAssist', id: a.id, on: true }), null);
-  steps(g, 3);
-  assert.ok(['deu-be', 'deu-sx'].includes(a.op.target), `told to support the front, it moves up (${a.op.target})`);
+  steps(g, 6);
+  const at = a.op.at ?? [a.x, a.y];
+  assert.ok(frontNear(s, 'deu', 'pol', at[0], at[1], CONTACT * 1.6), `told to support the front, it moves up to the line (${a.op.target})`);
 });
 
 test('every country has dozens of cities and towns', () => {

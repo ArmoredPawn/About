@@ -5,7 +5,8 @@
 import { h, regionName, nationName, troops } from './dom.js';
 import { modal } from './dialogs.js';
 import { GEO } from '../engine/data/geo.js';
-import { route, hypotheticalWar, landingProblem, blockers, noRouteReason, distanceKm, terrainOf } from '../engine/military.js';
+import { route, hypotheticalWar, landingProblem, blockers, noRouteReason, distanceKm, terrainOf, previewPath, checkOrder } from '../engine/military.js';
+import { nearestLand, regionAt, holderAt, cellX, cellY } from '../engine/land.js';
 import { barrels } from './panels/military.js';
 import { atWar, friendlyGround } from '../engine/core.js';
 import { fauxState } from './map.js';
@@ -276,4 +277,103 @@ function multiAttack(ctx, candidates, target) {
   });
   document.querySelector('#modal .modal-foot')?.append(sendBtn);
 
+}
+
+/* ---------- Orders to a point on the map, or at an enemy army ---------- */
+//
+// An army goes to the exact point clicked. Our side's ground: it marches there and holds. Enemy ground: it
+// advances, taking the ground it crosses and attacking any army in its way. An enemy army: it goes after it.
+
+// What sending this army to this point (or after this army) means:
+// { x, y, region, holder, friendly, declare, path, why, attack }
+export function pointOptions(ctx, army, target) {
+  const s = ctx.state;
+  const faux = fauxState(s);
+  let x;
+  let y;
+  let holder;
+  let region;
+  if (target.enemy) {
+    const e = s.armies.find((a) => a.id === target.enemy);
+    if (!e || e.x == null) return { why: 'That army is out of reach.' };
+    [x, y] = [e.x, e.y];
+    holder = e.owner;
+    region = e.region;
+  } else {
+    const cell = nearestLand(target.x, target.y);
+    if (cell < 0) return { why: 'Pick a point on land.' };
+    [x, y] = [cellX(cell), cellY(cell)];
+    holder = holderAt(faux, cell);
+    region = regionAt(cell);
+  }
+  if (army.sea) return { x, y, region, holder, why: `${army.name} is at sea and can't take new orders until it lands.` };
+  const friendly = holder === s.me || friendlyGround(faux, s.me, holder);
+  const declare = !friendly && !atWar(faux, s.me, holder);
+  const order = target.enemy ? { kind: 'attack', enemy: target.enemy } : { kind: 'go', x, y };
+  const me = { id: s.me, ships: s.you.ships, carriers: s.you.carriers, tech: s.you.tech };
+  const world = declare ? hypotheticalWar(faux, s.me, holder) : faux;
+  let why = null;
+  if (s.minors[holder]?.capitulated) why = `${nationName(s, holder)} has already surrendered. Decide its fate in Diplomacy.`;
+  else if (s.countries[holder]?.exile) why = `${nationName(s, holder)}'s government has fallen.`;
+  else why = checkOrder(faux, me, { ...army, owner: s.me }, order);
+  const path = why ? null : previewPath(world, s.me, [army.x, army.y], target.enemy ? { enemy: target.enemy } : { x, y });
+  return { x, y, region, holder, friendly, declare, path, why, attack: !friendly };
+}
+
+// For the preview while choosing: the route and what it means
+export function pointPreview(ctx, army, x, y) {
+  const s = ctx.state;
+  if (army.x == null) return null;
+  const o = pointOptions(ctx, army, { x, y });
+  if (!o.region) return null;
+  const label = o.why ? null : o.friendly ? `Move to ${regionName(o.region)}` : `${o.declare ? 'War: ' : ''}Advance on ${regionName(o.region)} (${nationName(s, o.holder)})`;
+  return { from: [army.x, army.y], path: o.path, to: [o.x, o.y], attack: o.attack, why: o.why, label };
+}
+
+// How long a march along waypoints takes, and the oil it burns
+function pointEstimate(army, path, attack) {
+  if (!army.speed || !army.fuel || !path?.length) return null;
+  let km = 0;
+  let [px, py] = [army.x, army.y];
+  for (const [x, y] of path) {
+    km += Math.hypot(x - px, y - py) * 20 * terrainOf(regionAt(nearestLand(x, y)) ?? army.region).move;
+    [px, py] = [x, y];
+  }
+  const weeks = km / Math.max(50, army.speed);
+  return { weeks, oil: weeks * army.fuel.march + (attack ? 2 * army.fuel.fight : 0) };
+}
+
+// Sends an army to a point, or after an enemy army. Asks first only when it means declaring war.
+export async function sendArmyTo(ctx, army, target) {
+  const s = ctx.state;
+  const o = pointOptions(ctx, army, target);
+  if (o.why) {
+    if (!army.sea && o.region && /military access/.test(o.why) && accessDialog(ctx, army, o.region)) return false;
+    ctx.hint(o.why, 'bad', 8000);
+    return false;
+  }
+  const enemy = target.enemy ? s.armies.find((a) => a.id === target.enemy) : null;
+  const what = enemy ? `going after ${nationName(s, enemy.owner)}'s ${enemy.name}` : o.friendly ? `moving to ${regionName(o.region)}` : `advancing on ${regionName(o.region)}`;
+  const est = pointEstimate(army, o.path, o.attack);
+  const cmd = enemy ? { type: 'armyOrder', id: army.id, kind: 'attack', enemy: enemy.id, declare: true } : { type: 'armyOrder', id: army.id, kind: 'go', x: o.x, y: o.y, declare: true };
+  const go = async () => {
+    const err = await ctx.send(cmd);
+    if (!err) ctx.hint(`${army.name}: ${what}.${estimateText(est)}`, 'good', 5000);
+    return !err;
+  };
+  if (!o.declare) return go();
+  if (!caseMade(ctx, o.holder)) {
+    await justifyDialog(ctx, o.holder, `When it is ready, send ${army.name} again.`);
+    return false;
+  }
+  const shared = s.alliances.filter((al) => al.members.includes(s.me) && al.members.includes(o.holder));
+  const notice = warNotice(ctx, o.holder, shared);
+  modal({
+    title: `War with ${nationName(s, o.holder)}?`,
+    body: h('div.stack', h('p.small', `${army.name} (${troops(army.troops)} troops) will ${enemy ? `attack ${enemy.name}` : `advance on ${regionName(o.region)}`} as soon as war is declared.${estimateText(est)}`), notice.el),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, {
+      label: 'Declare war & send', kind: 'danger', onClick: async () => (await go()) || false,
+    }],
+  });
+  return true;
 }

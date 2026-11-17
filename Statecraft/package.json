@@ -11,6 +11,7 @@
     "build:map": "node scripts/build-map.js",
     "build:seas": "node scripts/build-seas.js",
     "build:cities": "node scripts/build-cities.js",
+    "build:land": "node scripts/build-land.js",
     "test": "node --test"
   },
   "engines": {
