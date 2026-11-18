@@ -12,9 +12,8 @@ import {
 } from './core.js';
 import { PROVINCES } from './data/regions.js';
 import { aiDoctrine } from './doctrine.js';
-import { coastguardCanStop, orderCoastguard } from './shipping.js';
-import { openRoute, planRoute } from './routes.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, debtRatio, debtLimit, navalPower, upkeep, lineProblem, hasLine, LINE_SETUP } from './economy.js';
+import { aiSupplyLines } from './military.js';
 import { createArmy, orderArmy, freeForces, garrisons, defenceEstimate, armyAttackEstimate, route, setAirCampaign, missileStrike, settleMinor, breakOut, setAirlift, regionName, MAX_ARMIES, CONTACT, holdFactor, terrainOf } from './military.js';
 import { CELLS_OF, holderAt, neighbours4, isLand, cellX, cellY, cellAt, regionAt, provinceCell, dist } from './land.js';
 import { aiNavy } from './navy.js';
@@ -63,8 +62,7 @@ export function aiTick(s) {
     if ((s.week + c.ai.next) % 4 === 3) { aiFinance(s, c); aiCoups(s, c); }
     if ((s.week + c.ai.next) % 26 === 7) aiClimate(s, c);
     if ((s.week + c.ai.next) % 8 === 6) aiSpace(s, c);
-    if (enemiesOf(s, c.id).size) war(s, c, gar);
-    if (c.ai.stopLines) stopLines(s, c);
+    if (enemiesOf(s, c.id).size) { war(s, c, gar); aiSupplyLines(s, c); }
     if ((s.week + c.ai.next) % 8 === 2) aiDoctrine(s, c);
     else {
       if (c.mob > 0 && (s.week + c.ai.next) % 8 === 0) c.mob -= 1;
@@ -172,7 +170,11 @@ function answerProposals(s, c) {
   for (const p of Object.values(s.proposals)) {
     if (p.to !== c.id) continue;
     if (s.week - p.week < 1 && p.kind !== 'callToArms') continue; // a week to think it over
-    respond(s, c.id, p.id, judge(s, c, p));
+    const yes = judge(s, c, p);
+    // Asked to name a price for a secret deal: the market value, plus more the less it likes the buyer
+    const asking = p.kind === 'deal' && (p.terms.price == null || p.terms.price === '');
+    const quote = asking ? Number(p.terms.qty) * RESOURCE_INFO[p.terms.res].value * s.market.price[p.terms.res] * (1.15 + Math.max(0, -rel(s, c.id, p.from)) / 100) : undefined;
+    respond(s, c.id, p.id, yes, { price: quote });
   }
 }
 
@@ -180,6 +182,11 @@ function judge(s, c, p) {
   const r = rel(s, c.id, p.from);
   const t = p.terms;
   switch (p.kind) {
+    // A new alliance of the two of us: as for joining one, among friends
+    case 'pact': {
+      if (t.kind === 'military' && alliancesOf(s, c.id, 'military').length >= 2) return false;
+      return r >= (t.kind === 'military' ? 45 : 20) && !atWar(s, c.id, p.from);
+    }
     case 'alliance': {
       const al = s.alliances[t.alliance];
       if (!al) return false;
@@ -194,7 +201,8 @@ function judge(s, c, p) {
     case 'access': return r >= 40;
     case 'deal': {
       const value = Number(t.qty) * RESOURCE_INFO[t.res].value * s.market.price[t.res];
-      const price = Number(t.price);
+      const asking = t.price == null || t.price === '';
+      const price = asking ? value * 1.15 : Number(t.price);
       if (r < -20) return false;
       if (t.seller === c.id) {
         const spare = (c.prod[t.res] ?? 0) - (c.demand[t.res] ?? 0);
@@ -649,19 +657,6 @@ function expedition(s, c, sectors, enemySet, ratio) {
   alert(s, best.ally, `${c.name} is sending an army of about ${Math.round(troops / 5) * 5}K troops to help us hold the line near ${where}.`, 'good', { region: regionAt(cellAt(best.sec.x, best.sec.y)) });
 }
 
-// A hostile country's coastguard stops the cargoes of a secret line it has found in its waters
-function stopLines(s, c) {
-  const lines = c.ai.stopLines;
-  if (!lines) return;
-  for (const sh of s.shipments ?? []) {
-    const id = sh.lane?.route;
-    if (!id || !lines[id] || !coastguardCanStop(s, c.id, sh)) continue;
-    if ((sh.coast ?? []).some((o) => o.by === c.id)) continue;
-    orderCoastguard(s, c, sh, 'seize');
-  }
-  for (const id of Object.keys(lines)) if (!s.routes?.[id] || s.routes[id].closed) delete lines[id];
-}
-
 /* ---------- The home front ---------- */
 
 function homeFront(s, c) {
@@ -796,16 +791,6 @@ function standing(s, c) {
     const partner = others.filter((o) => !(o.minor && ftas(o.id) >= 4) && rel(s, c.id, o.id) > 30 && !treaty(s, 'fta', c.id, o.id) && !sanctioning(s, c.id, o.id) && !sanctioning(s, o.id, c.id) && !Object.values(s.proposals).some((p) => p.from === c.id && p.to === o.id))
       .sort((a, b) => b.gdp - a.gdp)[0];
     if (partner && !(partner.human && chance(s, 0.6))) propose(s, c.id, partner.id, 'fta');
-  }
-  // A shipping line to its biggest free-trade partner overseas
-  if (!c.minor && chance(s, 0.04) && Object.values(s.routes ?? {}).filter((r) => r.by === c.id && !r.closed).length < 2) {
-    const partner = s.treaties.filter((t) => t.kind === 'fta' && (t.a === c.id || t.b === c.id)).map((t) => (t.a === c.id ? t.b : t.a))
-      .map((id) => s.countries[id]).filter((o) => o && alive(s, o.id)).sort((a, b) => b.gdp - a.gdp)[0];
-    if (partner) {
-      const mine = Object.values(s.regions).filter((r) => r.ctrl === c.id && GEO[r.id]?.coast).sort((a, b) => b.gdp - a.gdp)[0];
-      const theirs = Object.values(s.regions).filter((r) => r.ctrl === partner.id && GEO[r.id]?.coast).sort((a, b) => b.gdp - a.gdp)[0];
-      if (mine && theirs && !planRoute(s, c, { from: { region: mine.id }, to: { region: theirs.id } }).error && c.treasury > c.gdp * 0.02) openRoute(s, c, { from: { region: mine.id }, to: { region: theirs.id } });
-    }
   }
   // A defence pact with a close friend who shares a rival
   const pacts = alliancesOf(s, c.id, 'military');

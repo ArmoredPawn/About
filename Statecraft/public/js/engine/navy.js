@@ -16,6 +16,7 @@ import { SEA_NAMES, PATROL_MODES, basinsOf } from './trade.js';
 import { chance, rand, news, alert, nameOf, alive, atWar, allied, enemiesOf, nextId, addRel, fuelCut } from './core.js';
 import { commsReady } from './space.js';
 import { REGION_NAMES } from './names.js';
+import { edgeOf } from './designs.js';
 
 const regionLabel = (id) => (id ? REGION_NAMES[id] ?? id : 'sea');
 
@@ -223,7 +224,7 @@ export const fleetSpeed = (s, owner) => (0.9 + 0.1 * navalTech(s, owner)) * 1500
 const speedPx = (s, owner) => fleetSpeed(s, owner) / KM_PER_PX;
 
 export function fleetStrength(s, f) {
-  return (f.ships + f.carriers * CARRIER_WEIGHT) * (0.6 + 0.08 * navalTech(s, f.owner)) * (0.5 + 0.5 * (f.org ?? 70) / 100);
+  return (f.ships + f.carriers * CARRIER_WEIGHT) * (0.6 + 0.08 * navalTech(s, f.owner)) * (0.5 + 0.5 * (f.org ?? 70) / 100) * edgeOf(s.countries[f.owner], 'ships');
 }
 
 const fleets = (s) => Object.values(s.fleets ?? {});
@@ -831,17 +832,23 @@ export function aiNavy(s, c) {
 /* ---------- What each leader sees ---------- */
 
 // Every fleet is tracked by everyone: their own and their allies' in full, others in rough numbers
-export function fleetsFor(s, cid, { seen = false } = {}) {
+// look(f): what our spies or satellites add about a foreign fleet: { exact, heading }
+export function fleetsFor(s, cid, { seen = false, look = null } = {}) {
   const me = s.countries[cid] ?? null;
   return fleets(s).map((f) => {
     const own = !me || f.owner === cid || allied(s, cid, f.owner);
+    const l = !own && look ? look(f) : null;
     const base = {
       id: f.id, owner: f.owner, name: f.name, x: Math.round(f.x * 10) / 10, y: Math.round(f.y * 10) / 10, at: f.at, moving: moving(f),
       carriers: Math.round(f.carriers), mission: f.mission, target: f.mission === 'raid' || f.mission === 'intercept' ? null : f.target, mode: f.mode, battle: f.battle === s.week,
     };
     return own
       ? { ...base, ships: Math.round(f.ships), org: Math.round(f.org), route: f.route.map(([x, y]) => [Math.round(x), Math.round(y)]), dest: f.dest, status: f.status, exact: true, raid: f.raid ?? 'seize', raidSea: f.raidSea ?? null, chasing: f.target ?? null }
-      : { ...base, ships: seen ? Math.round(f.ships) : Math.max(1, Math.round(f.ships / 5) * 5), exact: false, seen };
+      : {
+        ...base, ships: seen || l?.exact ? Math.round(f.ships) : Math.max(1, Math.round(f.ships / 5) * 5), exact: false, seen: seen || Boolean(l?.exact),
+        // Spies inside its navy know where some of its fleets are bound
+        ...(l?.heading ? { spied: true, dest: f.dest, route: f.route.map(([x, y]) => [Math.round(x), Math.round(y)]), status: f.status } : {}),
+      };
   });
 }
 

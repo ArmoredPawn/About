@@ -9,7 +9,7 @@ import { TERRAIN } from './data/regions.js';
 import { REGION_NAMES, MINOR_TERRAIN, MINOR_QUALITY } from './names.js';
 import {
   clamp, rand, chance, pick, news, alert as briefing, nameOf, nation, isMinor, atWar, allied, enemiesOf, friendlyGround, fuelCut,
-  onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted, rel, warBetween,
+  onSameSide, addRel, nextId, troopsLabel, alive, money, warsAccepted, rel, warBetween, hasNetwork,
 } from './core.js';
 import { navyStep, navyTick, landingControl, crossingOdds, controlAt, PORTS, OFF_COAST } from './navy.js';
 import { shippingStep } from './shipping.js';
@@ -24,6 +24,10 @@ import { PROVINCES } from './data/regions.js';
 import { NATIONS as COUNTRIES } from './data/nations.js';
 import { surpriseFeature } from './terrain.js';
 import { rangeProblem } from './science.js';
+import { edgeOf } from './designs.js';
+
+// How well a country's vehicles cover its army: 0 to 1, full at ten vehicles for every thousand troops
+export const trucksFor = (c) => Math.min(1, (c?.vehicles ?? 0) / Math.max(1, (c?.troops ?? 0) * 10));
 
 // Every report from the front is marked as war news, so it also runs in the News section
 const alert = (s, cid, text, kind, extra = {}) => briefing(s, cid, text, kind, { front: true, ...extra });
@@ -57,7 +61,7 @@ const quality = (s, id) => (s.countries[id] ? 0.6 + 0.08 * s.countries[id].tech.
 const depth = (id) => clamp(Math.sqrt((GEO[id]?.area ?? 1500) / 1500), 0.7, 2.2);
 // How big a province is next to an ordinary one (1), up to about 3 for Siberia or the Sahara
 const size = (id) => depth(id) / 0.7;
-const airQuality = (c) => 0.6 + 0.08 * c.tech.air;
+const airQuality = (c) => (0.6 + 0.08 * c.tech.air) * edgeOf(c, 'aircraft');
 
 export function distanceKm(a, b) {
   const ga = GEO[a];
@@ -148,7 +152,7 @@ export function defenceEstimate(s, regionId, gar = garrisons(s)) {
 }
 
 // Tanks without fuel are only pillboxes, and a surrounded army's fuel runs out first
-const runningTanks = (s, a) => a.tanks * (1 - fuelCut(s.countries[a.owner])) * (a.pocket && !a.pocketSea ? 0.35 : 1);
+const runningTanks = (s, a) => a.tanks * edgeOf(s.countries[a.owner], 'tanks') * (1 - fuelCut(s.countries[a.owner])) * (a.pocket && !a.pocketSea ? 0.35 : 1);
 
 export function armyAttackEstimate(s, a, regionId) {
   const terrain = terrainOf(regionId);
@@ -186,6 +190,32 @@ export const AIR_FUEL = 0.00003; // per aircraft flying a campaign
 export const SHIP_FUEL = { underway: 0.0006, idle: 0.0001 }; // per warship (a carrier counts as eight)
 export const armyMode = (a) => (a.battle ? 'fight' : a.path?.length || a.sea ? 'march' : 'hold');
 export const armyFuel = (a, mode = armyMode(a)) => a.troops * FUEL[mode][0] + a.tanks * FUEL[mode][1];
+
+// What an army consumes each week to keep going, in the market's units: oil (fuel), grain (food) and iron
+// (munitions and spare parts; a battle burns six times what holding a line does). If its country runs out of one,
+// or its supply line is cut, it lives off what it carries for GRACE_WEEKS; then it starts to fall apart fast.
+export const GRACE_WEEKS = 2;
+export const ARMY_RES = ['oil', 'food', 'iron'];
+export function armyNeeds(a, mode = armyMode(a)) {
+  const k = mode === 'fight' ? 6 : mode === 'march' ? 1.5 : 1;
+  return { oil: armyFuel(a, mode), food: a.troops * 0.0006, iron: (a.troops * 0.0002 + a.tanks * 0.00002) * k };
+}
+// An army beyond our own country's ground: it lives at the end of a supply line
+export function abroad(s, a) {
+  if (a.sea || a.x == null) return false;
+  const reg = s.regions[a.region];
+  return reg?.owner !== a.owner || holderAt(s, cellAt(a.x, a.y)) !== a.owner;
+}
+// What its supply line costs each week ($ billions): trucks, rail, depots and guards, more the farther from home
+export function supplyLineCost(s, a) {
+  const c = s.countries[a.owner];
+  if (!c || !abroad(s, a)) return 0;
+  const cf = 0.45 + 0.55 * Math.min(1.2, (c.gdp / Math.max(0.01, c.pop)) / 60);
+  const hops = hopsHome(s, a) ?? 8;
+  return (a.troops * 0.0007 + a.tanks * 0.00009) * (1 + hops * 0.2) * cf;
+}
+// Rebuilding a line the enemy has cut: six weeks of its running cost (at least $50 million)
+export const lineRepairCost = (s, a) => Math.max(0.05, supplyLineCost(s, a) * 6);
 
 // Weeks to march along a path, and the oil it burns (plus a fortnight of fighting if it ends in an attack)
 export function orderFuel(s, a, path, attack = false) {
@@ -730,10 +760,27 @@ export function missileStrike(s, c, target, count, aim = 'industry') {
     reg.dmg = clamp(reg.dmg + dmg, 0, 0.95);
     result = `industry and resources ${Math.round(dmg * 100)} points more damaged (now ${Math.round(reg.dmg * 100)}%)`;
   }
-  news(s, `${c.name} fires ${count} missiles at ${MISSILE_AIMS[aim].name.toLowerCase()} in ${regionName(target)}. ${hits} get through${intercept > 0.2 ? ' its air defences' : ''}.`, 'strike', [c.id, reg.ctrl]);
-  alert(s, c.id, `Missile strike on ${regionName(target)}: ${hits} of ${count} got through (${Math.round(intercept * 100)}% intercepted). Result: ${result}.`, hits ? 'good' : 'warn', { region: target, front: true });
-  alert(s, reg.ctrl, `${count} missiles from ${c.name} struck ${regionName(target)}: ${result}.`, 'bad', { region: target });
+  // Missiles falling on a country spread fear (people flee, markets fall, the government looks weak) and, just as
+  // surely, fury: the nation rallies, volunteers queue up and the war becomes everyone's
+  const mood = def && hits ? terror(s, def, reg, hits) : null;
+  news(s, `${c.name} fires ${count} missiles at ${MISSILE_AIMS[aim].name.toLowerCase()} in ${regionName(target)}. ${hits} get through${intercept > 0.2 ? ' its air defences' : ''}.${mood ? ` Panic in ${regionName(target)}, and fury across ${def.name}.` : ''}`, 'strike', [c.id, reg.ctrl]);
+  alert(s, c.id, `Missile strike on ${regionName(target)}: ${hits} of ${count} got through (${Math.round(intercept * 100)}% intercepted). Result: ${result}.${mood ? ` Fear: their stability fell ${mood.fear} points and people are fleeing the province. But the nation is rallying: about ${mood.volunteers}K volunteers have come forward and war-weariness has dropped.` : ''}`, hits ? 'good' : 'warn', { region: target, front: true });
+  alert(s, reg.ctrl, `${count} missiles from ${c.name} struck ${regionName(target)}: ${result}.${mood ? ` Fear is spreading (stability −${mood.fear}) and people are fleeing the province, but the nation rallies against ${c.name}: about ${mood.volunteers}K volunteers have enlisted.` : ''}`, 'bad', { region: target });
   return null;
+}
+
+// Fear and nationalism after a missile strike: { fear, volunteers }
+function terror(s, def, reg, hits) {
+  const fear = Math.round(Math.min(8, 1 + hits * 0.06));
+  def.stability = Math.max(0, def.stability - fear);
+  reg.unrest = Math.min(100, (reg.unrest ?? 0) + Math.min(20, 3 + hits * 0.2));
+  s.modifiers.push({ id: nextId(s, 'm'), cid: def.id, kind: 'gdp', value: -Math.min(0.006, hits * 0.00005), until: s.week + 8 });
+  def.rally = (def.rally ?? 0) + Math.min(12, 3 + hits * 0.15);
+  def.warWeariness = Math.max(0, (def.warWeariness ?? 0) - Math.min(10, hits * 0.1));
+  const volunteers = Math.round(Math.min(60, 2 + hits * 0.4));
+  def.reserves = (def.reserves ?? 0) + volunteers;
+  if (reg.people === def.id) reg.loyalty = Math.min(100, (reg.loyalty ?? 50) + 4);
+  return { fear, volunteers };
 }
 
 // How many of our missiles the enemy shoots down
@@ -857,7 +904,8 @@ export function marchSpeed(s, a) {
   const c = s.countries[a.owner];
   if (!c) return 300;
   const base = 40 + 55 * c.tech.army + 35 * c.tech.industry;
-  const mech = 0.8 + 0.4 * Math.min(1, a.tanks / Math.max(1, a.troops) / 3);
+  // Trucks and armoured carriers: full benefit at ten for every thousand men
+  const mech = (0.8 + 0.4 * Math.min(1, a.tanks / Math.max(1, a.troops) / 3)) * (1 + 0.15 * trucksFor(c) * edgeOf(c, 'vehicles'));
   const fuel = 1 - 0.85 * fuelCut(c);
   const factories = 0.7 + 0.3 * (c.logistics?.factories ?? 1);
   const doctrine = Math.max(0.6, 1 + (dfx(s, a.owner).speed ?? 0));
@@ -1219,9 +1267,14 @@ function fight(s, b, gar, dt) {
   const attackers = b.att.map((id) => s.armies[id]).filter((a) => a && d && hostile(s, a, d));
   if (!d || !attackers.length) return;
   const holder = d.owner;
-  const cell = cellAt(d.x, d.y);
+  // An army on the shore can stand on a water cell: the battle is fought on the nearest land (or its home
+  // province), so a province is always found and one coastal battle can't stop every army in the world
+  const c0 = cellAt(d.x, d.y);
+  const near = isLand(c0) ? c0 : nearestLand(d.x, d.y);
+  const cell = near >= 0 ? near : provinceCell(d.region);
   const regionId = regionAt(cell);
   const reg = s.regions[regionId];
+  if (!reg) return;
   const terrain = terrainAt(cell);
   const lead = attackers.reduce((m, a) => (a.troops > m.troops ? a : m)).owner;
   const fa = dfx(s, lead);
@@ -1658,12 +1711,20 @@ function logistics(s) {
     let cost = 0;
     let demand = 0;
     let rear = 0;
+    const needs = { food: 0, iron: 0 };
     for (const a of mine) {
       const reg = s.regions[a.region];
       const abroad = Boolean(a.sea) || reg.owner !== c.id;
       const fighting = Boolean(a.battle);
       const hops = abroad && !a.sea ? hopsHome(s, a) ?? 8 : 0;
-      cost += a.troops * (abroad ? 0.0009 : 0.0002) * (1 + hops * 0.2) * cf + a.tanks * (fighting ? 0.00012 : 0.00003) * cf;
+      // The army itself, and (beyond our ground) its supply line, unless we have stopped paying for it
+      a.line ??= { off: false, cut: null };
+      a.lineCost = supplyLineCost(s, a);
+      cost += a.troops * 0.0002 * cf + a.tanks * (fighting ? 0.00012 : 0.00003) * cf + (a.sea ? a.troops * 0.0007 * cf : 0);
+      if (a.lineCost && !a.line.off && !a.line.cut) cost += a.lineCost;
+      const n = armyNeeds(a);
+      needs.food += n.food;
+      needs.iron += n.iron;
       // Fighting far from home burns munitions and fuel fastest; defending at home draws on local stocks
       demand += (a.troops * 0.001 + a.tanks * 0.00015) * (abroad ? (fighting ? 2.5 : 1.2) : (fighting ? 1 : 0.4));
       if (abroad) rear += a.troops * Math.min(0.3, 0.03 * Math.max(1, hops));
@@ -1676,17 +1737,134 @@ function logistics(s) {
     const factories = demand > 0 ? Math.min(1, capacity / demand) : 1;
     const guards = rear > 0 ? Math.min(1, free / rear) : 1;
     const funds = c.readiness ?? 1;
-    c.logistics = { cost: cost * 52, capacity, demand, factories, rear, free, guards, ratio: (0.55 + 0.45 * factories) * (0.6 + 0.4 * guards) * funds };
-    // The week's fuel bill, which the country must buy on the market if it doesn't pump enough itself
+    c.logistics = { cost: cost * 52, capacity, demand, factories, rear, free, guards, ratio: (0.55 + 0.45 * factories) * (0.6 + 0.4 * guards) * funds * (1 + 0.08 * trucksFor(c) * edgeOf(c, 'vehicles')) };
+    // The week's fuel bill, which the country must buy on the market if it doesn't pump enough itself; and the
+    // food and munitions its armies eat through
     c.fuel = forcesFuel(s, c);
+    c.armyNeeds = needs;
+    runningOut(s, c, mine);
     const cut = fuelCut(c);
     if (cut >= 0.25 && !c.fuelCrisis) {
       c.fuelCrisis = true;
       briefing(s, c.id, `Fuel crisis: our forces are getting only ${Math.round((1 - cut) * 100)}% of the oil they burn. Tanks are stalling, aircraft are grounded and the advance is slowing. Buy oil (Economy, Market), seize oil fields, or halt operations.`, 'bad');
       if (mine.length) news(s, `${c.name}'s war machine is running out of fuel.`, 'war', [c.id]);
     } else if (cut < 0.1) c.fuelCrisis = false;
-    for (const a of mine) if (!a.sea) a.supply *= c.logistics.ratio;
+    for (const a of mine) if (!a.sea) a.supply = Math.min(1, a.supply * c.logistics.ratio);
   }
+}
+
+// Does the country have none of a resource left for its armies? Oil goes to the forces first, so only a deep fuel
+// crisis leaves them dry; food and munitions run out when the stockpile is gone and imports don't cover the need.
+function outOf(c, r) {
+  if (r === 'oil') return fuelCut(c) >= 0.5;
+  return (c.stock?.[r] ?? 0) <= 0.001 && (c.short?.[r] ?? 0) >= 0.3;
+}
+
+// Armies with nothing coming in (their country has run out, or their supply line is cut or unpaid) live off what
+// they carry for two weeks, then lose men, tanks and order every week until supplies get through again
+function runningOut(s, c, mine) {
+  const NAMES = { oil: 'fuel', food: 'food', iron: 'munitions' };
+  for (const a of mine) {
+    if (a.sea) continue;
+    a.out ??= {};
+    const lineDown = a.lineCost > 0 && (a.line?.off || a.line?.cut);
+    const fresh = [];
+    for (const r of ARMY_RES) {
+      if (lineDown || outOf(c, r)) { if (a.out[r] == null) { a.out[r] = s.week; fresh.push(NAMES[r]); } } else delete a.out[r];
+    }
+    if (fresh.length) briefing(s, c.id, `${a.name} is getting no ${fresh.join(', ')}${lineDown ? ` (its supply line is ${a.line.cut ? 'cut' : 'unpaid'})` : ''}. It can live off what it carries for ${GRACE_WEEKS} weeks; then it starts to fall apart.`, 'bad', { army: a.id });
+    const starving = Object.values(a.out).filter((w) => s.week - w >= GRACE_WEEKS).length;
+    if (!starving) continue;
+    if (Object.values(a.out).some((w) => s.week - w === GRACE_WEEKS)) briefing(s, c.id, `${a.name} has used up what it carried: it is losing men, tanks and order every week until supplies get through.`, 'bad', { army: a.id });
+    a.troops = Math.max(1, a.troops * (1 - 0.05 * starving));
+    a.tanks *= 1 - 0.05 * starving;
+    a.org = Math.max(0, a.org - 10 * starving);
+    if (a.out.food != null && s.week - a.out.food >= GRACE_WEEKS) a.troops = Math.max(1, a.troops * 0.98);
+  }
+}
+
+/* ---------- Supply lines ---------- */
+
+// Stop or resume paying for an army's supply line
+export function setSupplyLine(s, c, a, on) {
+  if (!a || a.owner !== c.id) return 'Pick one of our armies.';
+  a.line ??= { off: false, cut: null };
+  a.line.off = !on;
+  return null;
+}
+
+// Rebuild a supply line the enemy has cut
+export function repairSupplyLine(s, c, a) {
+  if (!a || a.owner !== c.id) return 'Pick one of our armies.';
+  if (!a.line?.cut) return 'Its supply line is intact.';
+  const cost = lineRepairCost(s, a);
+  if (cost > c.treasury + c.milFunds) return `Rebuilding it costs ${money(cost)}.`;
+  const fromFunds = Math.min(c.milFunds, cost);
+  c.milFunds -= fromFunds;
+  c.treasury -= cost - fromFunds;
+  a.line.cut = null;
+  a.out = {};
+  briefing(s, c.id, `Engineers have rebuilt ${a.name}'s supply line (${money(cost)}).`, 'good', { army: a.id });
+  return null;
+}
+
+// Strike an enemy army's supply line, from the air or with missiles: depots, bridges, rail junctions and fuel
+// convoys behind it. Spies inside the country know where the depots are.
+export const CUT_AIRCRAFT = 20;
+export const CUT_MISSILES = 20;
+export function cutSupplyOdds(s, c, a, how) {
+  const foe = s.countries[a.owner];
+  const spies = hasNetwork(s, c.id, a.owner) ? 0.15 : 0;
+  if (how === 'missile') return clamp(0.75 * (1 - interceptRate(s, c, a.owner)) + spies, 0.1, 0.95);
+  const mine = CUT_AIRCRAFT * airQuality(c);
+  const theirs = foe ? foe.aircraft * airQuality(foe) * 0.05 / Math.max(1, enemiesOf(s, foe.id).size) + foe.tech.missile * 2 : 2;
+  return clamp(0.25 + 0.6 * mine / (mine + theirs) + spies, 0.1, 0.92);
+}
+export function cutSupplyLine(s, c, a, how = 'air') {
+  if (!a) return 'Pick an army.';
+  if (!atWar(s, c.id, a.owner)) return `We are not at war with ${nameOf(s, a.owner)}.`;
+  if (!abroad(s, a)) return `${a.name} is on its own ground: it has no long supply line to cut.`;
+  if (a.line?.cut) return 'Its supply line is already cut.';
+  if ((c.cooldown?.[`cut:${a.id}`] ?? -1) > s.week) return 'We struck its supply line very recently.';
+  const region = regionAt(cellAt(a.x, a.y)) ?? a.region;
+  const far = rangeProblem(s, c, region, how === 'missile' ? 'missile' : 'air');
+  if (far) return far;
+  if (how === 'missile') {
+    if (c.missiles < CUT_MISSILES) return `It takes ${CUT_MISSILES} missiles; we have ${c.missiles}.`;
+    c.missiles -= CUT_MISSILES;
+  } else {
+    const busy = (c.airOps ?? []).reduce((t, o) => t + o.aircraft, 0) + (c.airlifts ?? []).reduce((t, o) => t + o.aircraft, 0);
+    if (c.aircraft - busy < CUT_AIRCRAFT) return `It takes ${CUT_AIRCRAFT} free aircraft; we have ${Math.max(0, c.aircraft - busy)}.`;
+  }
+  const p = cutSupplyOdds(s, c, a, how);
+  c.cooldown ??= {};
+  c.cooldown[`cut:${a.id}`] = s.week + 2;
+  const lost = how === 'air' ? Math.round(CUT_AIRCRAFT * (1 - p) * 0.15 * (0.5 + rand(s))) : 0;
+  if (lost) c.aircraft = Math.max(0, c.aircraft - lost);
+  const where = regionName(region);
+  if (!chance(s, p)) {
+    briefing(s, c.id, `Our ${how === 'missile' ? 'missiles' : 'aircraft'} failed to cut ${a.name}'s supply line near ${where}${lost ? ` (${lost} aircraft lost)` : ''}.`, 'bad', { army: a.id });
+    briefing(s, a.owner, `${nameOf(s, c.id)} tried to cut ${a.name}'s supply line near ${where}; our air defences beat them off.`, 'good', { army: a.id });
+    return null;
+  }
+  a.line = { ...(a.line ?? { off: false }), cut: { by: c.id, since: s.week } };
+  news(s, `${nameOf(s, c.id)} ${how === 'missile' ? 'missiles destroy' : 'bombers wreck'} depots and bridges behind ${nameOf(s, a.owner)}'s ${a.name}.`, 'war', [c.id, a.owner]);
+  briefing(s, c.id, `Supply line cut: ${a.name} near ${where} gets nothing until ${nameOf(s, a.owner)} rebuilds it${lost ? ` (${lost} aircraft lost)` : ''}.`, 'good', { army: a.id });
+  briefing(s, a.owner, `${nameOf(s, c.id)} has cut ${a.name}'s supply line near ${where}. Rebuild it (${money(lineRepairCost(s, a))}) from the army's card, or it will run out in ${GRACE_WEEKS} weeks.`, 'bad', { army: a.id });
+  return null;
+}
+
+// The computer rebuilds its own cut lines when it can, and cuts its enemies' where it has the air power
+export function aiSupplyLines(s, c) {
+  for (const a of Object.values(s.armies)) {
+    if (a.owner !== c.id) continue;
+    if (a.line?.off) a.line.off = false;
+    if (a.line?.cut && c.treasury + c.milFunds > lineRepairCost(s, a) * 2) repairSupplyLine(s, c, a);
+  }
+  if (!chance(s, 0.12) || c.aircraft < CUT_AIRCRAFT * 3) return;
+  const foes = enemiesOf(s, c.id);
+  const target = Object.values(s.armies).filter((a) => foes.has(a.owner) && !a.line?.cut && abroad(s, a)).sort((a, b) => b.troops - a.troops)[0];
+  if (target) cutSupplyLine(s, c, target, 'air');
 }
 
 /* ---------- Supply ---------- */
@@ -1739,6 +1917,8 @@ function supplyAll(s) {
     // Bombed roads and depots
     if (reg.interdict && reg.interdict.until > s.week && atWar(s, reg.interdict.by, a.owner)) supply *= 1 - 0.4 * Math.min(1, reg.interdict.power);
     if (a.gen.trait === 'logistician') supply = Math.min(1, supply + 0.15);
+    // A supply line cut by the enemy, or one we stopped paying for
+    if ((a.line?.cut || a.line?.off) && reg.owner !== a.owner) supply *= 0.5;
     a.supply = supply * (1 - 0.6 * fuelCut(c));
   }
 }

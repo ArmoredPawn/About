@@ -28,6 +28,9 @@ import { route } from './engine/military.js';
 import { fauxState } from './ui/map.js';
 import { sendArmy, sendArmyTo, pointPreview } from './ui/attack.js';
 import { PORTS } from './engine/navy.js';
+import { planRoute } from './ui/cargo-plan.js';
+import { renderWarBar, cutSupplyDialog } from './ui/war-bar.js';
+import { openDesigner } from './ui/design.js';
 
 const NAME_KEY = 'statecraft.name';
 const TABS = [
@@ -206,6 +209,7 @@ const ctx = {
   },
   endTarget() {
     map.stopTargeting();
+    map.setIntel(null);
     $('target-bar').hidden = true;
     hint(null);
   },
@@ -217,9 +221,14 @@ const ctx = {
   },
   toast: (text, kind, onClick) => toast(text, kind, onClick),
   hint: (text, kind, ms) => hint(text, kind, ms),
-  // A shipping line being placed, drawn on the map: { from, to, pts } or null
-  previewRoute: (p) => map.previewRoute(p),
-  focusRoutes: (list) => map.focusRoutes(list),
+  // A cargo route being planned, drawn on the map: { pts, bad } or null
+  previewRoute: (p, fit) => map.previewRoute(p, fit),
+  // Plan the route of one of our resource deals' convoys
+  planRoute: (id) => planRoute(ctx, id),
+  // What our spies show of the enemy while a strike is aimed
+  showIntel: (list) => map.setIntel(list),
+  openDesigner: (opts) => openDesigner(ctx, opts),
+  cutSupply: (army) => cutSupplyDialog(ctx, army),
   focusPoint: (p) => map.focusPoint(p),
   openCity: (region, name) => { map.select(region); showCity(ctx, region, name); },
   help: (topic) => openHelp(topic),
@@ -446,7 +455,7 @@ function frontNews(m, me) {
 function onAlert(item) {
   if (app.state) frontNews(item, app.state.me);
   const kind = item.kind === 'war' ? 'war' : item.kind;
-  const go = item.decision ? () => openDecision(ctx, item.decision) : item.region ? () => ctx.openRegion(item.region, true) : item.sea ? () => map.focusPoint({ x: item.sea[0], y: item.sea[1] }) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
+  const go = item.decision ? () => openDecision(ctx, item.decision) : item.plan ? () => planRoute(ctx, item.plan) : item.army ? () => ctx.selectArmy(item.army, true) : item.region ? () => ctx.openRegion(item.region, true) : item.sea ? () => map.focusPoint({ x: item.sea[0], y: item.sea[1] }) : item.proposal ? () => ctx.go('overview') : item.resolution ? () => ctx.go('diplomacy', 'un') : item.settle ? () => ctx.openCountry(item.settle) : item.country ? () => ctx.openCountry(item.country) : null;
   toast(item.text, kind, go);
 }
 
@@ -484,6 +493,7 @@ function renderGame() {
   renderRail();
   renderPanel();
   renderMapTools();
+  renderWarBar(ctx, $('war-bar'));
   mapReady.then(() => {
     map.update(app.state);
     if (app.selection?.region) showRegion(ctx, app.selection.region);

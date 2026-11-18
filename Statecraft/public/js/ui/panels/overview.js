@@ -4,6 +4,7 @@ import { h, flag, money, pct, tone, spark, nationName, regionName, troops } from
 import { RESOURCE_INFO } from '../../engine/data/regions.js';
 import { describeProposal } from '../describe.js';
 import { decisionCards } from '../decisions.js';
+import { modal, numberField } from '../dialogs.js';
 
 export function overview(ctx) {
   const s = ctx.state;
@@ -134,9 +135,29 @@ export function proposalCard(ctx, p) {
     h('div.item-head', flag(p.from), h('span.name', nationName(s, p.from)), h('span.muted.small', `expires week ${p.expires}`)),
     h('div.meta', { style: { color: 'var(--ink)' } }, `Proposes ${describeProposal(s, p)}.`),
     h('div.actions',
-      h('button.btn.small.primary', { onclick: () => ctx.send({ type: 'respond', id: p.id, accept: true }) }, p.kind === 'callToArms' ? 'Go to war' : 'Accept'),
+      asksPrice(p) && p.terms.seller === s.me
+        ? h('button.btn.small.primary', { onclick: () => namePrice(ctx, p) }, 'Name our price…')
+        : h('button.btn.small.primary', { onclick: () => ctx.send({ type: 'respond', id: p.id, accept: true }) }, p.kind === 'callToArms' ? 'Go to war' : 'Accept'),
       h('button.btn.small', { onclick: () => ctx.send({ type: 'respond', id: p.id, accept: false }) }, 'Decline'),
       s.countries[p.from]?.human ? h('button.btn.small.ghost', { onclick: () => ctx.chat.directTo(p.from) }, 'Reply') : null));
+}
+
+const asksPrice = (p) => p.kind === 'deal' && (p.terms.price == null || p.terms.price === '');
+
+// In a private deal the seller names the price: our answer goes back to the buyer to accept
+function namePrice(ctx, p) {
+  const s = ctx.state;
+  const t = p.terms;
+  const value = Number(t.qty) * RESOURCE_INFO[t.res].value * s.market.price[t.res];
+  const price = numberField('Our price a year', { value: Math.round(value * 1.15 * 10) / 10, min: 0, step: 'any', suffix: '$ billions' });
+  modal({
+    title: `Our price for ${nationName(s, p.from)}`,
+    body: h('div.stack',
+      h('p', `${nationName(s, p.from)} wants ${t.qty} ${RESOURCE_INFO[t.res].unit} of ${RESOURCE_INFO[t.res].name.toLowerCase()} a year for ${t.weeks} weeks, in secret. It is worth about ${money(value)} a year on the world market.`),
+      price.el,
+      h('p.muted.small', 'They see our price and accept or decline it. Once agreed, we plan the convoys\' route and pay for the shipping.')),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send our price', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'respond', id: p.id, accept: true, price: Number(price.input.value) })) || false }],
+  });
 }
 
 function kindClass(kind) {

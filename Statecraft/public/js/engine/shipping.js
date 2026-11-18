@@ -4,13 +4,18 @@
 // fleet catches it as it nears the blockaded coast, a patrol in a strait stops the traffic it was told to, and a
 // fleet sent to hunt one particular cargo sails out to meet it. Warships of the buyer, the seller and their
 // allies near the cargo escort it: if they are the stronger force, it gets through.
+//
+// A cargo under a resource deal sails the route its seller planned (cargo.js): up to ten checkpoints, straight
+// lines between them. Other cargoes sail the shortest lane between the two countries' nearest ports. A private
+// cargo is out of sight, but a warship that comes very close to one sees it, and its leader decides what to do.
 
 import { MAP_SIZE } from './data/geo.js';
 import { RESOURCE_INFO } from './data/regions.js';
 import { PORTS, seaRoute as waterRoute, mapDistance, fleetStrength, ENGAGE, seaAt, nodeName, fleetSpeed, KM_PER_PX, inPort, portsOf, formFleet, MAX_FLEETS, raidStatus } from './navy.js';
 export { RAID_MODES, RAID_HOW } from './navy.js';
-import { stopShipment, escortPower, activeRoute } from './trade.js';
+import { stopShipment, escortPower } from './trade.js';
 import { clamp, chance, alert, nameOf, atWar, allied, sanctioning } from './core.js';
+import { cargoPrivate, canSeeCargo, sighted } from './cargo.js';
 
 const W = MAP_SIZE.w;
 const an = (w) => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
@@ -18,12 +23,12 @@ const wrap = (x) => ((x % W) + W) % W;
 const ESCORT_RANGE = ENGAGE * 3; // friendly warships this close to a cargo defend it
 const NEAR_END = 0.18; // the share of the voyage near each end where a blockade catches it
 // How far a freighter gets in a week, port time included: about 13 knots. Warships are a little faster, so a fleet
-// can run down a cargo it is placed well for, but can't chase one across an ocean.
+// can run down a cargo it is placed well for, but can't chase one across an ocean. A truck and rail convoy
+// overland makes about 1,500 km a week.
 export const CARGO_KMW = 2200;
-// A dedicated shipping line (a trade route a country opened) runs its ships to a timetable: a fifth quicker
-export const LINE_SPEEDUP = 0.8;
-// A country's waters: about 200 nautical miles off its coast, in map pixels
-export const EEZ = 18.5;
+export const LAND_KMW = 1500;
+// A warship this close to a private cargo sees it (map pixels, about 260 km)
+export const SIGHT = 13;
 
 
 /* ---------- Lanes ---------- */
@@ -33,11 +38,8 @@ export function bigPorts(s, cid) {
   return Object.values(s.regions).filter((r) => r.ctrl === cid && PORTS[r.id]).sort((a, b) => b.gdp - a.gdp).slice(0, 5).map((r) => r.id);
 }
 
-// The pair of ports (seller's, buyer's) closest to each other: the lane a cargo between them sails. A trade route
-// opened between the two countries (routes.js) is the lane instead.
+// The pair of ports (seller's, buyer's) closest to each other: the lane a cargo between them sails
 export function laneFor(s, seller, buyer) {
-  const line = activeRoute(s, seller, buyer);
-  if (line) return line.by === seller || line.partner === buyer ? { from: line.from, to: line.to, route: line.id } : { from: line.to, to: line.from, route: line.id };
   let best = null;
   for (const pa of bigPorts(s, seller)) {
     for (const pb of bigPorts(s, buyer)) {
@@ -66,6 +68,21 @@ export function laneGeometry(from, to) {
   return geometry.get(key);
 }
 
+// The way a planned cargo goes: its own checkpoints, worked out once per cargo
+const planned = new Map();
+export function pathGeometry(sh) {
+  const key = `${sh.id}|${sh.path.length}|${sh.path[0]}|${sh.path[sh.path.length - 1]}`;
+  if (!planned.has(key)) {
+    if (planned.size > 4000) planned.clear();
+    const pts = sh.path;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    planned.set(key, { pts, cum });
+  }
+  return planned.get(key);
+}
+const geometryOf = (sh) => (sh.path?.length >= 2 ? pathGeometry(sh) : sh.mode === 'sea' && sh.lane ? laneGeometry(sh.lane.from, sh.lane.to) : null);
+
 function along(g, t) {
   const want = g.cum[g.cum.length - 1] * clamp(t, 0, 1);
   let i = 1;
@@ -80,10 +97,10 @@ function along(g, t) {
 // How far along its voyage a cargo is, 0 to 1, part-way through the week
 export const voyage = (s, sh) => clamp((sh.total - sh.left + (s.stepped ?? 0)) / Math.max(1, sh.total), 0, 1);
 
-// Where a cargo is now (or at a later point of its voyage), or null if it isn't at sea
+// Where a cargo is now (or at a later point of its voyage), or null if it has no known way (an overland cargo
+// that wasn't planned)
 export function shipAt(s, sh, t = voyage(s, sh)) {
-  if (sh.mode !== 'sea' || !sh.lane) return null;
-  const g = laneGeometry(sh.lane.from, sh.lane.to);
+  const g = geometryOf(sh);
   return g ? along(g, t) : null;
 }
 
@@ -122,16 +139,10 @@ function hostility(s, sh, f) {
 // sanctions); never its own side's
 function raidable(s, sh, f) {
   if (sideOf(s, sh, f.owner) || sh.done || sh.mode !== 'sea') return false;
+  if (cargoPrivate(sh) && !canSeeCargo(s, f.owner, sh)) return false;
   if (atWar(s, f.owner, sh.buyer) || atWar(s, f.owner, sh.seller)) return true;
   return f.mode === 'hostile' && (sanctioning(s, f.owner, sh.buyer) || sanctioning(s, f.owner, sh.seller));
 }
-
-// A cargo on a secret line through a country's own waters, which that country has found out about: its navy and
-// coastguard know the waters and the traffic, and stop it more easily
-const homeWaters = (s, sh, cid) => {
-  const line = sh.lane?.route ? s.routes?.[sh.lane.route] : null;
-  return Boolean(line && line.private && line.crosses?.includes(cid) && line.known?.[cid] != null);
-};
 
 // The chance that warships this strong stop a cargo guarded by escorts this strong. Sinking it is surer than
 // seizing it: a prize has to be boarded and sailed home, and it can still slip away.
@@ -144,7 +155,7 @@ export function stopChance(attack, escort, how) {
 // Fleets meet a cargo: the escorts fight them off, or they stop it
 function encounter(s, sh, attackers, how, x, y) {
   const by = attackers[0].owner;
-  const attack = attackers.reduce((t, f) => t + fleetStrength(s, f), 0) * (homeWaters(s, sh, by) ? 1.35 : 1);
+  const attack = attackers.reduce((t, f) => t + fleetStrength(s, f), 0);
   const escort = escortAt(s, sh, x, y);
   const where = `in the ${nodeName(seaAt(x, y))}`;
   const what = RESOURCE_INFO[sh.res].name.toLowerCase();
@@ -180,6 +191,16 @@ function endHunt(s, sh, fleets, got) {
   }
 }
 
+// A fleet still close to a cargo (it has just reported it) acts at once: no chase, the escorts and the odds decide
+export function strikeNow(s, c, sh, f, how) {
+  if (!f || f.owner !== c.id || sh.done || sh.x == null) return null;
+  if (mapDistance(f.x, f.y, sh.x, sh.y) > ENGAGE * 1.5) return null;
+  sh.met ??= {};
+  sh.met[f.id] = true;
+  encounter(s, sh, [f], how, sh.x, sh.y);
+  return 'done';
+}
+
 /* ---------- Hunting a cargo ---------- */
 
 // Where and when this fleet can meet a cargo before it reaches port: the point on its lane and the weeks until
@@ -203,11 +224,10 @@ export function interceptPoint(s, sh, f) { return meeting(s, sh, f)?.p ?? null; 
 
 // The odds for a fleet of this strength meeting this cargo at a point
 function oddsAt(s, sh, cid, attack, p) {
-  const bonus = homeWaters(s, sh, cid) ? 1.35 : 1;
   const escort = escortAt(s, sh, p[0], p[1]);
   return {
-    escort: Math.round(escort * 10) / 10, attack: Math.round(attack * bonus * 10) / 10,
-    seize: Math.round(stopChance(attack * bonus, escort, 'seize') * 100), sink: Math.round(stopChance(attack * bonus, escort, 'sink') * 100),
+    escort: Math.round(escort * 10) / 10, attack: Math.round(attack * 10) / 10,
+    seize: Math.round(stopChance(attack, escort, 'seize') * 100), sink: Math.round(stopChance(attack, escort, 'sink') * 100),
   };
 }
 
@@ -339,45 +359,16 @@ function raidStep(s, f, live) {
   f.status = raidStatus(f);
 }
 
-/* ---------- A coastguard in its own waters ---------- */
-
-// A country that has found a secret line through its waters can stop its cargoes there without a fleet: its
-// coastguard and patrol boats board them as they pass. Orders wait on the cargo (sh.coast) until it is in range.
-export function coastguardCanStop(s, cid, sh) {
-  return sh.mode === 'sea' && !sh.done && homeWaters(s, sh, cid) && !sideOf(s, sh, cid);
-}
-export function orderCoastguard(s, c, sh, how) {
-  if (!coastguardCanStop(s, c.id, sh)) return 'Our coastguard can only stop cargoes on a secret line through our own waters that we have found out about.';
-  sh.coast ??= [];
-  if (sh.coast.some((x) => x.by === c.id)) return 'Our coastguard is already waiting for it.';
-  sh.coast.push({ by: c.id, how: how === 'sink' ? 'sink' : 'seize' });
-  return null;
-}
-// How strong a country's coastguard is in its own waters: patrol boats and a share of the navy
-export const coastguardPower = (c) => (4 + (c?.ships ?? 0) * 0.25) * (0.6 + 0.08 * (c?.tech?.naval ?? 4)) * 1.35;
-function coastguardStep(s, sh, x, y) {
-  for (const o of sh.coast ?? []) {
-    if (sh.done || o.done) continue;
-    if (!portsOf(s, o.by).some((p) => mapDistance(p.x, p.y, x, y) <= EEZ)) continue;
-    o.done = true;
-    const guard = coastguardPower(s.countries[o.by]);
-    const escort = escortAt(s, sh, x, y);
-    const where = `off ${nameOf(s, o.by)}'s coast`;
-    if (escort < guard && chance(s, stopChance(guard, escort, o.how))) stopShipment(s, sh, o.by, o.how, where, [x, y]);
-    else alert(s, o.by, `Failed to ${o.how} the ${RESOURCE_INFO[sh.res].name.toLowerCase()} cargo bound for ${nameOf(s, sh.buyer)} ${where}: ${escort >= guard ? 'its escorts were too strong for our coastguard' : 'it got away'}.`, 'bad', { sea: [x, y] });
-  }
-}
-
 /* ---------- Every step ---------- */
 
-// The voyage takes as long as the lane is: a freighter's week is about 2,200 km, and a trade route's ships keep to
-// a faster timetable. Worked out once, when the cargo first puts to sea.
+// The voyage takes as long as the way is: a freighter's week is about 2,200 km, a land convoy's about 1,500.
+// Worked out once, when the cargo sets off.
 function sizeVoyage(sh) {
   sh.sized = true;
-  const g = sh.lane ? laneGeometry(sh.lane.from, sh.lane.to) : null;
+  const g = geometryOf(sh);
   if (!g) return;
   const km = g.cum[g.cum.length - 1] * KM_PER_PX;
-  const weeks = Math.max(1, Math.round((km / CARGO_KMW) * (sh.lane.route ? LINE_SPEEDUP : 1)));
+  const weeks = Math.max(1, Math.round(km / (sh.mode === 'land' ? LAND_KMW : CARGO_KMW)));
   const gone = sh.total - sh.left;
   sh.total = Math.max(weeks, gone + 1);
   sh.left = sh.total - gone;
@@ -387,27 +378,33 @@ export function shippingStep(s) {
   const fleets = Object.values(s.fleets ?? {});
   const live = new Set();
   for (const sh of s.shipments ?? []) {
-    if (sh.done || sh.mode !== 'sea') continue;
-    sh.lane ??= laneFor(s, sh.seller, sh.buyer);
+    if (sh.done) continue;
+    if (sh.mode === 'sea') sh.lane ??= laneFor(s, sh.seller, sh.buyer);
     if (!sh.sized) sizeVoyage(sh);
     const p = shipAt(s, sh);
     if (!p) continue;
-    live.add(sh.id);
     const [x, y] = p;
     sh.x = Math.round(x * 10) / 10;
     sh.y = Math.round(y * 10) / 10;
+    // An overland convoy is only drawn moving along its way; the countries it crosses deal with it (trade.js)
+    if (sh.mode !== 'sea') continue;
+    live.add(sh.id);
     sh.met ??= {};
-    if (sh.lane.route && s.routes?.[sh.lane.route]) s.routes[sh.lane.route].traffic = s.week;
+    const hidden = cargoPrivate(sh);
     // Fleets that come upon it
     for (const f of fleets) {
       if (sh.done) break;
-      if (sh.met[f.id] || mapDistance(f.x, f.y, x, y) > ENGAGE) continue;
+      const d = mapDistance(f.x, f.y, x, y);
+      // A private cargo is seen only by warships very close to it: their leader is told, and chooses
+      if (hidden && d <= SIGHT && !sideOf(s, sh, f.owner)) sighted(s, sh, f, x, y);
+      if (sh.met[f.id] || d > ENGAGE) continue;
+      // Out of sight, a private cargo can't be attacked by fleets that don't know it is there
+      if (hidden && !canSeeCargo(s, f.owner, sh)) continue;
       const how = hostility(s, sh, f);
       if (!how) continue;
       sh.met[f.id] = true;
       encounter(s, sh, [f], how, x, y);
     }
-    if (!sh.done && sh.coast?.length) coastguardStep(s, sh, x, y);
     // Blockades: the fleets off a coast catch what is coming in or going out
     const t = voyage(s, sh);
     for (const [end, near] of [[sh.buyer, t >= 1 - NEAR_END], [sh.seller, t <= NEAR_END]]) {

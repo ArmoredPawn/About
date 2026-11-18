@@ -10,8 +10,8 @@ import { CHOKEPOINTS } from '../engine/data/world.js';
 import { MINOR_TERRAIN } from '../engine/names.js';
 import { PROJECT_WEEKS } from '../engine/economy.js';
 import { modal, numberField, selectField, confirmBox } from './dialogs.js';
-import { armyCard, myArmies, formArmy } from './panels/military.js';
-import { declareWar } from './panels/diplomacy.js';
+import { armyCard, myArmies, formArmy, suppliesBlock } from './panels/military.js';
+import { declareWar, aidDialog as moneyDialog } from './panels/diplomacy.js';
 import { attackDialog, attackable } from './attack.js';
 import { fleetCard, formDialog } from './panels/navy.js';
 import { provincePeople } from './panels/peoples.js';
@@ -96,6 +96,8 @@ export function showRegion(ctx, id) {
   }
   if (mineHeld) actions.push(h('button.btn.small', { onclick: () => pickArmy(ctx, id) }, 'Send an army to hold it…'));
   if (!mineOwned) actions.push(h('button.btn.small.ghost', { onclick: () => ctx.openCountry(owner) }, `${nationName(s, owner)} dossier`));
+  // Money as aid, at once, to the country that holds it
+  if (ctrl !== me && s.countries[ctrl] && !s.countries[ctrl].exile && !atWarWith(ctrl)) actions.push(h('button.btn.small.ghost', { onclick: () => moneyDialog(ctx, ctrl) }, `💸 Send money to ${nationName(s, ctrl)}…`));
   if (cps.length) actions.push(h('button.btn.small.ghost', { onclick: () => ctx.go('market', 'straits') }, 'Strait: tolls & patrols…'));
   for (const [key, cp] of cps) {
     if (ctrl !== me) continue;
@@ -250,12 +252,17 @@ function ground(ctx, id) {
 
 function foreignArmy(ctx, a) {
   const s = ctx.state;
+  const atWar = s.wars.some((w) => (w.a === s.me && w.b === a.owner) || (w.b === s.me && w.a === a.owner));
   return h('div.item',
     h('div.item-head', flag(a.owner), h('span.name', a.name), h('span.mono.small', `${a.exact || a.seen ? '' : '~'}${troops(a.troops)}`)),
     h('div.meta', `${a.gen?.name ?? 'Unknown general'} · ${a.exact || a.seen ? '' : 'about '}${num(a.tanks)} tanks`),
     a.status ? h('div.meta', a.status) : a.attacking ? h('div.meta.bad', `Attacking ${regionName(a.attacking)}`) : null,
-    a.exact ? null : h('div.meta.faint', a.seen ? 'Our spy satellites count them exactly; agents inside their government would reveal their plans.' : 'Spy satellites (Research → Space) would count them exactly; agents inside their government would reveal their plans.'),
-    s.countries[a.owner] ? h('div.actions', h('button.btn.small.ghost', { onclick: () => ctx.openCountry(a.owner) }, 'Dossier')) : null);
+    // Our spies inside its country see what it eats and whether it has run out
+    a.needs ? h('div', h('div.meta.good', '🕵 Our spies report its supplies:'), suppliesBlock(ctx, a, false)) : a.lineCut ? h('div.meta.bad', '✂ Its supply line is cut.') : null,
+    a.exact ? null : h('div.meta.faint', a.spied ? 'Our spies inside its country count it exactly.' : a.seen ? 'One of our spy satellites is over it: exact numbers. Agents inside their government would reveal their plans and supplies.' : 'Spy satellites (Research → Space) would count it exactly; spies inside its country would show its supplies.'),
+    h('div.actions',
+      atWar && a.abroad && !a.lineCut ? h('button.btn.small.danger', { title: 'Bomb the depots, bridges and convoys behind it', onclick: () => ctx.cutSupply(a) }, '✂ Cut its supply line…') : null,
+      s.countries[a.owner] ? h('button.btn.small.ghost', { onclick: () => ctx.openCountry(a.owner) }, 'Dossier') : null));
 }
 
 /* ---------- Actions ---------- */

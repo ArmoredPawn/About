@@ -14,6 +14,11 @@ import { RANGE_KINDS, rangeCost, RANGE_WEEKS } from '../../engine/science.js';
 import { navy, blockadeDialog, myFleets } from './navy.js';
 import { airOps } from './air.js';
 import { doctrine } from './doctrine.js';
+import { fmtQty } from '../../engine/trade.js';
+import { designStats } from '../../engine/designs.js';
+import { orderDialog } from '../design.js';
+
+const DESIGNABLE = ['tanks', 'vehicles', 'aircraft', 'ships'];
 
 export function military(ctx) {
   const tab = ctx.sub('military', 'overview');
@@ -166,6 +171,7 @@ export function armyCard(ctx, a, compact = false) {
     h('div.meta', { style: { color: 'var(--ink)' } }, a.status),
     a.fuel ? h('div.meta', { title: 'Oil burned each week. Fighting burns the most (tanks, trucks, generators); holding a province very little. Without the oil, tanks stall and the army slows to a crawl.' },
       `⛽ ${barrels(a.fuel.now)} of oil a week now`, h('span.faint', ` · holding ${barrels(a.fuel.hold)}, marching ${barrels(a.fuel.march)}, fighting ${barrels(a.fuel.fight)}`)) : null,
+    a.needs ? suppliesBlock(ctx, a, true) : null,
     a.buildup ? h('div.meta', { class: a.buildup.ready <= s.week ? 'good' : '' }, a.buildup.ready <= s.week
       ? `⚓ Landing force ready at ${regionName(a.buildup.region)}: it can cross to any coast within ${LANDING_RANGE.toLocaleString('en')} km, even without command of the sea.`
       : `⚓ Building up for a landing: ready in week ${a.buildup.ready}.`) : null,
@@ -185,6 +191,41 @@ export function armyCard(ctx, a, compact = false) {
       others.length ? h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'armyMerge', ids: [a.id, ...others.map((o) => o.id)] }) }, 'Merge here') : null,
       h('button.btn.small.ghost', { onclick: () => rename(ctx, a) }, 'Rename'),
       h('button.btn.small.ghost', { onclick: async () => { if (await confirmBox(`Disband ${a.name}?`, 'Its troops return to the home garrisons.')) ctx.send({ type: 'armyDisband', id: a.id }); } }, 'Disband')));
+}
+
+// What an army needs each week to keep going (fuel, food, munitions), how long our stocks last, whether it has run
+// out (it lives off what it carries for two weeks, then falls apart), and its supply line: what it costs, paying for
+// it or not, and rebuilding it if the enemy cut it. Spies inside a country see the same of its armies (mine: false).
+export function suppliesBlock(ctx, a, mine) {
+  const s = ctx.state;
+  const me = s.you;
+  const NAMES = { oil: ['⛽', 'Fuel'], food: ['🌾', 'Food'], iron: ['💥', 'Munitions'] };
+  const stockOf = (r) => (mine ? me.stock?.[r] : s.countries[a.owner]?.spied?.stock?.[r]) ?? null;
+  const need = (r) => {
+    const per = a.needs[r];
+    const out = a.out?.[r];
+    const stock = stockOf(r);
+    // How long the stockpile would last all our forces at this rate (our own armies only: we know our total needs)
+    const all = mine ? (r === 'oil' ? me.fuel?.total : me.armyNeeds?.[r]) : null;
+    const weeks = all > 0 && stock != null ? stock / all : null;
+    const left = out != null ? Math.max(0, a.grace - (s.week - out)) : null;
+    return h('div.need', { class: out != null ? 'out' : weeks != null && weeks < 4 ? 'low' : '', title: `${NAMES[r][1]} this army uses each week${stock != null ? `; ${mine ? 'our' : 'their'} stockpile: ${fmtQty(r, stock)}` : ''}` },
+      h('span.faint', `${NAMES[r][0]} ${NAMES[r][1]}`),
+      h('b', `${r === 'oil' ? barrels(per) : fmtQty(r, per)} a week`),
+      h('span.small', out != null ? (left > 0 ? `OUT: ${left} wk left` : 'OUT: falling apart') : weeks != null ? (weeks >= 52 ? 'stocks: a year+' : `stocks: ${Math.floor(weeks)} wk`) : 'supplied'));
+  };
+  const l = a.line ?? {};
+  const outAny = Object.keys(a.out ?? {}).length;
+  return h('div', { onclick: (e) => e.stopPropagation() },
+    h('div.needs', ['oil', 'food', 'iron'].map(need)),
+    outAny ? h('div.meta.bad', `Nothing is getting through: it lives off what it carries for ${a.grace} weeks, then loses men, tanks and order fast${l.cut ? '. Its supply line is cut' : l.off ? '. We stopped paying for its supply line' : `. ${mine ? 'We have' : 'Its country has'} run out`}.`) : null,
+    l.abroad ? h('div.meta', { class: l.cut ? 'bad' : '' },
+      l.cut ? `✂ Supply line cut by ${nationName(s, l.cut.by)}${mine ? `: rebuilding it costs ${money(l.repair)}` : ''}.`
+        : l.off ? 'Supply line unpaid: it is getting nothing.'
+          : `🚚 Supply line back home: ${money(l.cost)} a week${mine ? ' (paid from defence funds)' : ''}.`) : null,
+    mine && l.abroad ? h('div.actions',
+      l.cut ? h('button.btn.small.primary', { onclick: () => ctx.send({ type: 'armyLineRepair', id: a.id }) }, `Rebuild the line (${money(l.repair)})`) : null,
+      !l.cut ? h('button.btn.small.ghost', { title: l.off ? 'Pay for its supply line again' : 'Save the money: the army gets no fuel, food or munitions and falls apart after two weeks', onclick: () => ctx.send({ type: 'armyLine', id: a.id, on: Boolean(l.off) }) }, l.off ? 'Pay for its supply line' : 'Stop paying for its supply line') : null) : null);
 }
 
 // Surrounded: the pocket's clock, and the ways out
@@ -333,6 +374,7 @@ function forces(ctx) {
       h('table.tbl', h('tbody',
         row('Active troops', troops(me.troops), `${troops(free.troops)} at home`),
         row('Tanks', num(me.tanks), `${num(free.tanks)} at home`),
+        row('Armoured vehicles', num(me.vehicles ?? 0), 'trucks and carriers: faster marches, better supply'),
         row('Combat aircraft', num(me.aircraft), `${num(me.airOps.reduce((t, o) => t + o.aircraft, 0))} on campaigns`),
         row('Warships & submarines', num(me.ships), `${num(Object.values(me.blockades).reduce((t, v) => t + v, 0))} blockading`),
         row('Aircraft carriers', num(me.carriers), me.carriers ? 'unlimited naval reach' : 'landings limited by range'),
@@ -385,16 +427,20 @@ function build(ctx) {
       const noLine = lineProblem(me, kind, coast);
       const locked = (kind === 'nukes' && me.nukes <= 0) || (b.tech && me.tech[b.tech[0]] < b.tech[1]) || Boolean(noLine);
       const tooling = !noLine && !hasLine(me, kind);
+      const designs = DESIGNABLE.includes(kind) ? Object.values(me.designs ?? {}).filter((d) => d.kind === kind) : [];
       return h('div.item',
         h('div.item-head', h('span.name', b.name), h('span.mono.small', money(b.cost * cf))),
+        DESIGNABLE.includes(kind) ? h('div.meta', `In service: rating ×${(me.edge?.[kind] ?? 1).toFixed(2)}${kind === 'vehicles' ? ` · ${num(me.vehicles ?? 0)} vehicles` : ''}`) : null,
         h('div.meta', `${b.batch} ${b.unit} per order · ${b.weeks} weeks${b.needs.length ? ` · needs ${b.needs.join(', ')}` : ''}${(kind === 'nukes' && me.nukes <= 0) ? ' · needs a nuclear weapon first' : b.tech && me.tech[b.tech[0]] < b.tech[1] ? ` · needs ${b.tech[0]} level ${b.tech[1]}` : ''}`),
         noLine ? h('div.meta.warn', noLine) : null,
         tooling ? h('div.meta', `We have never built these: the first order sets up the factories and costs ${LINE_SETUP} times as much (${money(b.cost * cf * LINE_SETUP)}).`) : null,
-        h('div.actions', [1, 5].map((n) => h('button.btn.small', { disabled: locked, onclick: () => ctx.send({ type: 'build', kind, batches: n }) }, `Order ${n}`))));
+        h('div.actions', [1, 5].map((n) => h('button.btn.small', { disabled: locked, onclick: () => ctx.send({ type: 'build', kind, batches: n }) }, `Order ${n} (standard)`)),
+          designs.map((d) => h('button.btn.small.primary', { disabled: locked, title: `Rating ×${designStats(d.kind, d.parts).edge.toFixed(2)}`, onclick: () => orderDialog(ctx, d) }, `Build ${d.name}…`)),
+          DESIGNABLE.includes(kind) ? h('button.btn.small.ghost', { onclick: () => ctx.openDesigner({ kind }) }, 'Design one…') : null));
     })),
     h('div.section', h('h3', `Queue (${me.queue.length}/${limit})`),
       h('div.list', me.queue.length ? me.queue.map((o) => h('div.item',
-        h('div.item-head', h('span.name', `${o.qty} ${BUILD[o.kind].unit}`), h('span.muted.small', `${Math.ceil(o.left)} wk`)),
+        h('div.item-head', h('span.name', `${o.qty} ${o.design && me.designs?.[o.design] ? `${me.designs[o.design].name} ` : ''}${BUILD[o.kind].unit}`), h('span.muted.small', `${Math.ceil(o.left)} wk`)),
         h('div', { style: { marginTop: '6px' } }, bar(o.total - o.left, o.total)),
         h('div.actions', h('button.btn.small.ghost', { onclick: () => ctx.send({ type: 'cancelBuild', id: o.id }) }, 'Cancel')))) : [h('div.empty', 'Nothing on order.')])));
 }

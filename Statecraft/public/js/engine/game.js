@@ -5,17 +5,19 @@ import { RESOURCES } from './data/regions.js';
 import { createState, promoteMinors, calibrateUpkeep } from './setup.js';
 import { allied, nation, isMinor, dateLabel, news, enemiesOf } from './core.js';
 import { marketTick, economyTick, debtRatio, debtLimit, upkeep, blockadeEffect } from './economy.js';
-import { militaryTick, militaryStep, garrisons, marchSpeed, armyFuel, breakthroughOf, airliftCover, pocketsView, zocOf, syncProvinces } from './military.js';
+import { militaryTick, militaryStep, garrisons, marchSpeed, armyFuel, breakthroughOf, airliftCover, pocketsView, zocOf, syncProvinces, armyNeeds, abroad, lineRepairCost, GRACE_WEEKS } from './military.js';
+import { hasNetwork, satCovers, spySats, warCaseOf } from './core.js';
 import { occRuns } from './land.js';
 import { initDoctrine, doctrineTick, doctrineView } from './doctrine.js';
-import { routesTick, routesView, knowsRoute } from './routes.js';
 import { diplomacyTick } from './diplomacy.js';
 import { aiTick, militaryPower, lostShare } from './ai.js';
 import { eventsTick } from './events.js';
 import { runCommand } from './commands.js';
 import { governmentTick, initGovernment } from './government.js';
 import { tradeTick, marketView } from './trade.js';
-import { huntOptions, hunterOf, spawnOption, coastguardCanStop } from './shipping.js';
+import { huntOptions, hunterOf, spawnOption } from './shipping.js';
+import { canSeeCargo, cargoPrivate, seesDeal, dealEnds, cargoTick, neutralTo, seesPact, PACT_KINDS } from './cargo.js';
+import { routeFor } from './trade.js';
 import { spiesTick, initSpies } from './spies.js';
 import { initRange } from './science.js';
 import { initFleets, fleetsFor, applyFleets, placeFleets } from './navy.js';
@@ -93,7 +95,7 @@ export class Game {
       ['finance', () => financeTick(s)],
       ['crises', () => crisesTick(s)],
       ['trade', () => tradeTick(s)],
-      ['routes', () => routesTick(s)],
+      ['cargo', () => cargoTick(s)],
       ['climate', () => climateTick(s)],
       ['space', () => spaceTick(s)],
       // Whatever part of the week the real-time steps didn't cover (all of it, without a running clock)
@@ -207,11 +209,11 @@ export class Game {
     });
     // Only the fleets that are moving or fighting change between weekly updates: [id, x, y, sea, ships, battle].
     const changed = new Set(Object.values(s.fleets ?? {}).filter((f) => f.route?.length || f.reachedStep === s.stepNo).map((f) => f.id));
-    const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.x, f.y, f.at, f.ships, f.battle ? 1 : 0]);
+    const fleets = fleetsFor(s, cid, { seen: satSees(s, cid), look: fleetLook(s, cid) }).filter((f) => changed.has(f.id) || f.battle).map((f) => [f.id, f.x, f.y, f.at, f.ships, f.battle ? 1 : 0]);
     // Cargo ships at sea: [id, x, y], for the ones this leader can see
     const me = s.countries[cid];
     const sees = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
-    const ships = (s.shipments ?? []).filter((x) => !x.done && x.mode === 'sea' && x.x != null && cargoSeen(s, cid, x, sees))
+    const ships = (s.shipments ?? []).filter((x) => !x.done && x.x != null && cargoSeen(s, cid, x, sees))
       .map((x) => [x.id, x.x, x.y]);
     // The ground armies hold, only when it has changed since this leader's last update
     this.sentOcc ??= {};
@@ -231,14 +233,17 @@ function fightsFor(s) {
   }));
 }
 
-// Can this leader see this cargo? Covert and secret cargoes, and those on a private shipping line, only by the two
-// countries trading, anyone whose spies are inside either, and (for a line) whoever has found it out
+// Can this leader see this cargo? A private one only by the two countries trading, spies inside either, spy
+// satellites, and warships that have come close to it (cargo.js); deep intelligence inside either always does.
 function cargoSeen(s, cid, x, knows) {
-  if (x.buyer === cid || x.seller === cid || knows(x.buyer) || knows(x.seller)) return true;
-  const line = x.lane?.route ?? x.line;
-  const r = line ? s.routes?.[line] : null;
-  if (r?.private && !knowsRoute(s, cid, r)) return false;
-  return !(x.covert || x.secret);
+  return knows(x.buyer) || knows(x.seller) || canSeeCargo(s, cid, x);
+}
+// How a leader who isn't trading knows of a private cargo: 'spies', 'satellite' or 'ships'
+function seenHow(s, cid, x) {
+  if (!cargoPrivate(x) || !cid || x.buyer === cid || x.seller === cid) return null;
+  if (x.sighted?.[cid] != null) return 'ships';
+  if ((s.countries[cid]?.space?.sats?.spy ?? 0) >= 1) return 'satellite';
+  return 'spies';
 }
 
 // What the map needs to show about each battle beyond the front line: a pincer, street fighting, the home guard
@@ -258,17 +263,60 @@ function armiesFor(s, cid) {
   const me = s.countries[cid] ?? null;
   const knows = (id) => id === cid || (me && (me.intel[id] ?? -1) > s.week);
   const friend = (id) => id === cid || (me && allied(s, cid, id));
-  // Spy satellites count every army on Earth, though they can't read its orders
+  // Spy satellites count every army they pass over (all of them, with four or more), though they can't read its
+  // orders; a spy network inside a country sees its armies' numbers and what they are running short of
   const seen = satSees(s, cid);
+  const spied = new Map();
+  const spiesIn = (id) => { if (!spied.has(id)) spied.set(id, Boolean(me) && hasNetwork(s, cid, id)); return spied.get(id); };
   return Object.values(s.armies).map((a) => {
     const own = friend(a.owner) || knows(a.owner);
+    const supplies = (a.owner === cid || spiesIn(a.owner)) && !a.sea ? {
+      needs: armyNeeds(a), out: a.out ?? {}, grace: GRACE_WEEKS,
+      line: { cost: Math.round((a.lineCost ?? 0) * 10000) / 10000, off: Boolean(a.line?.off), cut: a.line?.cut ?? null, abroad: abroad(s, a), repair: a.line?.cut ? Math.round(lineRepairCost(s, a) * 1000) / 1000 : 0 },
+    } : {};
+    if (!own) {
+      const exact = seen || spiesIn(a.owner) || (me && satCovers(s, cid, a.id));
+      return { id: a.id, owner: a.owner, name: a.name, region: a.region, x: a.x, y: a.y, battle: a.battle ?? null, zoc: r1(zocOf(a)), troops: exact ? r0(a.troops) : approx(a.troops, 5), tanks: exact ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen: Boolean(exact), spied: spiesIn(a.owner), pocket: a.pocket ?? null, ...supplies, lineCut: Boolean(a.line?.cut), abroad: abroad(s, a) };
+    }
     return own
       ? { id: a.id, owner: a.owner, name: a.name, region: a.region, x: a.x, y: a.y, battle: a.battle ?? null, troops: r1(a.troops), tanks: r0(a.tanks), org: r0(a.org), supply: r1(a.supply), gen: a.gen, op: a.op, path: (a.path ?? []).map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]), zoc: r1(zocOf(a)), speed: Math.round(marchSpeed(s, a) / 10) * 10, sea: a.sea ? { ...a.sea, left: Math.max(0, Math.ceil(a.sea.left * 10) / 10) } : null, status: a.status, attacking: a.attacking, exact: true,
         auto: Boolean(a.auto), assist: Boolean(a.assist), buildup: a.buildup ?? null, fuel: { now: armyFuel(a), hold: armyFuel(a, 'hold'), march: armyFuel(a, 'march'), fight: armyFuel(a, 'fight') },
         pocket: a.pocket ?? null, pocketSea: Boolean(a.pocketSea), pocketWeeks: a.pocketWeeks ?? 0, breakthrough: r1(breakthroughOf(s, a)), airlift: a.pocket ? r1(airliftCover(s, a)) : 0,
-        lift: (s.countries[a.owner]?.airlifts ?? []).find((x) => x.army === a.id)?.aircraft ?? 0, breakout: (a.breakout ?? -1) > s.week, prepared: Boolean(a.assault?.prepared) }
+        lift: (s.countries[a.owner]?.airlifts ?? []).find((x) => x.army === a.id)?.aircraft ?? 0, breakout: (a.breakout ?? -1) > s.week, prepared: Boolean(a.assault?.prepared), ...supplies }
       : { id: a.id, owner: a.owner, name: a.name, region: a.region, x: a.x, y: a.y, battle: a.battle ?? null, zoc: r1(zocOf(a)), troops: seen ? r0(a.troops) : approx(a.troops, 5), tanks: seen ? r0(a.tanks) : approx(a.tanks, 50), gen: { name: a.gen.name }, sea: a.sea ? { to: a.sea.to } : null, attacking: a.attacking, exact: false, seen, pocket: a.pocket ?? null };
   });
+}
+
+// What our satellites and spies tell us about a foreign fleet: its exact size if a satellite is over it or our spies
+// are inside its navy, and where about half of a spied country's fleets are bound
+function fleetLook(s, cid) {
+  if (!s.countries[cid]) return null;
+  const nets = new Map();
+  const spies = (id) => { if (!nets.has(id)) nets.set(id, hasNetwork(s, cid, id)); return nets.get(id); };
+  return (f) => {
+    const spy = spies(f.owner);
+    let h = 0;
+    for (let i = 0; i < f.id.length; i++) h = (h * 31 + f.id.charCodeAt(i)) >>> 0;
+    return { exact: spy || satCovers(s, cid, f.id), heading: spy && h % 2 === 0 };
+  };
+}
+
+// With a spy network inside a country: its weapon designs, its stockpiles, who it is building a case for war
+// against, and where some of its fleets are headed. A spy satellite alone shows its fleets' and armies' numbers.
+function spyView(s, cid, c) {
+  const spies = hasNetwork(s, cid, c.id);
+  if (!spies) return {};
+  const pick = (o) => Object.fromEntries(Object.entries(o ?? {}).map(([k, v]) => [k, Math.round(v * 1000) / 1000]));
+  const cases = Object.keys(c.warCases ?? {}).map((t) => ({ target: t, ...(warCaseOf(c, t) ?? {}) })).filter((w) => w.until > s.week);
+  return {
+    spied: {
+      designs: Object.values(c.designs ?? {}).map((d) => ({ id: d.id, kind: d.kind, name: d.name, parts: d.parts, built: d.built ?? 0 })),
+      stock: pick(c.stock),
+      warCases: cases.map((w) => ({ target: w.target, ready: w.ready, until: w.until })),
+      edge: c.edge ?? {},
+      vehicles: Math.round(c.vehicles ?? 0),
+    },
+  };
 }
 
 /* ---------- Saved games from before a system existed ---------- */
@@ -292,6 +340,13 @@ function upgrade(s) {
   delete s.pockets;
   for (const reg of Object.values(s.regions)) if (reg.battle && reg.battle.fighting == null) reg.battle = null;
   syncProvinces(s, true);
+  // Deals agreed before their convoys' routes were planned: where those start and end
+  for (const t of s.treaties ?? []) {
+    if (t.kind !== 'deal' || t.ends !== undefined) continue;
+    t.mode = routeFor(s, t.a, t.b)?.mode ?? 'sea';
+    t.ends = dealEnds(s, t.a, t.b, t.mode);
+    t.route ??= null;
+  }
 }
 
 /* ---------- Rankings ---------- */
@@ -351,7 +406,7 @@ export function view(s, cid, { gar, ranks }) {
       dead: r0(c.dead ?? 0),
       stability: open ? r0(c.stability) : null,
       rep: r0(c.rep), mob: c.mob, rate: c.rate, tax: c.tax,
-      mil: { troops: r0(c.troops), tanks: r0(c.tanks), aircraft: r0(c.aircraft), ships: r0(c.ships), carriers: c.carriers, missiles: r0(c.missiles), nukes: c.nukes },
+      mil: { troops: r0(c.troops), tanks: r0(c.tanks), vehicles: r0(c.vehicles ?? 0), aircraft: r0(c.aircraft), ships: r0(c.ships), carriers: c.carriers, missiles: r0(c.missiles), nukes: c.nukes },
       nukeProgram: c.nukeProgram.on ? (open ? r1(c.nukeProgram.progress * 100) : true) : false,
       treasury: open ? r0(c.treasury) : null,
       tech: open || friend(c.id) ? c.tech : null,
@@ -359,6 +414,8 @@ export function view(s, cid, { gar, ranks }) {
       research: open ? (c.research ?? []).map((x) => ({ field: x.field, level: x.level, left: Math.ceil(x.left) })) : null,
       queue: open && c.id !== cid ? c.queue.map((o) => ({ kind: o.kind, qty: o.qty, left: Math.ceil(o.left) })) : null,
       intel: open && c.id !== cid,
+      // What our spies inside it (or our satellites) let us see
+      ...(me && c.id !== cid ? spyView(s, cid, c) : {}),
       power: r0(militaryPower(s, c.id)),
       lost: r1(lostShare(s, c.id) * 100),
       blockaded: r0(blockadeEffect(s, c.id) * 100),
@@ -384,7 +441,7 @@ export function view(s, cid, { gar, ranks }) {
   }
 
   const armies = armiesFor(s, cid);
-  const fleets = fleetsFor(s, cid, { seen: satSees(s, cid) });
+  const fleets = fleetsFor(s, cid, { seen: satSees(s, cid), look: fleetLook(s, cid) });
 
   const mine = (t) => t.a === cid || t.b === cid;
   return {
@@ -395,7 +452,9 @@ export function view(s, cid, { gar, ranks }) {
     countries, minors, regions, resources, armies, fleets, ranks, crises: crisesView(s, cid), trade: s.tradeFlows ?? [], aid: aidFor(s, cid), ...energyView(s, cid), climate: climateView(s), space: { debris: Math.round((s.space?.debris ?? 0) * 100), firsts: s.space?.firsts ?? {} },
     wars: s.wars.map((w) => ({ id: w.id, a: w.a, b: w.b, since: w.since, goal: w.goal, lossA: r1(w.lossA), lossB: r1(w.lossB) })),
     alliances: Object.values(s.alliances).filter((al) => !al.secret || !me || al.members.includes(cid) || al.members.some((m) => knows(m))),
-    treaties: s.treaties.filter((t) => ['fta', 'nap', 'access', 'armistice'].includes(t.kind) || mine(t)),
+    // Secret agreements only to the two countries and spies inside either
+    treaties: s.treaties.filter((t) => (['fta', 'nap', 'access', 'armistice'].includes(t.kind) && seesPact(s, cid, t)) || mine(t)),
+    spiedPacts: me ? s.treaties.filter((t) => PACT_KINDS.includes(t.kind) && t.secret && !mine(t) && seesPact(s, cid, t)).map((t) => ({ id: t.id, kind: t.kind, a: t.a, b: t.b, amount: t.amount ?? null, exposed: Boolean(t.exposed), neutral: neutralTo(s, cid, t.a, t.b) })) : [],
     sanctions: Object.keys(s.sanctions).filter((k) => s.sanctions[k]),
     tariffs: s.tariffs,
     proposals: Object.values(s.proposals).filter((p) => p.to === cid || p.from === cid),
@@ -406,17 +465,18 @@ export function view(s, cid, { gar, ranks }) {
       .map((x) => ({
         id: x.id, seller: x.seller, buyer: x.buyer, res: x.res, qty: x.qty, cost: Math.round((x.cost || x.payment || 0) * 1000) / 1000, mode: x.mode, straits: x.straits, transit: x.transit,
         left: x.left, total: x.total, covert: x.covert, secret: x.secret, deal: Boolean(x.deal), lane: x.lane ?? null, x: x.x, y: x.y,
-        line: x.lane?.route ?? x.line ?? null,
-        // Our fleets' chances against it, the one of ours already after it, a new fleet from our nearest port, and
-        // whether our coastguard can stop it in our waters
+        // The way it goes: its planned checkpoints, if its seller planned them (else the lane between the ports)
+        path: x.path ?? null, private: cargoPrivate(x), exposed: Boolean(x.exposed), seen: seenHow(s, cid, x),
+        // Our fleets' chances against it, the one of ours already after it, and a new fleet from our nearest port
         ...(me && x.mode === 'sea' && x.buyer !== cid && x.seller !== cid && !allied(s, cid, x.buyer) && !allied(s, cid, x.seller)
-          ? { hunter: hunterOf(s, cid, x), hunt: huntOptions(s, cid, x), spawn: spawnOption(s, cid, x), coastguard: coastguardCanStop(s, cid, x), coastWaiting: (x.coast ?? []).some((o) => o.by === cid && !o.done) } : {}),
+          ? { hunter: hunterOf(s, cid, x), hunt: huntOptions(s, cid, x), spawn: spawnOption(s, cid, x) } : {}),
       })),
     rel: me ? Object.fromEntries(Object.keys(s.countries).map((id) => [id, r0(s.rel[id < cid ? `${id}|${cid}` : `${cid}|${id}`] ?? (id === cid ? 100 : 0))])) : {},
     news: s.news.slice(-150),
     winter: s.winterUntil > s.week,
     nukesUsed: s.nukesUsed,
-    routes: routesView(s, cid),
+    // Other countries' secret deals our spies have found
+    spiedDeals: me ? s.treaties.filter((t) => t.kind === 'deal' && !mine(t) && t.secret && seesDeal(s, cid, t)).map((t) => ({ id: t.id, a: t.a, b: t.b, res: t.res, qty: t.qty, price: t.price, until: t.until, exposed: Boolean(t.exposed), mode: t.mode, neutral: neutralTo(s, cid, t.a, t.b) })) : [],
     pockets: pocketsView(s),
     battleInfo: battleInfo(s),
     fights: fightsFor(s),
@@ -437,7 +497,7 @@ function own(s, c) {
     'conscription', 'conscripts', 'security', 'press', 'protests', 'threat', 'draftDrag', 'protestDrag', 'strike', 'civilWar', 'rebels',
     'research', 'range', 'rangeWork', 'counterIntel', 'caught', 'sweepUntil', 'logistics', 'offers', 'tollIncome', 'tollsPaid', 'dead', 'boost', 'warCases', 'blockadeCarriers',
     'refugees', 'refugeeCost', 'refugeesFrom', 'borderClosed', 'refitUntil', 'cartelCheat', 'cartelCaught', 'releasing', 'carbonTax', 'carbonEffect', 'carbonRevenue', 'emissions',
-    'fuel', 'fuelShort', 'fuelCrisis', 'lines', 'neglect', 'powerSharing', 'airlifts', 'innovations',
+    'fuel', 'fuelShort', 'fuelCrisis', 'lines', 'neglect', 'powerSharing', 'airlifts', 'innovations', 'designs', 'edge', 'vehicles', 'armyNeeds',
   ]);
   out.spies = Object.fromEntries(Object.entries(c.spies ?? {}).map(([k, n]) => [k, { agents: n.agents, since: n.since }]));
   out.reports = (c.reports ?? []).slice(-120).map(({ turned, ...r }) => r);

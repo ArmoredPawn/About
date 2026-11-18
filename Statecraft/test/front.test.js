@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../public/js/engine/game.js';
 import { createArmy, CONTACT, zocOf } from '../public/js/engine/military.js';
-import { CELLS_OF, holderAt, neighbours4, isLand, cellX, cellY, dist } from '../public/js/engine/land.js';
+import { CELLS_OF, holderAt, neighbours4, isLand, cellX, cellY, dist, cellAt } from '../public/js/engine/land.js';
 import { startWar } from '../public/js/engine/diplomacy.js';
 import { CITIES } from '../public/js/engine/data/cities.js';
 import { COUNTRIES } from '../public/js/engine/data/countries.js';
@@ -106,4 +106,23 @@ test('every country has dozens of cities and towns', () => {
     const total = citiesIn(region, 5).reduce((t, c) => t + c.share, 0);
     assert.ok(total <= 0.9001, `${region}: ${total}`);
   }
+});
+
+test('a battle against an army standing on a water cell by the shore is fought, and every other army keeps moving', () => {
+  const g = game(14, 'ind');
+  const s = g.s;
+  startWar(s, 'ind', 'pak');
+  const p = army(s, 'pak', 'pak-kr', 60);
+  // Just off the coast near Karachi: a water cell, in no province
+  p.x = 1286.9; p.y = 358.1;
+  assert.ok(!isLand(cellAt(p.x, p.y)), 'the defender is on water');
+  p.op = { kind: 'hold', target: p.region, at: [p.x, p.y], aggr: 'balanced' };
+  const i = army(s, 'ind', 'ind-gj', 120);
+  i.x = p.x + 3; i.y = p.y;
+  assert.equal(g.command('ind', { type: 'armyOrder', id: i.id, kind: 'attack', enemy: p.id }), null);
+  const before = p.troops;
+  // Under node --test a failed step throws, so a crash in the battle fails this test
+  for (let k = 0; k < 4; k++) g.step(0.125);
+  assert.ok(Object.values(s.battles).some((b) => b.def === p.id && b.region === 'pak-kr'), 'the battle is fought in the province on the shore');
+  assert.ok(p.troops < before, 'the defender takes losses');
 });

@@ -12,6 +12,7 @@ import { patrolBlocks } from './trade.js';
 import { seasOf, fleetStrength } from './navy.js';
 import { cartelOutput, embargoCut, pipelineShare, bypassShare } from './energy.js';
 import { climateYield } from './climate.js';
+import { delivered } from './designs.js';
 
 const CP_KEY = new Map(Object.entries(CHOKEPOINTS).map(([k, v]) => [v, k]));
 
@@ -22,6 +23,7 @@ const ELASTIC = { oil: 3.5, gas: 3, coal: 2, iron: 2, food: 3, rare: 2.5, uran: 
 export const BUILD = {
   troops: { name: 'Infantry', batch: 10, unit: 'K troops', cost: 0.08, weeks: 12, needs: [] },
   tanks: { name: 'Tanks', batch: 50, unit: 'tanks', cost: 0.4, weeks: 26, needs: ['iron', 'metal'] },
+  vehicles: { name: 'Armoured vehicles', batch: 100, unit: 'vehicles', cost: 0.12, weeks: 10, needs: ['iron'] },
   aircraft: { name: 'Combat aircraft', batch: 10, unit: 'aircraft', cost: 1.0, weeks: 52, needs: ['chip', 'rare', 'metal'] },
   ships: { name: 'Warship', batch: 1, unit: 'warship', cost: 1.1, weeks: 104, needs: ['iron', 'metal', 'chip'] },
   carriers: { name: 'Aircraft carrier', batch: 1, unit: 'carrier', cost: 12, weeks: 260, needs: ['iron', 'chip'], tech: ['naval', 7] },
@@ -196,6 +198,8 @@ function demand(s, n, r) {
   if (c) {
     // What the armed forces burn: worked out each week from what every army, air campaign and fleet is doing
     if (r === 'oil') d += c.fuel?.total ?? (c.troops * 0.00005 + c.aircraft * 0.000004 + c.ships * 0.0001);
+    // Its armies' food, and the iron that becomes shells and spare parts
+    if (r === 'food' || r === 'iron') d += c.armyNeeds?.[r] ?? 0;
     if (c.ration && (r === 'oil' || r === 'gas' || r === 'food')) d *= 0.85;
     // A carbon tax moves people and firms off fossil fuels over a few years
     if (r === 'oil' || r === 'gas' || r === 'coal') d *= 1 - 0.07 * (c.carbonEffect ?? 0) * (r === 'coal' ? 1.4 : 1);
@@ -416,13 +420,6 @@ export function tradeScore(s, c, world) {
     const other = t.a === c.id ? t.b : t.b === c.id ? t.a : null;
     if (other && alive(s, other)) partners += s.countries[other].gdp;
   }
-  // Shipping lines opened between two countries: a public one carries a fair share of their trade; a private
-  // line carries less, out of sight
-  for (const r of Object.values(s.routes ?? {})) {
-    if (r.closed) continue;
-    const other = r.by === c.id ? r.partner : r.partner === c.id ? r.by : null;
-    if (other && alive(s, other) && !atWar(s, c.id, other)) partners += (s.countries[other]?.gdp ?? 0) * (r.private ? 0.1 : 0.25);
-  }
   let tariffs = 0;
   for (const [key, level] of Object.entries(s.tariffs)) {
     const [a, b] = key.split('>');
@@ -611,8 +608,11 @@ function production_(s, c) {
   for (const o of done) {
     const kind = BUILD[o.kind];
     if (o.kind === 'troops') c.troops += o.qty;
-    else c[o.kind] += o.qty;
-    alert(s, c.id, `Delivered: ${o.qty} ${kind.unit}.`, 'good');
+    else c[o.kind] = (c[o.kind] ?? 0) + o.qty;
+    // Built to one of our designs (or the standard model): it moves how good that arm is
+    const design = o.design ? c.designs?.[o.design] : null;
+    if (['tanks', 'vehicles', 'aircraft', 'ships'].includes(o.kind)) delivered(c, o.kind, o.qty, design);
+    alert(s, c.id, `Delivered: ${o.qty} ${design ? `${design.name} ` : ''}${kind.unit}.`, 'good');
   }
 }
 

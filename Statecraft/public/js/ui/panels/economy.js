@@ -5,7 +5,7 @@ import { h, flag, money, pct, nationName, regionName, spark, bar, RES_COLORS, RE
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { modal, numberField, confirmBox } from '../dialogs.js';
 import { markets } from './markets.js';
-import { routesTab } from './routes.js';
+import { pactsSpied } from './diplomacy.js';
 
 const SPEND = [
   ['defence', 'Defence', 'Upkeep of the armed forces; any surplus buys equipment.'],
@@ -19,12 +19,13 @@ const SPEND = [
 export function economy(ctx) {
   const tab = ctx.sub('economy', 'budget');
   const crisis = ctx.state.you.finance?.debtCrisis;
-  const lines = (ctx.state.routes ?? []).filter((r) => r.by === ctx.state.me || r.partner === ctx.state.me).length;
-  const tabs = [['budget', 'Budget'], ['markets', crisis ? 'Markets ⚠' : 'Markets'], ['resources', 'Resources'], ['projects', 'Projects'], ['trade', 'Trade'], ['routes', `Routes${lines ? ` (${lines})` : ''}`]];
+  // Deals of ours whose convoys are waiting for us to plan their route
+  const unplanned = (ctx.state.treaties ?? []).filter((t) => t.kind === 'deal' && t.a === ctx.state.me && !t.route).length;
+  const tabs = [['budget', 'Budget'], ['markets', crisis ? 'Markets ⚠' : 'Markets'], ['resources', 'Resources'], ['projects', 'Projects'], ['trade', unplanned ? `Trade ⚠ ${unplanned}` : 'Trade']];
   return h('div',
     h('div.panel-title', h('h2', 'Economy'), h('span.muted.small', `${money(ctx.state.you.gdp)} GDP`)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('economy', id) }, label))),
-    ({ budget, markets, resources, projects, trade, routes: routesTab }[tab] ?? budget)(ctx));
+    ({ budget, markets, resources, projects, trade }[tab] ?? budget)(ctx));
 }
 
 /* ---------- Budget ---------- */
@@ -246,11 +247,32 @@ function trade(ctx) {
   return h('div',
     h('div.section', h('h3', 'Trade blocs'), blocs.length ? h('div.list', blocs.map((b) => h('div.item', h('div.item-head', h('span.name', b.name), h('span.muted.small', `${b.members.length} members`))))) : h('div.empty', 'Not in a trade bloc. Create one from Diplomacy.')),
     h('div.section', h('h3', 'Free trade agreements'), flagList(ftas)),
-    h('div.section', h('h3', 'Deals, loans and reparations'), deals.length ? h('div.list', deals.map((t) => h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, dealText(s, t)), h('div.meta', `until week ${t.until}`)))) : h('div.empty', 'None. Propose resource deals and loans from a country\'s page in Diplomacy.')),
+    h('div.section', h('h3', 'Deals, loans and reparations'), deals.length ? h('div.list', deals.map((t) => dealCard(ctx, t))) : h('div.empty', 'None. Propose resource deals and loans from a country\'s page in Diplomacy.')),
+    (s.spiedPacts ?? []).length ? h('div.section', h('h3', 'Secret agreements our spies have found'), pactsSpied(ctx, s.spiedPacts)) : null,
+    (s.spiedDeals ?? []).length ? h('div.section', h('h3', 'Secret deals our spies have found'),
+      h('p.muted.small', 'Our spies inside these countries found these deals. We see their convoys and routes; we can keep quiet, or broadcast them.'),
+      h('div.list', s.spiedDeals.map((t) => h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, dealText(s, t)), h('div.meta', `until week ${t.until}${t.exposed ? ' · now public' : ' · still secret'}`), t.exposed ? null : h('div.actions', h('button.btn.small.ghost', { title: t.neutral ? 'As a neutral country we can broadcast it: it makes the news and every country sees its convoys. Both countries will resent it. To warn just one country, use the chat.' : 'Broadcast it: it makes the news and every country sees its convoys. Both countries will resent it.', onclick: async () => { if (await confirmBox('Broadcast this secret deal?', `${nationName(s, t.a)} is secretly selling ${RESOURCE_INFO[t.res].name.toLowerCase()} to ${nationName(s, t.b)}. Broadcasting it puts it in the news and its convoys on every map; both countries will hold it against us.`, { ok: 'Broadcast it' })) ctx.send({ type: 'dealExpose', id: t.id }); } }, 'Broadcast it')))))) : null,
     h('div.section', h('h3', 'Tariffs'), tariffs.length ? h('div.list', tariffs.map(([k, v]) => { const [a, b] = k.split('>'); return h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, `${nationName(s, a)} charges ${v}% on goods from ${nationName(s, b)}`)); })) : h('div.empty', 'No tariffs.')),
     h('div.section', h('h3', 'Sanctions against us'), flagList(sanctionsOnMe)),
     h('div.section', h('h3', 'Our sanctions'), flagList(mySanctions)),
   );
+}
+
+// A resource deal: its route (the seller plans it), the cost of shipping, and whether it is secret
+function dealCard(ctx, t) {
+  const s = ctx.state;
+  if (t.kind !== 'deal') return h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, dealText(s, t)), h('div.meta', `until week ${t.until}`));
+  const selling = t.a === s.me;
+  const r = t.route;
+  const secret = t.secret && !t.exposed;
+  return h('div.item',
+    h('div.item-head', h('span.name', dealText(s, t)), secret ? h('span.chip', { title: 'Only spies inside either country, spy satellites, and warships that come very close can see its convoys' }, 'secret') : t.exposed ? h('span.chip.warn', 'exposed') : null),
+    r ? h('div.meta', `Route: ${r.km.toLocaleString('en')} km ${r.mode === 'land' ? 'overland' : 'by sea'}, ${r.pts.length - 2} checkpoint${r.pts.length === 3 ? '' : 's'}, about ${r.weeks} week${r.weeks === 1 ? '' : 's'} a voyage${selling ? ` · shipping ${money(r.cost)} a convoy${t.freight ? ` (${money(t.freight)} so far)` : ''}` : ''}`)
+      : h('div.meta', { class: selling ? 'warn' : '' }, selling ? 'No route yet: no convoy sails until we plan one.' : `Waiting for ${nationName(s, t.a)} to plan the route.`),
+    h('div.meta', `until week ${t.until}`),
+    selling ? h('div.actions',
+      h('button.btn.small', { class: r ? '' : 'primary', onclick: () => ctx.planRoute(t.id) }, r ? 'Change the route…' : 'Plan the route…'),
+      r ? h('button.btn.small.ghost', { onclick: () => { ctx.previewRoute({ pts: r.pts, bad: 0 }, true); ctx.hint('The route our convoys sail. Click "Plan the route" to change it.', 'info', 5000); setTimeout(() => ctx.previewRoute(null), 6000); } }, 'Show on the map') : null) : null);
 }
 
 function dealText(s, t) {

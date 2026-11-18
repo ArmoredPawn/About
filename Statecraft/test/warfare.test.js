@@ -1,4 +1,4 @@
-// Encirclement, pincers, doctrine, allies at the front, hunting shipping, new fleets from port, and shipping lines.
+// Encirclement, pincers, doctrine, allies at the front, hunting shipping, and new fleets from port.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +7,6 @@ import { updatePockets, breakthroughOf, placeArmy, pocketCells } from '../public
 import { provinceCell, CELLS_OF, holderAt } from '../public/js/engine/land.js';
 import { fx, planDoctrine, doctrineTick, SYNERGIES } from '../public/js/engine/doctrine.js';
 import { shipAt, spawnOption } from '../public/js/engine/shipping.js';
-import { routeShape } from '../public/js/engine/routes.js';
 import { startWar } from '../public/js/engine/diplomacy.js';
 import { PORTS } from '../public/js/engine/navy.js';
 
@@ -241,39 +240,4 @@ test('a fleet hunting shipping in a sea goes after enemy cargo there; a failure 
   // Whatever happened, the buyer never hears of an attempt that failed
   assert.ok(!told('jpn', /tried to stop|escorts got it through/), 'failures stay with the hunter');
   if (s.countries[seller]) assert.ok(!told(seller, /tried to stop/));
-});
-
-test('a shipping line carries the trade between two countries; a private one is hidden, but the waters it crosses can find it', () => {
-  const g = game(40, 'usa');
-  const s = g.s;
-  const from = Object.values(s.regions).find((r) => r.ctrl === 'usa' && PORTS[r.id] && /fl|se|gu/.test(r.id))?.id ?? Object.values(s.regions).find((r) => r.ctrl === 'usa' && PORTS[r.id]).id;
-  const to = Object.values(s.regions).find((r) => r.ctrl === 'bra' && PORTS[r.id]).id;
-  const shape = routeShape(s, from, to);
-  assert.ok(shape && shape.km > 1000, 'a line over the water');
-  const before = s.countries.usa.treasury;
-  assert.equal(g.command('usa', { type: 'routeOpen', from: { region: from }, to: { region: to }, private: true, name: 'Secret Line' }), null);
-  assert.ok(s.countries.usa.treasury < before, 'it costs money to open');
-  const line = Object.values(s.routes)[0];
-  assert.equal(line.partner, 'bra');
-  assert.match(g.command('usa', { type: 'routeOpen', from: { region: from }, to: { region: to } }), /already open/);
-  // A cargo between the two sails it
-  g.tick();
-  const seller = g.view('usa').market.sellers.food?.find((x) => x.id === 'bra') ?? g.view('usa').market.sellers.iron?.find((x) => x.id === 'bra');
-  if (seller) {
-    const res = g.view('usa').market.sellers.food?.some((x) => x.id === 'bra') ? 'food' : 'iron';
-    assert.equal(g.command('usa', { type: 'marketBuy', res, qty: 0.5, from: 'bra' }), null);
-    g.step(0.125);
-    const sh = s.shipments.find((x) => x.buyer === 'usa' && x.seller === 'bra');
-    assert.equal(sh.lane.route, line.id, 'the cargo sails the line');
-    const outsider = Object.keys(s.countries).find((id) => !['usa', 'bra'].includes(id) && !line.crosses.includes(id) && !s.countries[id].minor);
-    assert.ok(!g.view(outsider).shipments.some((x) => x.id === sh.id), 'a private line\'s ships are hidden');
-  }
-  // A country whose waters it crosses is likely to notice it
-  const watcher = line.crosses[0];
-  if (watcher && s.countries[watcher]) {
-    line.traffic = s.week;
-    for (let i = 0; i < 80 && line.known[watcher] == null; i++) { line.traffic = s.week; g.tick(); }
-    assert.ok(line.known[watcher] != null, `${watcher} finds the line in its waters`);
-    assert.ok(g.view(watcher).routes.some((r) => r.id === line.id), 'and sees it from then on');
-  }
 });

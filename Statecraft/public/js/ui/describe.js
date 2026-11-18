@@ -4,8 +4,14 @@ import { RESOURCE_INFO } from '../engine/data/regions.js';
 import { nationName, regionName, money } from './dom.js';
 
 export function describeProposal(s, p) {
+  const text = terms(s, p);
+  return p.terms?.secret && ['fta', 'nap', 'access', 'loan', 'pact'].includes(p.kind) ? `${text} (in secret)` : text;
+}
+
+function terms(s, p) {
   const t = p.terms ?? {};
   switch (p.kind) {
+    case 'pact': return `a new ${t.kind === 'military' ? 'military alliance' : 'trade bloc'} of the two of us${t.name ? `, ${t.name}` : ''}`;
     case 'alliance': return `joining ${s.alliances.find((a) => a.id === t.alliance)?.name ?? 'an alliance'}`;
     case 'fta': return 'a free trade agreement';
     case 'nap': return 'a non-aggression pact';
@@ -13,7 +19,8 @@ export function describeProposal(s, p) {
     case 'deal': {
       const info = RESOURCE_INFO[t.res];
       const buyer = t.seller === p.from ? p.to : p.from;
-      return `${nationName(s, t.seller)} sells ${nationName(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year for ${money(Number(t.price))} a year, for ${t.weeks} weeks`;
+      const price = t.price == null || t.price === '' ? `at a price ${nationName(s, t.seller)} names` : `for ${money(Number(t.price))} a year`;
+      return `${nationName(s, t.seller)} sells ${nationName(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year ${price}, for ${t.weeks} weeks${t.secret ? ', in private' : ''}`;
     }
     case 'loan': return `a loan of ${money(Number(t.amount))} over ${t.years} years at ${t.rate}%`;
     case 'peace': {

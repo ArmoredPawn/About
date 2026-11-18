@@ -1,6 +1,7 @@
 // Diplomacy: war and peace, alliances, treaties, deals, sanctions, the straits and the UN Security Council.
 
 import { routeFor, ship } from './trade.js';
+import { CONVOY_WEEKS, planDealRoute, dealEnds, routeBlocked, shippingCost, secretTradeFound, secretPactFound } from './cargo.js';
 import { regimeChange } from './coups.js';
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { CHOKEPOINTS } from './data/world.js';
@@ -16,6 +17,7 @@ export const PROPOSAL_WEEKS = 4;
 
 export const PROPOSALS = {
   alliance: 'Join alliance',
+  pact: 'Form an alliance',
   fta: 'Free trade agreement',
   nap: 'Non-aggression pact',
   access: 'Military access',
@@ -224,6 +226,12 @@ function validate(s, from, to, kind, t) {
       if (atWar(s, from, to)) return 'You are at war with them.';
       return null;
     }
+    case 'pact': {
+      if (!['military', 'economic'].includes(t.kind)) return 'Pick a military alliance or a trade bloc.';
+      if (atWar(s, from, to)) return 'You are at war with them.';
+      if (Object.values(s.alliances).some((al) => al.kind === t.kind && al.members.includes(from) && al.members.includes(to))) return `You are already in ${t.kind === 'military' ? 'a military alliance' : 'a trade bloc'} together.`;
+      return null;
+    }
     case 'fta':
       if (treaty(s, 'fta', from, to)) return 'You already have a free trade agreement.';
       if (atWar(s, from, to)) return 'You are at war with them.';
@@ -239,10 +247,13 @@ function validate(s, from, to, kind, t) {
     case 'deal': {
       if (!RESOURCES.includes(t.res)) return 'Pick a resource.';
       const qty = Number(t.qty);
+      const asking = t.price == null || t.price === '';
       const price = Number(t.price);
       const weeks = Number(t.weeks);
-      if (!(qty > 0) || !(price >= 0) || !(weeks >= 4 && weeks <= 520)) return 'Set an amount, a yearly price and a length of 4 to 520 weeks.';
       if (t.seller !== from && t.seller !== to) return 'Choose who sells.';
+      // In a private deal the seller names the price: a buyer asks for one, and the seller answers with it
+      if (asking && !(t.secret && t.seller === to)) return 'Set a yearly price.';
+      if (!(qty > 0) || !(asking || price >= 0) || !(weeks >= 4 && weeks <= 520)) return 'Set an amount, a yearly price and a length of 4 to 520 weeks.';
       const exclusive = s.treaties.find((x) => x.kind === 'deal' && x.a === t.seller && x.res === t.res && x.exclusive);
       if (exclusive) return `${nameOf(s, t.seller)} has promised all its ${RESOURCE_INFO[t.res].name.toLowerCase()} to ${nameOf(s, exclusive.b)}.`;
       return null;
@@ -282,17 +293,24 @@ function validate(s, from, to, kind, t) {
   }
 }
 
+// Secret agreements say so
 export function describe(s, p) {
+  const text = describeTerms(s, p);
+  return p.terms?.secret && ['fta', 'nap', 'access', 'loan'].concat('pact').includes(p.kind) ? `${text} (in secret)` : text;
+}
+function describeTerms(s, p) {
   const t = p.terms;
   switch (p.kind) {
     case 'alliance': return `join ${s.alliances[t.alliance]?.name ?? 'an alliance'}`;
+    case 'pact': return `a new ${t.kind === 'military' ? 'military alliance' : 'trade bloc'} of the two of us${t.name ? `, ${t.name}` : ''}`;
     case 'fta': return 'a free trade agreement';
     case 'nap': return 'a non-aggression pact';
     case 'access': return 'mutual military access';
     case 'deal': {
       const info = RESOURCE_INFO[t.res];
       const buyer = t.seller === p.from ? p.to : p.from;
-      return `${nameOf(s, t.seller)} sells ${nameOf(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year for ${money(Number(t.price))} a year, for ${t.weeks} weeks${t.exclusive ? ', and to no one else' : ''}${t.secret ? ' (in secret)' : ''}`;
+      const price = t.price == null || t.price === '' ? `at a price ${nameOf(s, t.seller)} names` : `for ${money(Number(t.price))} a year`;
+      return `${nameOf(s, t.seller)} sells ${nameOf(s, buyer)} ${t.qty} ${info.unit} of ${info.name.toLowerCase()} a year ${price}, for ${t.weeks} weeks${t.exclusive ? ', and to no one else' : ''}${t.secret ? ' (in secret)' : ''}`;
     }
     case 'loan': return `a loan of ${money(Number(t.amount))} over ${t.years} years at ${t.rate}%`;
     case 'peace': {
@@ -321,9 +339,19 @@ function resumeMarch(s, p) {
   alert(s, p.from, err ? `${nameOf(s, p.to)} granted access, but ${army.name} still can't reach its objective: ${err}` : `${nameOf(s, p.to)} granted access: ${army.name} is on its way.`, err ? 'warn' : 'good', { front: true });
 }
 
-export function respond(s, cid, id, accept) {
+export function respond(s, cid, id, accept, { price } = {}) {
   const p = s.proposals[id];
   if (!p || p.to !== cid) return 'That proposal is no longer open.';
+  // A buyer asked us to name our price for a private deal: our answer goes back to them as an offer
+  if (accept && p.kind === 'deal' && (p.terms.price == null || p.terms.price === '')) {
+    price = Number(price);
+    if (!(price >= 0)) return 'Name a yearly price.';
+    delete s.proposals[id];
+    const err = propose(s, cid, p.from, 'deal', { ...p.terms, price: Math.round(price * 1000) / 1000 });
+    if (err) return err;
+    alert(s, p.from, `${nameOf(s, cid)} named its price for the secret deal: ${money(price)} a year. Accept or decline it in Diplomacy, Proposals.`, 'proposal');
+    return null;
+  }
   delete s.proposals[id];
   const err = accept && p.kind !== 'callToArms' ? validate(s, p.from, p.to, p.kind, p.terms) : null;
   if (err) {
@@ -355,20 +383,43 @@ export function respond(s, cid, id, accept) {
       else news(s, `${to} joins ${al.name}.`, 'diplomacy', [p.to]);
       break;
     }
-    case 'fta': case 'nap': case 'access':
-      s.treaties.push({ id: nextId(s, 't'), kind: p.kind, a: p.from, b: p.to, since: s.week, until: s.week + 99999 });
+    case 'pact': {
+      // An alliance of two, founded only now that both have agreed
+      let name = String(t.name ?? '').replace(/[\p{C}]/gu, '').trim().slice(0, 40) || `${from}–${to} ${t.kind === 'military' ? 'Pact' : 'Trade Bloc'}`;
+      for (let n = 2; Object.values(s.alliances).some((al) => al.name.toLowerCase() === name.toLowerCase()); n++) name = `${name.replace(/ \d+$/, '')} ${n}`;
+      const id = nextId(s, 'al');
+      s.alliances[id] = { id, name, kind: t.kind, members: [p.from, p.to], founder: p.from, since: s.week, secret: Boolean(t.secret) };
+      addRel(s, p.from, p.to, 20);
+      if (t.secret) for (const m of [p.from, p.to]) alert(s, m, `${name} is founded in secret. Only its members, and spies inside them, will know.`, 'good');
+      else news(s, `${from} and ${to} form ${t.kind === 'military' ? 'a military alliance' : 'a trade bloc'}: ${name}.`, 'diplomacy', [p.from, p.to]);
+      break;
+    }
+    case 'fta': case 'nap': case 'access': {
+      const pact = { id: nextId(s, 't'), kind: p.kind, a: p.from, b: p.to, since: s.week, until: s.week + 99999, secret: Boolean(t?.secret) };
+      s.treaties.push(pact);
       addRel(s, p.from, p.to, p.kind === 'fta' ? 12 : 8);
-      if (!(p.kind === 'fta' && s.countries[p.from]?.minor && s.countries[p.to]?.minor)) {
+      // A secret one makes no headlines: only spies inside either country find out (and neutral ones may tell)
+      if (pact.secret) secretPactFound(s, pact);
+      else if (!(p.kind === 'fta' && s.countries[p.from]?.minor && s.countries[p.to]?.minor)) {
         news(s, `${from} and ${to} sign ${p.kind === 'fta' ? 'a free trade agreement' : p.kind === 'nap' ? 'a non-aggression pact' : 'a military access agreement'}.`, 'diplomacy', [p.from, p.to]);
       }
       if (p.kind === 'access') resumeMarch(s, p);
       break;
+    }
     case 'deal': {
       const buyer = t.seller === p.from ? p.to : p.from;
-      s.treaties.push({
+      const deal = {
         id: nextId(s, 't'), kind: 'deal', a: t.seller, b: buyer, res: t.res, qty: Number(t.qty), price: Number(t.price), since: s.week, until: s.week + Number(t.weeks),
-        secret: Boolean(t.secret), exclusive: Boolean(t.exclusive),
-      });
+        secret: Boolean(t.secret), exclusive: Boolean(t.exclusive), route: null,
+      };
+      // How its convoys go (overland to a neighbour, else by sea), and where they start and end. A leader who
+      // sells plans the route; the computer finds its own.
+      const way = routeFor(s, deal.a, deal.b);
+      deal.mode = way?.mode ?? 'sea';
+      deal.ends = dealEnds(s, deal.a, deal.b, deal.mode);
+      s.treaties.push(deal);
+      if (s.countries[deal.a]?.human) alert(s, deal.a, `Plan the route for our ${RESOURCE_INFO[t.res].name.toLowerCase()} convoys to ${nameOf(s, buyer)}: up to 10 checkpoints on the map (Economy, Trade). No convoy sails until it is planned.`, 'decision', { plan: deal.id });
+      if (deal.secret) secretTradeFound(s, { seller: deal.a, buyer: deal.b, res: deal.res, deal: deal.id });
       addRel(s, p.from, p.to, 6);
       // A secret deal makes no headlines: only spies deep inside either government find out
       if (!t.secret) news(s, `${nameOf(s, t.seller)} agrees to supply ${nameOf(s, buyer)} with ${RESOURCE_INFO[t.res].name.toLowerCase()}${t.exclusive ? ', and no one else' : ''}.`, 'trade', [p.from, p.to]);
@@ -381,9 +432,11 @@ export function respond(s, cid, id, accept) {
       lender.treasury -= amount;
       borrower.treasury += amount;
       const yearly = amount * (t.rate / 100) / (1 - Math.pow(1 + t.rate / 100, -t.years)) || amount / t.years;
-      s.treaties.push({ id: nextId(s, 't'), kind: 'loan', a: p.from, b: p.to, payment: yearly / 52, since: s.week, until: s.week + t.years * 52 });
+      const loan = { id: nextId(s, 't'), kind: 'loan', a: p.from, b: p.to, payment: yearly / 52, since: s.week, until: s.week + t.years * 52, secret: Boolean(t.secret), amount };
+      s.treaties.push(loan);
       addRel(s, p.from, p.to, 10);
-      news(s, `${from} lends ${to} ${money(amount)}.`, 'trade', [p.from, p.to]);
+      if (loan.secret) secretPactFound(s, loan);
+      else news(s, `${from} lends ${to} ${money(amount)}.`, 'trade', [p.from, p.to]);
       break;
     }
     case 'peace':
@@ -657,7 +710,6 @@ function aiVote(s, voter, r) {
 
 /* ---------- Weekly upkeep ---------- */
 
-const CONVOY_WEEKS = 2;
 
 export function diplomacyTick(s) {
   for (const p of Object.values(s.proposals)) {
@@ -679,13 +731,41 @@ export function diplomacyTick(s) {
     const want = t.qty * CONVOY_WEEKS;
     const give = Math.min(want, Math.max(0, seller.stock[t.res] ?? 0));
     if (give <= 0) continue;
-    const way = routeFor(s, t.a, t.b);
-    if (!way) {
-      alert(s, t.b, `No ${RESOURCE_INFO[t.res].name.toLowerCase()} could leave ${nameOf(s, t.a)} under our deal: there is no open route.`, 'warn');
-      continue;
+    const human = s.countries[t.a]?.human;
+    // The route can be closed under it: a strait shut, a war along the way, a port lost
+    const blocked = t.route ? routeBlocked(s, t.route, t.a, t.b) : null;
+    if (blocked) {
+      t.route = null;
+      // Start and end afresh: a lost port, or a new war, can change the way
+      const way = routeFor(s, t.a, t.b);
+      t.mode = way?.mode ?? 'sea';
+      t.ends = dealEnds(s, t.a, t.b, t.mode);
+      if (human) alert(s, t.a, `Our ${RESOURCE_INFO[t.res].name.toLowerCase()} convoys to ${nameOf(s, t.b)} can't go: ${blocked}. Plan a new route (Economy, Trade).`, 'warn', { plan: t.id });
+    }
+    if (!t.route) {
+      if (human) {
+        // Waiting on the seller's plan: reminded once a month
+        if (s.week > t.since && (s.week - t.since) % 4 === 0) alert(s, t.a, `Our ${RESOURCE_INFO[t.res].name.toLowerCase()} convoys to ${nameOf(s, t.b)} are waiting for a route. Plan it in Economy, Trade.`, 'warn', { plan: t.id });
+        t.lastConvoy = s.week - CONVOY_WEEKS + 1;
+        continue;
+      }
+      const way = routeFor(s, t.a, t.b);
+      if (way) { t.mode = way.mode; t.ends = dealEnds(s, t.a, t.b, way.mode); }
+      const plan = way && t.ends ? planDealRoute(s, t, { auto: true, ends: t.ends }) : { error: 'no route' };
+      if (plan.error) {
+        alert(s, t.b, `No ${RESOURCE_INFO[t.res].name.toLowerCase()} could leave ${nameOf(s, t.a)} under our deal: there is no open route.`, 'warn');
+        continue;
+      }
+      t.route = plan;
     }
     seller.stock[t.res] -= give;
-    ship(s, { seller: t.a, buyer: t.b, res: t.res, qty: give, cost: 0, deal: t.id, secret: t.secret, payment: (t.price / 52) * CONVOY_WEEKS * (give / want), route: way });
+    // The seller pays to ship it
+    const freight = shippingCost(s, t.res, give, t.route.km, t.route.mode);
+    if (s.countries[t.a]) { s.countries[t.a].treasury -= freight; t.freight = (t.freight ?? 0) + freight; }
+    ship(s, {
+      seller: t.a, buyer: t.b, res: t.res, qty: give, cost: 0, deal: t.id, secret: t.secret && !t.exposed, exposed: Boolean(t.exposed), payment: (t.price / 52) * CONVOY_WEEKS * (give / want),
+      route: { mode: t.route.mode, weeks: t.route.weeks, straits: t.route.straits, transit: t.route.transit }, path: t.route.pts,
+    });
   }
   const ending = s.treaties.filter((t) => t.until <= s.week);
   for (const t of ending) {

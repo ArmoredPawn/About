@@ -27,6 +27,26 @@ export function shuffle(s, list) {
 
 export const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/* ---------- Eyes abroad ---------- */
+
+// A spy network inside a country that has settled in (four weeks after it was planted) and still has agents
+export function hasNetwork(s, cid, target) {
+  const n = s.countries[cid]?.spies?.[target];
+  return Boolean(n && n.agents > 0 && s.week - n.since >= 4);
+}
+// How many spy satellites a country has in orbit
+export const spySats = (s, cid) => s.countries[cid]?.space?.sats?.spy ?? 0;
+// Does one of a country's spy satellites happen to be over this army or fleet? Each covers about a quarter of the
+// world; four or more see everything.
+export function satCovers(s, cid, id) {
+  const n = spySats(s, cid);
+  if (n <= 0) return false;
+  if (n >= 4) return true;
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 4 < n;
+}
+
 /* ---------- Dates ---------- */
 
 export function dateOf(week) {

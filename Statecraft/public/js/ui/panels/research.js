@@ -6,6 +6,8 @@ import { TECH_FIELDS } from '../../engine/data/world.js';
 import { projectCost, projectWeeks, projectNeeds, researchSpeed, maxResearch, MAX_TECH } from '../../engine/science.js';
 import { confirmBox, modal, selectField } from '../dialogs.js';
 import { space } from './space.js';
+import { DESIGN_KINDS, designStats } from '../../engine/designs.js';
+import { blueprint, orderDialog } from '../design.js';
 
 const NEED_NAMES = { chip: 'semiconductors', uran: 'uranium' };
 
@@ -16,12 +18,13 @@ export function research(ctx) {
   const slots = maxResearch(me);
   const speed = researchSpeed(me);
   const tab = ctx.sub('research', 'fields');
-  const tabs = [['fields', 'Research'], ['space', 'Space']];
+  const tabs = [['fields', 'Research'], ['design', 'Design'], ['space', 'Space']];
   const head = [
     h('div.panel-title', h('h2', 'Research'), h('span.muted.small', `${running.length}/${slots} projects`)),
     h('div.tabs', { role: 'tablist' }, tabs.map(([id, label]) => h('button', { role: 'tab', 'aria-selected': String(tab === id), onclick: () => ctx.setSub('research', id) }, label))),
   ];
   if (tab === 'space') return h('div', ...head, space(ctx));
+  if (tab === 'design') return h('div', ...head, design(ctx));
   return h('div',
     ...head,
     h('p.muted.small', `Fund a project to raise a field one level: you pay up front, then scientists need months. Research and education spending (Economy) set how fast they work: now ×${speed.toFixed(2)}. The research budget also adds slow progress across every field.`),
@@ -54,6 +57,27 @@ export function research(ctx) {
       h('p.muted.small', 'Stealing technology, planting agents and catching foreign spies are run from the Spies tab.'),
       h('button.btn.small', { style: { marginTop: '6px' }, onclick: () => ctx.go('spies') }, 'Open Spies')),
   );
+}
+
+// Our own tanks, vehicles, aircraft and warships
+function design(ctx) {
+  const me = ctx.state.you;
+  const mine = Object.values(me.designs ?? {});
+  const kinds = Object.entries(DESIGN_KINDS);
+  return h('div',
+    h('p.muted.small', 'Design our own weapons part by part: hull, gun, armour, engines, radar and more. The best parts need research in the fields shown. Save and name a design, then order the factories to build it (here, or in Military, Weapons). The better the design, the more every unit built to it is worth.'),
+    h('div.row.wrap.gap', { style: { margin: '10px 0' } }, kinds.map(([k, d]) => h('button.btn.small', { onclick: () => ctx.openDesigner({ kind: k }) }, `＋ New ${d.name.toLowerCase()}`))),
+    h('button.btn.primary', { onclick: () => ctx.openDesigner({}) }, 'Open the design bureau'),
+    h('div.section', h('h3', `Our designs (${mine.length})`),
+      mine.length ? h('div.list', mine.map((d) => h('div.item',
+        h('div.item-head', h('span.name', d.name), h('span.mono.small', `×${designStats(d.kind, d.parts).edge.toFixed(2)}`)),
+        h('div.meta', `${DESIGN_KINDS[d.kind].name}${d.built ? ` · ${d.built.toLocaleString('en')} built` : ' · not built yet'}`),
+        h('div.spied-blueprint', blueprint(d.kind, d.parts, { small: true })),
+        h('div.actions',
+          h('button.btn.small.primary', { onclick: () => orderDialog(ctx, d) }, 'Build…'),
+          h('button.btn.small', { onclick: () => ctx.openDesigner({ design: d }) }, d.built ? 'Improve…' : 'Edit…'))))) : h('div.empty', 'None yet.')),
+    h('div.section', h('h3', 'In service'),
+      h('table.tbl', h('tbody', kinds.map(([k, d]) => h('tr', h('td', d.name), h('td.num', `×${(me.edge?.[k] ?? 1).toFixed(2)}`), h('td.faint.small', k === 'vehicles' ? `${(me.vehicles ?? 0).toLocaleString('en')} vehicles` : 'rating of the force')))))));
 }
 
 function licence(ctx, field, leaders) {

@@ -4,7 +4,7 @@
 import { h, flag, money, nationName, regionName, spark, RES_COLORS, RES_LETTERS, num } from '../dom.js';
 import { RESOURCES, RESOURCE_INFO } from '../../engine/data/regions.js';
 import { CHOKEPOINTS } from '../../engine/data/world.js';
-import { fmtQty, TOLLS, STRAIT_POLICIES, PATROL_MODES } from '../../engine/trade.js';
+import { fmtQty, TOLLS, STRAIT_POLICIES, PATROL_MODES, PRIVATE_PREMIUM } from '../../engine/trade.js';
 import { modal, numberField, confirmBox, selectField } from '../dialogs.js';
 import { myFleets, patrolDialog } from './navy.js';
 import { energy } from './energy.js';
@@ -72,10 +72,15 @@ function buyDialog(ctx, r, x) {
     ? numberField('Weeks of our need to buy', { value: Math.min(4, maxWeeks), min: 0.1, max: maxWeeks, step: 0.5 })
     : numberField(`Amount (stock units of ${info.unit}·week)`, { value: Math.min(x.qty, 1), min: 0.01, max: x.qty, step: 0.1 });
   const note = h('p.small');
+  // An ordinary purchase can be kept private, at a premium; one around sanctions is private anyway
+  const quiet = h('input', { type: 'checkbox' });
+  const quietRow = x.covert ? null : h('label.row.gap', { style: { alignItems: 'flex-start', cursor: 'pointer' } }, quiet,
+    h('span', h('b', `Buy privately (${Math.round(PRIVATE_PREMIUM * 100)}% dearer)`), h('span.muted.small', { style: { display: 'block' } }, 'Off the books, on unflagged ships: the cargo and its route are hidden from everyone but the seller, spies inside either country, spy satellites, and warships that come very close. A neutral country whose spies find out may broadcast it.')));
+  quiet.addEventListener('change', () => update());
   const qtyOf = () => Math.min(x.qty, dem > 0 ? Number(f.input.value) * dem : Number(f.input.value));
   const update = () => {
     const q = qtyOf();
-    const cost = q * x.price;
+    const cost = q * x.price * (quiet.checked ? 1 + PRIVATE_PREMIUM : 1);
     note.className = cost > me.treasury ? 'small bad' : 'small muted';
     note.textContent = `${fmtQty(r, q)} for ${money(cost)} (treasury ${money(me.treasury)}). Arrives ${routeText(s, x.route)}.`;
   };
@@ -83,10 +88,10 @@ function buyDialog(ctx, r, x) {
   update();
   modal({
     title: `Buy ${info.name.toLowerCase()} from ${nationName(s, x.id)}`,
-    body: h('div.stack', f.el, note, x.covert ? h('div.warning', 'This goes around sanctions. If it is exposed, the cargo is seized and the world will know.') : null),
+    body: h('div.stack', f.el, note, quietRow, x.covert ? h('div.warning', 'This goes around sanctions, so it is private: if it is exposed, the cargo is seized and the world will know.') : null),
     actions: [{ label: 'Cancel', kind: 'ghost' }, {
       label: x.covert ? 'Buy quietly' : 'Buy', kind: 'primary', onClick: async () => {
-        const err = await ctx.send({ type: 'marketBuy', res: r, qty: qtyOf(), from: x.id, covert: x.covert });
+        const err = await ctx.send({ type: 'marketBuy', res: r, qty: qtyOf(), from: x.id, covert: x.covert, private: quiet.checked });
         if (err) return false;
         ctx.toast(`Ordered ${fmtQty(r, qtyOf())} of ${info.name.toLowerCase()} from ${nationName(s, x.id)}. Track it under Shipping.`, 'good');
         return true;
@@ -157,9 +162,9 @@ function ships(ctx) {
   const enemies = new Set(s.wars.filter((w) => w.a === s.me || w.b === s.me).map((w) => (w.a === s.me ? w.b : w.a)));
   others.sort((a, b) => (enemies.has(b.buyer) || enemies.has(b.seller)) - (enemies.has(a.buyer) || enemies.has(a.seller)) || b.cost - a.cost);
   const card = (x, canStop) => h('div.item',
-    h('div.item-head', resDot(x.res), h('span.name', `${nationName(s, x.seller)} → ${nationName(s, x.buyer)}`), x.covert ? h('span.chip.warn', 'covert') : null,
-      x.secret ? h('span.chip.warn', 'secret deal') : x.deal ? h('span.chip', 'deal convoy') : null,
-      x.line ? h('span.chip', { title: 'It sails a shipping line opened between the two countries' }, (s.routes ?? []).find((r) => r.id === x.line)?.private ? 'secret line' : 'line') : null,
+    h('div.item-head', resDot(x.res), h('span.name', `${nationName(s, x.seller)} → ${nationName(s, x.buyer)}`),
+      x.private ? h('span.chip.warn', { title: 'A private cargo: hidden from everyone but the two countries, spies inside either, spy satellites and warships very close to it' }, x.covert ? 'private: around sanctions' : 'private deal') : x.exposed ? h('span.chip', 'exposed') : x.deal ? h('span.chip', 'deal convoy') : null,
+      x.seen ? h('span.chip', { title: 'How we know about it' }, { spies: 'our spies saw it', satellite: 'seen from orbit', ships: 'our warships saw it' }[x.seen]) : null,
       enemies.has(x.buyer) || enemies.has(x.seller) ? h('span.chip.bad', 'enemy trade') : null, h('span.muted.small', { style: { marginLeft: 'auto' } }, `${x.left} wk left`)),
     h('div.meta', `${fmtQty(x.res, x.qty)} of ${RESOURCE_INFO[x.res].name.toLowerCase()} worth ${money(x.cost)} · ${x.mode === 'land' ? `overland${x.transit?.length ? ` through ${x.transit.map((t) => nationName(s, t)).join(', ')}` : ''}` : `by sea${x.straits?.length ? ` through the ${x.straits.map((k) => CHOKEPOINTS[k].name).join(', ')}` : ''}`}`),
     x.hunter ? h('div.hunt-status',
@@ -167,9 +172,14 @@ function ships(ctx) {
         x.hunter.weeks != null ? `: they meet in about ${daysText(x.hunter.weeks)}.` : ': it can no longer catch it.'),
       h('button.btn.small.ghost', { style: { marginLeft: 'auto' }, onclick: () => ctx.send({ type: 'huntCancel', fleet: x.hunter.fleet }) }, 'Call off'))
       : canStop && x.mode === 'sea' ? huntSummary(s, x) : null,
-    canStop && !x.hunter && (x.mode !== 'sea' || (x.hunt ?? []).some((o) => o.weeks != null) || x.spawn || (x.coastguard && !x.coastWaiting)) ? h('div.actions',
-      h('button.btn.small', { onclick: () => stop(ctx, x, 'seize') }, 'Seize it'),
-      h('button.btn.small.danger', { onclick: () => stop(ctx, x, 'sink') }, x.mode === 'land' ? 'Destroy it' : 'Sink it')) : null);
+    (canStop && !x.hunter && (x.mode !== 'sea' || (x.hunt ?? []).some((o) => o.weeks != null) || x.spawn)) || (x.private && x.seen) ? h('div.actions',
+      canStop && !x.hunter && (x.mode !== 'sea' || (x.hunt ?? []).some((o) => o.weeks != null) || x.spawn) ? [
+        h('button.btn.small', { onclick: () => stop(ctx, x, 'seize') }, 'Seize it'),
+        h('button.btn.small.danger', { onclick: () => stop(ctx, x, 'sink') }, x.mode === 'land' ? 'Destroy it' : 'Sink it')] : null,
+      // A secret only we (and few others) know: tell the world, and every country sees it from then on
+      x.private && x.seen ? h('button.btn.small.ghost', { title: 'Make it public: every country sees this cargo and its route. Both countries will resent it. To warn only one country, use the chat.', onclick: async () => {
+        if (await confirmBox('Tell the world about this cargo?', `${nationName(s, x.seller)} is shipping ${RESOURCE_INFO[x.res].name.toLowerCase()} to ${nationName(s, x.buyer)} in secret. Broadcasting it puts it on every map and in the news; both countries will hold it against us.`, { ok: 'Broadcast it' })) ctx.send({ type: 'cargoExpose', id: x.id });
+      } }, 'Broadcast it') : null) : null);
   // A cargo picked on the map comes first, picked out
   const picked = ctx.ui.cargo && others.find((x) => x.id === ctx.ui.cargo);
   if (picked) others.splice(others.indexOf(picked), 1), others.unshift(picked);
@@ -185,7 +195,8 @@ function ships(ctx) {
         h('div', h('b', 'Seize'), ': board it and bring the cargo home. It goes into our stockpile, but a prize can slip away, so the odds are lower.'),
         h('div', h('b', 'Sink'), ': surer, but the cargo is lost to everyone. Their trade is starved all the same.'),
         h('div.faint', 'In peacetime either one is piracy: both countries turn hostile (sinking more so). Fleets at war with the buyer or seller, blockades and strait patrols stop cargoes on their own, seizing or sinking as each fleet is set to (its card). Overland, a cargo can be stopped where it crosses our territory.')),
-      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : myFleets(s).length > 0 || Boolean(x.spawn) || Boolean(x.coastguard))))) : h('div.empty', 'No cargoes in sight.')));
+      h('p.muted.small', { style: { marginTop: '8px' } }, 'Private cargoes (secret deals, and purchases around sanctions) are hidden. We see them only through spies inside the seller or buyer, a spy satellite, or a warship of ours that comes very close: its captain reports it, and we choose to seize it, sink it, broadcast it or let it pass.'),
+      others.length ? h('div.list', { style: { marginTop: '8px' } }, others.slice(0, 40).map((x) => card(x, !allies.has(x.buyer) && !allies.has(x.seller) && (x.mode === 'land' ? x.transit?.includes(s.me) : myFleets(s).length > 0 || Boolean(x.spawn))))) : h('div.empty', 'No cargoes in sight.')));
 }
 
 async function stop(ctx, x, how) {
@@ -201,8 +212,8 @@ async function stop(ctx, x, how) {
 }
 
 // Every way we could go after a cargo at sea, the best first: our fleets that can reach it in time, a new fleet
-// from the port nearest its route (if warships are waiting in port), and our coastguard if it sails a secret line
-// through our waters. Best = the surest to succeed, then the soonest; fleets already on a mission sort last.
+// from the port nearest its route (if warships are waiting in port). Best = the surest to succeed, then the soonest;
+// fleets already on a mission sort last.
 export function huntChoices(s, x, how) {
   const odds = new Map((x.hunt ?? []).map((o) => [o.fleet, o]));
   const out = [];
@@ -212,7 +223,6 @@ export function huntChoices(s, x, how) {
     out.push({ kind: 'fleet', id: f.id, f, o, chance: o[how], busy: o.busy });
   }
   if (x.spawn) out.push({ kind: 'new', id: 'new', o: x.spawn, chance: x.spawn[how] });
-  if (x.coastguard && !x.coastWaiting) out.push({ kind: 'coastguard', id: 'coastguard', o: { weeks: null }, chance: 101 });
   const score = (c) => (c.chance < 0 ? -1e9 : c.chance * 10 - (c.o?.weeks ?? 0) * 4 - (c.busy ? 60 : 0) - (c.kind === 'new' ? 8 : 0));
   return out.sort((a, b) => score(b) - score(a));
 }
@@ -235,14 +245,11 @@ function huntDialog(ctx, x, how) {
     } else if (c.kind === 'new') {
       title = `Form a new fleet at ${regionName(c.o.port)} · ${num(c.o.ships)} warships${c.o.carriers ? `, ${c.o.carriers} carriers` : ''} from port`;
       detail = `Our port nearest the cargo's route. Puts to sea at once and meets it in ${daysText(c.o.weeks)} · ${c.o.escort > 0 ? `escorts ${c.o.escort} against ${c.o.attack}` : 'no escorts near'}`;
-    } else {
-      title = 'Our coastguard, in our own waters';
-      detail = 'It sails a secret line through our waters that we found out about: our patrol boats board it as it passes, no fleet needed.';
     }
     const el = h('button.pick-card', { type: 'button', disabled, 'aria-pressed': String(c === pick), class: disabled ? 'off' : '' },
-      h('span.pick-icon', { 'aria-hidden': 'true' }, c.kind === 'new' ? '＋' : c.kind === 'coastguard' ? '🛟' : '⚓'),
+      h('span.pick-icon', { 'aria-hidden': 'true' }, c.kind === 'new' ? '＋' : '⚓'),
       h('span.pick-text', h('b', title, i === 0 && !disabled ? h('span.chip.good', { style: { marginLeft: '6px' } }, 'Best') : null), h('span', detail)),
-      disabled ? null : h('span.pick-odds', { class: c.chance >= 70 ? 'good' : c.chance >= 40 ? 'warn' : 'bad' }, c.kind === 'coastguard' ? 'in our waters' : `${c.chance}%`));
+      disabled ? null : h('span.pick-odds', { class: c.chance >= 70 ? 'good' : c.chance >= 40 ? 'warn' : 'bad' }, `${c.chance}%`));
     if (!disabled) el.addEventListener('click', () => { pick = c; for (const n of list.children) n.setAttribute('aria-pressed', String(n === el)); });
     return el;
   };
@@ -255,7 +262,7 @@ function huntDialog(ctx, x, how) {
       h('p.muted.small', how === 'seize' ? 'If we take it, the cargo goes into our stockpile.' : 'If we sink it, the cargo is lost to everyone.')),
     actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send', kind: how === 'sink' ? 'danger' : 'primary', onClick: async () => {
       const err = await ctx.send({ type: 'intercept', id: x.id, fleet: pick.id, how });
-      if (!err) ctx.toast(pick.kind === 'coastguard' ? 'Our coastguard will board it as it passes through our waters.' : pick.kind === 'new' ? `A new fleet is putting to sea from ${regionName(pick.o.port)} to ${verb} it.` : `${pick.f.name} is on its way to ${verb} it.`, 'info');
+      if (!err) ctx.toast(pick.kind === 'new' ? `A new fleet is putting to sea from ${regionName(pick.o.port)} to ${verb} it.` : `${pick.f.name} is on its way to ${verb} it.`, 'info');
       return !err || false;
     } }],
   });
@@ -269,7 +276,6 @@ function daysText(weeks) {
 
 // What our best way of going after a cargo at sea could do
 function huntSummary(s, x) {
-  if (x.coastguard) return h('div.meta', x.coastWaiting ? 'Our coastguard is waiting for it in our waters.' : 'It sails a secret line through our waters: our coastguard can board it there.');
   const best = huntChoices(s, x, 'sink').find((c) => c.chance >= 0);
   if (!best) return h('div.meta.faint', 'None of our fleets can reach it before it docks, and no warships are waiting in port.');
   const who = best.kind === 'new' ? `A new fleet from ${regionName(best.o.port)}` : best.f.name;

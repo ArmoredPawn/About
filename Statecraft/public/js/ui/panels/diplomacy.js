@@ -8,6 +8,9 @@ import { proposalCard } from './overview.js';
 import { describeProposal } from '../describe.js';
 import { warNotice, caseMade, justifyDialog } from '../attack.js';
 import { armAndFund, aidDialog as armDialog } from './proxy.js';
+import { fmtQty } from '../../engine/trade.js';
+import { DESIGN_KINDS, designStats } from '../../engine/designs.js';
+import { blueprint } from '../design.js';
 
 const TARIFFS = [0, 10, 25, 50, 100];
 
@@ -96,23 +99,30 @@ export function dossier(ctx, id) {
     c.fin?.crisis || c.fin?.defaulted || c.fin?.imf ? h('div.warning.bad', { style: { marginTop: '10px' } }, c.fin.defaulted ? `${c.name} is in default.` : c.fin.crisis ? `${c.name} is in a debt crisis.` : `${c.name} is in an IMF programme.`) : null,
     c.civilWar ? h('div.warning.bad', { style: { marginTop: '10px' } }, `${c.name} is in civil war.`) : null,
     c.protests?.length ? h('div.warning', { style: { marginTop: '10px' } }, `Protests: ${c.protests.map((p) => `${({ schools: 'school cuts', hospitals: 'hospital cuts', pensions: 'pension cuts', taxes: 'taxes', prices: 'cost of living', shortages: 'shortages', jobs: 'jobs', war: 'the war', draft: 'the draft', rights: 'repression', opposition: 'opposition rallies', occupation: 'occupation' })[p.cause] ?? p.cause} (${p.size}%)`).join(', ')}.`) : null,
+    c.spied ? spiedSection(ctx, id, c) : null,
     c.exile ? null : h('div.section', h('h3', 'Talk'),
-      c.human
-        ? h('button.btn.small.primary', { onclick: () => ctx.chat.directTo(id) }, `Message ${c.human}`)
-        : h('p.muted.small', 'This country is run by the computer. It judges proposals on their merits and its relations with you.')),
-    c.exile ? null : h('div.section', h('h3', 'Propose'),
       h('div.row.wrap.gap',
-        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'fta' }) }, 'Free trade'),
-        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'nap' }) }, 'Non-aggression pact'),
-        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'access' }) }, 'Military access'),
-        !atWar && myAlliances.length ? h('button.btn.small', { onclick: () => inviteDialog(ctx, id, myAlliances) }, 'Invite to alliance…') : null,
+        c.human
+          ? h('button.btn.small.primary', { onclick: () => ctx.chat.directTo(id) }, `Message ${c.human}`)
+          : h('p.muted.small', 'This country is run by the computer. It judges proposals on their merits and its relations with you.'),
+        atWar ? null : h('button.btn.small', { onclick: () => aidDialog(ctx, id) }, '💸 Send money…'))),
+    c.exile ? null : h('div.section', h('h3', 'Propose'),
+      atWar ? null : h('label.row.gap', { style: { alignItems: 'center', cursor: 'pointer', marginBottom: '8px' }, title: 'No announcement: only the two of us, and spies inside either country, will know. A neutral country whose spies find out may broadcast it. Secret military access comes out the moment troops are seen marching through.' },
+        h('input', { type: 'checkbox', checked: Boolean(ctx.ui.secretPropose), onchange: (e) => { ctx.ui.secretPropose = e.target.checked; } }),
+        h('span', h('b', '🤫 In secret'), h('span.muted.small', ' (free trade, pacts, access, loans and new alliances)'))),
+      h('div.row.wrap.gap',
+        atWar ? null : h('button.btn.small.primary', { onclick: () => pactDialog(ctx, id) }, 'Propose an alliance…'),
+        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'fta', terms: { secret: Boolean(ctx.ui.secretPropose) } }) }, 'Free trade'),
+        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'nap', terms: { secret: Boolean(ctx.ui.secretPropose) } }) }, 'Non-aggression pact'),
+        atWar ? null : h('button.btn.small', { onclick: () => ctx.send({ type: 'propose', to: id, kind: 'access', terms: { secret: Boolean(ctx.ui.secretPropose) } }) }, 'Military access'),
+        !atWar && myAlliances.length ? h('button.btn.small', { onclick: () => inviteDialog(ctx, id, myAlliances) }, 'Invite to an existing alliance…') : null,
         atWar ? null : h('button.btn.small', { onclick: () => dealDialog(ctx, id) }, 'Resource deal…'),
         atWar ? null : h('button.btn.small', { onclick: () => loanDialog(ctx, id) }, 'Offer a loan…'),
         !atWar && myWars.length ? h('button.btn.small', { onclick: () => joinWarDialog(ctx, id, myWars) }, 'Ask to join our war…') : null,
         atWar ? h('button.btn.small.primary', { onclick: () => peaceDialog(ctx, id) }, 'Offer peace…') : null)),
     c.exile || atWar ? null : h('div.section', h('h3', 'Give'),
       h('div.row.wrap.gap',
-        h('button.btn.small', { onclick: () => aidDialog(ctx, id) }, 'Send aid…'),
+        h('button.btn.small', { onclick: () => aidDialog(ctx, id) }, 'Send money…'),
         h('button.btn.small', { onclick: () => techDialog(ctx, id) }, 'Share technology…'),
         s.wars.some((w) => w.a === id || w.b === id) ? h('button.btn.small', { onclick: () => armDialog(ctx, { to: id }) }, 'Arm & fund their war…') : null)),
     c.exile ? null : h('div.section', h('h3', 'Pressure'),
@@ -204,16 +214,62 @@ function dealDialog(ctx, id) {
     const box = h('input', { type: 'checkbox' });
     return { box, el: h('label.row.gap', { style: { alignItems: 'flex-start', cursor: 'pointer' } }, box, h('span', h('b', label), h('span.muted.small', { style: { display: 'block' } }, note))) };
   };
-  const secret = option('Secret deal', 'No announcement. Only spies deep inside either government learn of it, and its convoys sail unflagged.');
+  const secret = option('Private deal', 'No announcement. The seller names the price. Its convoys and their route are hidden: only spies inside either country, spy satellites, and warships that come very close can see them. A neutral country whose spies find out may broadcast it.');
+  const priceNote = h('p.small', { style: { margin: '0' } });
+  const sync = () => {
+    const theySell = who.input.value === id;
+    const asking = secret.box.checked && theySell;
+    price.input.disabled = asking;
+    priceNote.textContent = asking ? `In a private deal the seller names the price: ${nationName(s, id)} will answer with its price, for us to accept or not.` : secret.box.checked ? 'In a private deal we, the seller, choose the price.' : '';
+  };
+  secret.box.addEventListener('change', sync);
+  who.input.addEventListener('change', sync);
   const exclusive = option('Exclusive', 'The seller sells this resource to no one else while the deal lasts: its whole surplus waits for these convoys (as Romania’s oil went only to Germany).');
   modal({
     title: `Resource deal with ${nationName(s, id)}`,
-    body: h('div.stack', who.el, res.el, qty.el, price.el, weeks.el, secret.el, exclusive.el, hint),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Propose', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'deal', terms: { seller: who.input.value, res: res.input.value, qty: Number(qty.input.value), price: Number(price.input.value), weeks: Number(weeks.input.value), secret: secret.box.checked, exclusive: exclusive.box.checked } })) || false }],
+    body: h('div.stack', who.el, res.el, qty.el, price.el, priceNote, weeks.el, secret.el, exclusive.el, hint, h('p.muted.small', 'Once agreed, the seller plans the route its convoys take (up to 10 checkpoints on the map) and pays for the shipping.')),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Propose', kind: 'primary', onClick: async () => {
+      const asking = secret.box.checked && who.input.value === id;
+      return !(await ctx.send({ type: 'propose', to: id, kind: 'deal', terms: { seller: who.input.value, res: res.input.value, qty: Number(qty.input.value), price: asking ? null : Number(price.input.value), weeks: Number(weeks.input.value), secret: secret.box.checked, exclusive: exclusive.box.checked } })) || false;
+    } }],
   });
 }
 
 function fmt(v) { return v == null ? '0' : v >= 10 ? Math.round(v).toString() : v.toFixed(2); }
+
+// What our spies inside a country show: its weapon designs, its stockpiles, who it is building a case for war
+// against, and its secret deals
+function spiedSection(ctx, id, c) {
+  const s = ctx.state;
+  const sp = c.spied;
+  const deals = (s.spiedDeals ?? []).filter((t) => t.a === id || t.b === id);
+  const stock = Object.entries(sp.stock ?? {}).filter(([, v]) => v > 0.001).sort((a, b) => b[1] * RESOURCE_INFO[b[0]].value - a[1] * RESOURCE_INFO[a[0]].value);
+  return h('div.section', h('h3', '🕵 What our spies see'),
+    sp.warCases.length ? h('div.warning.bad', `Building a case for war against ${sp.warCases.map((w) => `${w.target === s.me ? 'us' : nationName(s, w.target)}${w.ready > s.week ? ` (ready in ${w.ready - s.week} wk)` : ' (ready now)'}`).join(', ')}.`) : h('p.muted.small', 'Not building a case for war against anyone.'),
+    h('div.small', { style: { marginTop: '8px' } }, h('b', 'Stockpiles: '), stock.length ? stock.map(([r, v]) => `${RESOURCE_INFO[r].name} ${fmtQty(r, v)}`).join(' · ') : 'nothing to speak of'),
+    h('div.small', { style: { marginTop: '6px' } }, h('b', 'Forces: '), `${troops(c.mil.troops)}, ${num(c.mil.tanks)} tanks, ${num(sp.vehicles)} armoured vehicles, ${num(c.mil.aircraft)} aircraft, ${num(c.mil.ships)} warships`),
+    sp.designs.length ? h('div', { style: { marginTop: '8px' } }, h('b.small', 'Their own designs'),
+      h('div.list', { style: { marginTop: '6px' } }, sp.designs.map((d) => h('div.item',
+        h('div.item-head', h('span.name', d.name), h('span.mono.small', `×${designStats(d.kind, d.parts).edge.toFixed(2)}`)),
+        h('div.meta', `${DESIGN_KINDS[d.kind].name} · ${d.built ? `${num(d.built)} built` : 'not built yet'}`),
+        h('div.spied-blueprint', blueprint(d.kind, d.parts, { small: true })))))) : h('p.muted.small', { style: { marginTop: '6px' } }, 'No weapons of their own design.'),
+    deals.length ? h('div', { style: { marginTop: '8px' } }, h('b.small', 'Secret deals'), h('div.list', { style: { marginTop: '6px' } }, deals.map((t) => h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, `${nationName(s, t.a)} sells ${nationName(s, t.b)} ${RESOURCE_INFO[t.res].name.toLowerCase()}${t.exposed ? ' (now public)' : ''}`), t.exposed ? null : h('div.actions', h('button.btn.small.ghost', { title: t.neutral ? 'As a neutral country we can broadcast it: it makes the news and every country sees its convoys. Both countries will resent it. To warn just one country, use the chat.' : 'Broadcast it: it makes the news and every country sees its convoys. Both countries will resent it.', onclick: async () => { if (await confirmBox('Broadcast this secret deal?', `${nationName(s, t.a)} is secretly selling ${RESOURCE_INFO[t.res].name.toLowerCase()} to ${nationName(s, t.b)}. Broadcasting it puts it in the news and its convoys on every map; both countries will hold it against us.`, { ok: 'Broadcast it' })) ctx.send({ type: 'dealExpose', id: t.id }); } }, 'Broadcast it')))))) : null,
+    pactsSpied(ctx, (s.spiedPacts ?? []).filter((t) => t.a === id || t.b === id)),
+    h('p.faint.small', { style: { marginTop: '6px' } }, 'Their armies on the map show exact numbers, and what each is running short of; some of their fleets show where they are headed.'));
+}
+
+// Secret free trade, pacts, access and loans our spies have found, each with a Broadcast button
+export function pactsSpied(ctx, list) {
+  const s = ctx.state;
+  if (!list.length) return null;
+  const what = (t) => (t.kind === 'loan' ? `${nationName(s, t.a)} lent ${nationName(s, t.b)}${t.amount ? ` ${money(t.amount)}` : ' money'}` : `${nationName(s, t.a)} and ${nationName(s, t.b)}: ${{ fta: 'free trade', nap: 'non-aggression pact', access: 'military access' }[t.kind]}`);
+  return h('div', { style: { marginTop: '8px' } }, h('b.small', 'Secret agreements'),
+    h('div.list', { style: { marginTop: '6px' } }, list.map((t) => h('div.item',
+      h('div.meta', { style: { color: 'var(--ink)' } }, `${what(t)}${t.exposed ? ' (now public)' : ''}`),
+      t.exposed ? null : h('div.actions', h('button.btn.small.ghost', { onclick: async () => {
+        if (await confirmBox('Broadcast this secret agreement?', `It makes the news; ${nationName(s, t.a)} and ${nationName(s, t.b)} will hold it against us.`, { ok: 'Broadcast it' })) ctx.send({ type: 'pactExpose', id: t.id });
+      } }, 'Broadcast it'))))));
+}
 
 function loanDialog(ctx, id) {
   const me = ctx.state.you;
@@ -223,7 +279,34 @@ function loanDialog(ctx, id) {
   modal({
     title: `Offer ${nationName(ctx.state, id)} a loan`,
     body: h('div.stack', h('p.muted.small', `Lent from our reserves (${money(me.treasury)}). Repayments arrive every week.`), amount.el, years.el, rate.el),
-    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Offer', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'loan', terms: { amount: Number(amount.input.value), years: Number(years.input.value), rate: Number(rate.input.value) } })) || false }],
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: ctx.ui.secretPropose ? 'Offer in secret' : 'Offer', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'loan', terms: { amount: Number(amount.input.value), years: Number(years.input.value), rate: Number(rate.input.value), secret: Boolean(ctx.ui.secretPropose) } })) || false }],
+  });
+}
+
+// An alliance of just the two of us, in one step: it comes into being only if they accept
+function pactDialog(ctx, id) {
+  const s = ctx.state;
+  let kind = 'military';
+  let secret = Boolean(ctx.ui.secretPropose);
+  const name = h('input', { type: 'text', maxlength: 40, placeholder: `${nationName(s, s.me)}–${nationName(s, id)} Pact` });
+  modal({
+    title: `Propose an alliance to ${nationName(s, id)}`,
+    body: h('div.stack',
+      h('div.field', h('span', 'Kind'), pickCards([
+        ['military', '🛡', 'Military alliance', 'Each of us is called to fight if the other is attacked.'],
+        ['economic', '🤝', 'Trade bloc', 'Free trade between us.'],
+      ], kind, (k) => { kind = k; })),
+      h('div.field', h('span', 'Public or secret'), pickCards([
+        ['public', '📣', 'Public', 'Announced to the world: deters anyone thinking of attacking either of us.'],
+        ['secret', '🤫', 'Secret', 'Only the two of us (and spies inside either) know. Revealed the moment one of us goes to war for the other, or when we announce it.'],
+      ], secret ? 'secret' : 'public', (k) => { secret = k === 'secret'; })),
+      h('label.field', h('span', 'Name (optional)'), name),
+      h('p.muted.small', `If ${nationName(s, id)} accepts, the alliance is founded with the two of us in it, with its own chat. Others can be invited later from Diplomacy, Alliances.`)),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Propose', kind: 'primary', onClick: async () => {
+      const err = await ctx.send({ type: 'propose', to: id, kind: 'pact', terms: { kind, secret, name: name.value.trim() || undefined } });
+      if (!err) ctx.toast(`Proposed to ${nationName(s, id)}. They have ${4} weeks to answer.`, 'info');
+      return !err || false;
+    } }],
   });
 }
 
@@ -232,10 +315,23 @@ function joinWarDialog(ctx, id, enemies) {
   modal({ title: `Ask ${nationName(ctx.state, id)} to join the war`, body: sel.el, actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Ask', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'propose', to: id, kind: 'joinWar', terms: { enemy: sel.input.value } })) || false }] });
 }
 
-function aidDialog(ctx, id) {
+// Money sent as aid arrives at once
+export function aidDialog(ctx, id) {
   const me = ctx.state.you;
-  const amount = numberField('Amount', { value: Math.round(Math.min(me.treasury * 0.1, 10)), min: 0.1, max: Math.floor(me.treasury), suffix: '$ billions' });
-  modal({ title: `Send aid to ${nationName(ctx.state, id)}`, body: h('div.stack', h('p.muted.small', `From reserves of ${money(me.treasury)}. Improves relations.`), amount.el), actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send', kind: 'primary', onClick: async () => !(await ctx.send({ type: 'aid', to: id, amount: Number(amount.input.value) })) || false }] });
+  const amount = numberField('Amount', { value: Math.max(0.1, Math.round(Math.min(me.treasury * 0.1, 10) * 10) / 10), min: 0.1, max: Math.max(0.1, Math.floor(me.treasury * 10) / 10), step: 'any', suffix: '$ billions' });
+  const quick = h('div.row.wrap.gap', [0.5, 1, 5, 10, 25].filter((v) => v <= me.treasury).map((v) => h('button.btn.small', { type: 'button', onclick: () => { amount.input.value = v; } }, money(v))),
+    me.treasury > 0.2 ? h('button.btn.small', { type: 'button', onclick: () => { amount.input.value = Math.floor(me.treasury * 0.25 * 10) / 10; } }, 'A quarter of our reserves') : null);
+  const send = async () => {
+    const v = Number(amount.input.value);
+    const err = await ctx.send({ type: 'aid', to: id, amount: v });
+    if (!err) ctx.toast(`${money(v)} sent to ${nationName(ctx.state, id)}. It is already in their treasury.`, 'good');
+    return !err || false;
+  };
+  modal({
+    title: `Send money to ${nationName(ctx.state, id)}`,
+    body: h('div.stack', h('p.muted.small', `Straight from our reserves (${money(me.treasury)}) into theirs: it arrives at once. It improves relations, more so the bigger it is next to their economy.`), quick, amount.el),
+    actions: [{ label: 'Cancel', kind: 'ghost' }, { label: 'Send now', kind: 'primary', onClick: send }],
+  });
 }
 
 function techDialog(ctx, id) {

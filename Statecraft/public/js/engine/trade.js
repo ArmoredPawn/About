@@ -6,6 +6,10 @@
 import { GEO } from './data/geo.js';
 import { RESOURCES, RESOURCE_INFO } from './data/regions.js';
 import { CHOKEPOINTS } from './data/world.js';
+
+// Who hears of a secret trade or a sinking (cargo.js fills these in: importing it here would load the navy before
+// this module, which the navy needs)
+export const cargoHooks = { secretTradeFound: null, sinkWitnesses: null };
 import { STOCK_WEEKS } from './setup.js';
 import {
   clamp, chance, rand, news, alert, nameOf, nation, alive, atWar, allied, rel, addRel, nextId, money, sanctioning, pick, enemiesOf,
@@ -192,19 +196,6 @@ export function sellerTerms(s, buyerId, sellerId, r) {
 }
 
 
-// A trade route opened between two countries (routes.js) that their cargoes can sail now, or null. Read straight
-// from the state, so this module needn't know how routes are drawn.
-export function activeRoute(s, a, b) {
-  for (const r of Object.values(s.routes ?? {})) {
-    if (r.closed || !((r.by === a && r.partner === b) || (r.by === b && r.partner === a))) continue;
-    if (s.regions[r.from]?.ctrl !== r.by || s.regions[r.to]?.ctrl !== r.partner) continue;
-    if (atWar(s, r.by, r.partner) || sanctioning(s, r.by, r.partner) || sanctioning(s, r.partner, r.by)) continue;
-    if ((r.straits ?? []).some((k) => !straitOpen(s, k, a, b))) continue;
-    return r;
-  }
-  return null;
-}
-
 // Weeks at sea between two countries, before the cargo's real lane is known: their biggest coasts, as the crow
 // flies and a third again for the way round the land, at a freighter's 2,200 km a week
 function seaWeeks(s, a, b) {
@@ -220,19 +211,16 @@ function seaWeeks(s, a, b) {
   return Math.max(1, Math.round(km / 2200));
 }
 
-// How a cargo would travel: prefer a short land route, else the sea; a trade route opened between the two
-// always goes by sea. Cached for the week.
+// How a cargo would travel: prefer a short land route, else the sea. Cached for the week.
 const routeCache = { week: -1, seed: null, map: new Map() };
 export function routeFor(s, from, to) {
   if (routeCache.week !== s.week || routeCache.seed !== s) { routeCache.week = s.week; routeCache.seed = s; routeCache.map = new Map(); }
   const key = `${from}>${to}`;
   if (routeCache.map.has(key)) return routeCache.map.get(key);
-  const line = activeRoute(s, from, to);
-  const land = line ? null : landRoute(s, from, to, 8);
+  const land = landRoute(s, from, to, 8);
   const sea = seaRoute(s, from, to);
   let out = null;
-  if (line) out = { mode: 'sea', weeks: Math.max(1, Math.round((line.km / 2200) * 0.8)), transit: [], straits: line.straits ?? [], line: line.id };
-  else if (land && (!sea || land.hops <= 6)) out = { mode: 'land', weeks: 1 + Math.ceil(land.hops / 4), transit: land.transit, straits: [] };
+  if (land && (!sea || land.hops <= 6)) out = { mode: 'land', weeks: 1 + Math.ceil(land.hops / 4), transit: land.transit, straits: [] };
   else if (sea) out = { mode: 'sea', weeks: seaWeeks(s, from, to), transit: [], straits: sea.straits };
   routeCache.map.set(key, out);
   return out;
@@ -264,7 +252,10 @@ export function topSellers(s, cid, r) {
   }
 }
 
-export function buy(s, c, { res, qty, from, covert }) {
+// A purchase made privately (off the books, unflagged ships): this much dearer
+export const PRIVATE_PREMIUM = 0.08;
+
+export function buy(s, c, { res, qty, from, covert, private: quiet = false }) {
   if (!RESOURCES.includes(res)) return 'Pick a resource.';
   qty = Number(qty);
   if (!(qty > 0)) return 'Pick an amount.';
@@ -280,13 +271,15 @@ export function buy(s, c, { res, qty, from, covert }) {
   qty = Math.min(qty, t.qty);
   const route = routeFor(s, sellerId, c.id);
   if (!route) return `There is no way to ship it: no open sea lane or land route from ${nameOf(s, sellerId)}.`;
-  const cost = qty * t.price;
+  // Around sanctions it is private anyway; otherwise a buyer can choose to keep it quiet, at a premium
+  const secret = Boolean(quiet) && !t.covert;
+  const cost = qty * t.price * (secret ? 1 + PRIVATE_PREMIUM : 1);
   if (cost > c.treasury) return `That costs ${money(cost)}; the treasury has ${money(c.treasury)}.`;
   c.treasury -= cost; // held in escrow until delivery
   const seller = nation(s, sellerId);
   seller.stock[res] = Math.max(0, (seller.stock[res] ?? 0) - qty);
   if (s.countries[sellerId]?.human && s.countries[sellerId].offers?.[res]) s.countries[sellerId].offers[res].qty = Math.max(0, s.countries[sellerId].offers[res].qty - qty);
-  ship(s, { seller: sellerId, buyer: c.id, res, qty, cost, covert: t.covert, route });
+  ship(s, { seller: sellerId, buyer: c.id, res, qty, cost, covert: t.covert, secret, route });
   if (s.countries[sellerId]?.human) alert(s, sellerId, `${c.name} bought ${fmtQty(res, qty)} of your ${RESOURCE_INFO[res].name.toLowerCase()} for ${money(cost)}. Payment on delivery.`, 'good');
   return null;
 }
@@ -321,13 +314,15 @@ export function fmtQty(r, qty) {
 
 /* ---------- Shipments ---------- */
 
-export function ship(s, { seller, buyer, res, qty, cost, covert = false, secret = false, deal = null, payment = 0, route }) {
+export function ship(s, { seller, buyer, res, qty, cost, covert = false, secret = false, exposed = false, deal = null, payment = 0, route, path = null }) {
   s.shipments ??= [];
   const sh = {
-    id: nextId(s, 'sh'), seller, buyer, res, qty, cost, covert, secret, deal, payment, mode: route.mode, straits: route.straits, transit: route.transit,
-    left: route.weeks, total: route.weeks, since: s.week, line: route.line ?? null,
+    id: nextId(s, 'sh'), seller, buyer, res, qty, cost, covert, secret, exposed, deal, payment, mode: route.mode, straits: route.straits, transit: route.transit,
+    left: route.weeks, total: route.weeks, since: s.week, path,
   };
   s.shipments.push(sh);
+  // A private purchase (or one around sanctions) is a secret: neutral spies inside either country may give it away
+  if ((covert || secret) && !deal) cargoHooks.secretTradeFound?.(s, { seller, buyer, res, sh: sh.id });
   return sh;
 }
 
@@ -376,7 +371,7 @@ export function orderIntercept(s, c, { id, how, fleet }) {
 }
 
 function navalStrength(c) {
-  return (c?.ships ?? 0) * (0.6 + 0.08 * (c?.tech?.naval ?? 4)) + (c?.carriers ?? 0) * 6;
+  return ((c?.ships ?? 0) * (0.6 + 0.08 * (c?.tech?.naval ?? 4)) + (c?.carriers ?? 0) * 6) * (c?.edge?.ships ?? 1);
 }
 
 // Escorts: the buyer's and seller's patrols at the straits on the route, plus a share of their navies
@@ -421,6 +416,7 @@ function stop(s, sh, by, how, where, at = null) {
     }
   }
   if (!seized && (sh.res === 'oil' || sh.res === 'gas')) news(s, `An oil slick spreads${where ? ` ${where}` : ''} after the attack.`, 'disaster', [by]);
+  if (!seized) cargoHooks.sinkWitnesses?.(s, sh, by, where, at);
   sh.done = true;
 }
 

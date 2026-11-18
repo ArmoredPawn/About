@@ -1,5 +1,5 @@
 // How to Play: the rules, in tabs, with diagrams of the ideas that are easier to see than to read: the odds of a
-// battle, the front moving through cities, pincers, encirclement, doctrine, catching a cargo at sea, shipping lines
+// battle, the front moving through cities, pincers, encirclement, doctrine, catching a cargo at sea, planned cargo routes
 // and the map's zoom levels.
 
 import { $, h, svg, fill } from './dom.js';
@@ -48,7 +48,7 @@ const PAGES = {
     h('ol.steps',
       h('li', h('b', 'Read the Cabinet'), ' (the first tab on the left): your briefing, anything that needs a decision, and what is going wrong.'),
       h('li', h('b', 'Set the budget'), ' (Economy → Budget): taxes, six spending lines and the interest rate. Infrastructure, education and research grow the economy; deficits pile up debt.'),
-      h('li', h('b', 'Check your resources'), ' (Economy → Resources): oil, gas, chips and the rest. Buy what you are short of (Market → Buy) or open a shipping line to a supplier (Economy → Routes).'),
+      h('li', h('b', 'Check your resources'), ' (Economy → Resources): oil, gas, chips and the rest. Buy what you are short of (Market → Buy) or agree a resource deal with a supplier (Diplomacy).'),
       h('li', h('b', 'Make friends'), ' (Diplomacy): alliances, free trade and non-aggression pacts. Every game starts with no alliances at all.'),
       h('li', h('b', 'Know your army'), ' (Military): what you can deploy, your navy, and your doctrine, the way your armies fight.')),
     h('p', 'Every other nation on Earth, about 150 of them, is run by the computer with its own economy, army, navy and diplomacy. They trade, build alliances, spy, pick fights with weak neighbours, and fight back hard when invaded.'),
@@ -59,7 +59,14 @@ const PAGES = {
       h('li', h('b', 'Pincers and breakthroughs'), ': attack a province from two sides for a big bonus; armoured armies tear through lines and keep rolling.'),
       h('li', h('b', 'Street fighting and home guards'), ': invaded countries fight for every city, and their people take up arms.'),
       h('li', h('b', 'Allies fight beside you'), ': computer-run allies send armies to your front; tick "Support the front" on an army and it helps wherever the fighting is next to it and keeps to the line as the front moves. Computer-run armies always do: attack a province and the defenders next door move in, and when it falls they fall back onto the new line.'),
-      h('li', h('b', 'Shipping lines'), ' (Economy → Routes): place two points on the map to open a public or private line.'),
+      h('li', h('b', 'Plan your convoys'), ': when you sell under a resource deal, you plan the route its ships or trucks take with up to 10 checkpoints on the map (Economy → Trade), see what shipping costs, then go ahead or cancel.'),
+      h('li', h('b', 'Private cargo'), ': secret deals and purchases around sanctions are off the map, except to spies inside either country, spy satellites, and warships that come very close (you are asked to seize, sink, broadcast or let it pass).'),
+      h('li', h('b', 'Design bureau'), ' (Research → Design): design your own tanks, armoured vehicles, aircraft and warships, name them, and have the factories build them.'),
+      h('li', h('b', 'Supplies and supply lines'), ': every army eats fuel, food and munitions. Beyond your borders it lives at the end of a supply line you pay for, which the enemy can cut. Run out, and two weeks later it starts falling apart.'),
+      h('li', h('b', 'The war bar'), ' (bottom of the map): air strike, missile strike, amphibious landing and cutting a supply line, one click each. Spies inside the enemy show what is worth hitting.'),
+      h('li', h('b', 'Send money'), ': any country\'s page, or its provinces on the map. It arrives at once.'),
+      h('li', h('b', 'Public or secret'), ': tick "In secret" on a country\'s page for free trade, pacts, military access, loans and new alliances; buy privately on the Market. Only the two sides and spies inside either know, and neutral spies may broadcast it.'),
+      h('li', h('b', 'An alliance of two'), ': "Propose an alliance" on any country\'s page. It is founded only if they accept.'),
       h('li', h('b', 'Catching cargo'), ': choose from every fleet that can reach a ship, best first, or put a new fleet to sea from the nearest port. Fleets can hunt shipping across a whole sea, and choose to seize or sink.'),
       h('li', h('b', 'Cities'), ': every country has its towns as well as its great cities, thousands in all. Zoom in and more appear; click any to see what it makes and who is fighting for it.')),
   ],
@@ -73,13 +80,13 @@ const PAGES = {
       h('li', h('b', 'Resources'), ' are where they really are: Texas and West Siberian oil, Taiwan\'s chip fabs, Chinese rare earths. Capture a province and its output is yours.'),
       h('li', h('b', 'Market'), ': buy from the country you choose (or around sanctions through intermediaries, at a premium and a risk), sell your surplus, or list it for other leaders. Every cargo sails a real lane or goes overland, and can be stopped on the way.'),
       h('li', h('b', 'Oil & pipelines'), ': found a cartel to cut output and embargo a country, shut or sabotage pipelines, release strategic reserves.')),
-    h('h3', 'Shipping lines (Economy → Routes)'),
-    fig('A private line from Cuba to Panama passes Jamaica\'s and Colombia\'s waters. Those countries are far likelier to spot it than anyone else; once they have, their coastguards can board its cargoes as they pass.', routeDiagram()),
+    h('h3', 'Planning a cargo route (Economy → Trade)'),
+    fig('The seller plans the way: from its port (A) through up to ten checkpoints to the buyer\'s (B), in straight lines. A leg that crosses land turns red; move the checkpoint onto the water. Overland, it is the other way round.', routeDiagram()),
     h('ol.steps',
-      h('li', 'Press ', h('b', 'Open a new line'), ' and click one of your ports (a coastal province, or the sea just off it).'),
-      h('li', 'Click a port abroad. The line is drawn on the map with its length, cost and whose waters it crosses.'),
-      h('li', 'Choose ', h('b', 'public'), ' (announced, on every map, lifts trade for both) or ', h('b', 'private'), ' (secret: its ships are on no one else\'s map), and open it.')),
-    h('p', 'All trade between you and that country then sails the line, about a fifth faster than usual. A private line crossing another country\'s waters (about 200 nautical miles off its coast) is noticed by that country far more often than by anyone else, and its spies inside your country count four times over. Lines close if either port changes hands, or the two countries go to war.'),
+      h('li', 'Agree a resource deal with another country (its page in Diplomacy). In a ', h('b', 'private'), ' deal the seller names the price; a buyer asks, and the seller answers with it.'),
+      h('li', 'If you are the seller, press ', h('b', 'Plan the route'), ' and click the sea (or the land, for a convoy to a neighbour) to place up to 10 checkpoints. Or press ', h('b', 'Shortest route'), ' and the computer places them.'),
+      h('li', 'Press ', h('b', 'Finish'), ': you see the distance, the time each voyage takes and what shipping costs per convoy and over the deal. ', h('b', 'Continue'), ' to go ahead, or ', h('b', 'Cancel'), ' to keep planning.')),
+    h('p', 'No convoy sails until the route is planned. If a strait on it closes, a war breaks out along it or you lose the port, the convoys stop until you plan a new one. A public deal\'s convoys and route are on everyone\'s map. A private one is seen only by the two of you, anyone with spies inside either country, anyone with a spy satellite, and any navy whose warships come very close (its leader can seize it, sink it, tell the world, or let it pass). A neutral country whose spies find a secret trade chooses to keep quiet or broadcast it. When a cargo is sunk, anyone with spies inside the countries involved, or a satellite, hears of it.'),
   ],
 
   war: () => [
@@ -180,7 +187,14 @@ const PAGES = {
     h('ul',
       h('li', 'Hold a strait\'s shores to close it, charge a toll, or attack enemy cargoes. Any fleet can patrol one, to escort friends or stop others.'),
       h('li', 'A blockade starves a country of almost all its sea trade. Its fleets and coastal missiles fight back.'),
-      h('li', 'To land an army overseas you need a fleet off that coast at least as strong as the enemy\'s, or a prepared landing (weeks of build-up, which spies and satellites see coming).')),
+      h('li', 'To land an army overseas you need a fleet off that coast at least as strong as the enemy\'s, or a prepared landing (weeks of build-up, which spies and satellites see coming). The ⚓ button on the war bar walks you through it: pick the army, then click the enemy coast.')),
+    h('h3', 'The war bar (bottom of the map)'),
+    h('ul',
+      h('li', h('b', '✈ Air strike'), ' and ', h('b', '🚀 Missile strike'), ': pick an enemy province. With spies inside that country, rings show each province\'s output and the troops there; without them you strike blind. Missiles spread fear (stability falls, people flee) but also fury: the nation rallies and volunteers enlist.'),
+      h('li', h('b', '⚓ Amphibious landing'), ': pick one of your armies, then an enemy coast across the sea.'),
+      h('li', h('b', '✂ Cut a supply line'), ': click an enemy army deep in foreign land and bomb the depots behind it, with 20 aircraft or 20 missiles.')),
+    h('h3', 'Supplies and supply lines'),
+    h('p', 'Every army eats fuel, food and munitions each week; its card shows how much, and how long your stocks last. Beyond your own borders it lives at the end of a supply line that costs money every week (more the farther it goes). The enemy can cut it, and you pay to rebuild it; you can also stop paying for it. With nothing getting through, an army lives off what it carries for two weeks, then loses men, tanks and order fast. Spies inside a country see the same about its armies.'),
   ],
 
   diplomacy: () => [
@@ -188,7 +202,7 @@ const PAGES = {
       h('li', 'Message other leaders, or start group chats; every alliance gets its own chat. Alliances and trade blocs can be ', h('b', 'public'), ' (announced: it deters attackers) or ', h('b', 'secret'), ' (revealed when a member goes to war for another).'),
       h('li', 'Propose alliances, free trade, non-aggression pacts, military access, resource deals and loans. A resource deal can be secret, and exclusive. Impose sanctions and tariffs, or table UN resolutions with P5 vetoes.'),
       h('li', h('b', 'Arm & fund'), ' a country at war, or rebels in someone else\'s, openly or covertly.'),
-      h('li', h('b', 'Spies'), ': plant agents abroad. Once settled in they report armies on the move, weapons, secret pacts and war plans, show their armies on your map, reveal their doctrine, and can uncover their secret shipping lines. Counter-intelligence catches (or turns) them.'),
+      h('li', h('b', 'Spies'), ': plant agents abroad. Once settled in they report armies on the move, weapons, secret pacts and war plans, show their armies on your map, reveal their doctrine, and show their secret trade (cargoes and routes), weapon designs, stockpiles, war plans, what their armies are short of and where some of their fleets are bound. Counter-intelligence catches (or turns) them.'),
       h('li', h('b', 'Coups'), ': back officers who want to overthrow a government; a coup that succeeds leaves one that owes you.'),
       h('li', h('b', 'Peoples'), ': conquered peoples resist with partisans and uprisings; independence movements can be granted autonomy, cracked down on, or offered a referendum.'),
       h('li', h('b', 'Crises'), ': pandemics, financial crashes, famines and terror attacks force choices with deadlines.')),
@@ -201,8 +215,8 @@ const PAGES = {
       h('li', 'Zoom in and the map becomes the ', h('b', 'city close-up'), ': every city in the colour of whoever holds it, with its output. ', h('b', 'Click a city'), ' for what it makes, its share of the economy, the garrison and home guard, and who is fighting for it. A pulsing ring means street fighting.'),
       h('li', 'The Auto / Strategic / Cities switch above the map sets when the close-up shows.'),
       h('li', 'Click a province for its card; click an army or a fleet, then click where it should go (Esc cancels); right-click sends the selected army.'),
-      h('li', 'The buttons above the map switch map modes (political, alliances, resources, economy, loyalty, climate) and layers (armies, fleets, pipelines, trade lanes and shipping lines).'),
-      h('li', 'On the map: a yellow front line inside contested provinces; ⚔ battles (with Pincer or Street fighting tags); a red ring round encircled pockets; dashed coloured lanes for trade and solid ones for shipping lines.')),
+      h('li', 'The buttons above the map switch map modes (political, alliances, resources, economy, loyalty, climate) and layers (armies, fleets, pipelines and trade).'),
+      h('li', 'On the map: a yellow front line inside contested provinces; ⚔ battles (with Pincer or Street fighting tags); a red ring round encircled pockets; dashed coloured lanes for trade, with each cargo on the route it follows (a gold dotted ring marks a private one); the planned routes of our deals, with their checkpoints.')),
   ],
 };
 
@@ -371,16 +385,16 @@ function raidDiagram() {
 }
 
 function routeDiagram() {
+  const pt = (x, y, label, cls = 'd-port') => svg('g', {}, svg('circle', { cx: x, cy: y, r: 9, class: cls }), text(x, y + 4, label, 'd-sub', { 'text-anchor': 'middle' }));
   return box('0 0 600 220', defs(),
     svg('rect', { x: 0, y: 0, width: 600, height: 220, class: 'd-sea' }),
-    svg('path', { d: 'M20 30 Q120 10 210 40 L200 60 Q110 40 30 55 Z', class: 'd-land' }), text(60, 22, 'Cuba', 'd-sub'),
-    svg('path', { d: 'M260 110 Q300 96 340 112 L330 126 Q300 118 268 124 Z', class: 'd-land' }),
-    svg('path', { d: 'M300 112 m-70 0 a70 34 0 1 0 140 0 a70 34 0 1 0 -140 0', class: 'd-eez' }), text(300, 160, "Jamaica's waters", 'd-faint', { 'text-anchor': 'middle' }),
-    svg('path', { d: 'M420 200 Q500 170 590 180 L590 220 L420 220 Z', class: 'd-land' }), text(520, 212, 'Panama / Colombia', 'd-sub', { 'text-anchor': 'middle' }),
-    svg('path', { d: 'M150 50 C230 90 300 96 360 130 C420 160 470 175 500 182', class: 'd-route private' }),
-    svg('circle', { cx: 150, cy: 50, r: 6, class: 'd-port' }), svg('circle', { cx: 500, cy: 182, r: 6, class: 'd-port' }),
-    text(320, 86, '👁 likely to be spotted here', 'd-title', { 'text-anchor': 'start' }),
-    text(40, 110, 'private line: hidden', 'd-sub'), text(40, 126, 'from everyone else', 'd-faint'));
+    svg('path', { d: 'M0 0 L170 0 Q150 60 60 90 L0 100 Z', class: 'd-land' }),
+    svg('path', { d: 'M250 70 Q300 40 350 70 Q360 120 300 140 Q250 120 250 70 Z', class: 'd-land' }), text(300, 100, 'an island', 'd-faint', { 'text-anchor': 'middle' }),
+    svg('path', { d: 'M480 220 L600 120 L600 220 Z', class: 'd-land' }),
+    svg('path', { d: 'M110 70 L200 150 L400 160 L540 180', class: 'd-route' }),
+    svg('path', { d: 'M200 150 L330 60', class: 'd-route private' }), text(352, 52, 'a leg over land: red', 'd-faint'),
+    pt(110, 70, 'A'), pt(200, 150, '1', 'd-ship'), pt(400, 160, '2', 'd-ship'), pt(540, 180, 'B'),
+    text(30, 200, 'up to 10 checkpoints, straight lines between them', 'd-sub'));
 }
 
 function zoomDiagram() {

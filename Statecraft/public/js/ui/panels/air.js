@@ -4,6 +4,19 @@
 import { h, flag, regionName, num, troops, bar } from '../dom.js';
 import { modal } from '../dialogs.js';
 import { AIR_MISSIONS, MISSILE_AIMS } from '../../engine/military.js';
+import { spiesIn } from '../war-bar.js';
+import { money, nationName } from '../dom.js';
+
+// What we know of a target province: with spies inside its country, its output and the troops there; without, nothing
+function targetIntel(ctx, id) {
+  const s = ctx.state;
+  const row = s.regions[ctx.regionIndex[id]];
+  const owner = row?.[1];
+  if (!spiesIn(s, owner)) return h('div.warning.warn', `We have no spies inside ${nationName(s, owner)}: we can't see what ${regionName(id)} produces or who is there. We are striking blind. (Plant agents in Spies.)`);
+  const armies = s.armies.filter((a) => a.region === id && !a.sea && a.owner === owner);
+  const inArmies = armies.reduce((t, a) => t + a.troops, 0);
+  return h('div.warning.info', `🕵 Our spies: ${regionName(id)} produces about ${money(row[9])} a year. ${inArmies || row[8] ? `${troops(inArmies + (row[8] ?? 0))} troops are there${armies.length ? ` (${armies.map((a) => a.name).join(', ')}, and the garrison)` : ' (the garrison)'}.` : 'No troops are there.'}`);
+}
 
 const ICON = { support: '🎯', interdict: '⛓', strategic: '🏭', army: '🪖', forts: '🧱', airbase: '✈', industry: '🏭' };
 const freeAircraft = (me) => me.aircraft - me.airOps.reduce((t, o) => t + o.aircraft, 0);
@@ -68,6 +81,7 @@ export function airDialog(ctx, id) {
   modal({
     title: `Air campaign over ${regionName(id)}`,
     body: h('div.stack',
+      targetIntel(ctx, id),
       picker(Object.entries(AIR_MISSIONS), mission, (k) => { mission = k; refresh(); }),
       h('div.field', h('span', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px' } }, h('span', 'Aircraft'), count), slider, h('span.muted.small', `${num(free)} free`)),
       forecast),
@@ -105,13 +119,15 @@ export function missileDialog(ctx, id) {
     forecast.replaceChildren(
       h('div.row.between.small', h('span.muted', 'Their air defences shoot down'), h('span', `about ${Math.round(intercept * 100)}%${foe?.tech ? '' : ' (estimate)'}`)),
       bar(100 - intercept * 100, 100, intercept < 0.25 ? 'good' : intercept < 0.45 ? 'warn' : 'bad'),
-      h('p.small', { style: { marginTop: '6px' } }, `About ${hits} get through. ${what}`));
+      h('p.small', { style: { marginTop: '6px' } }, `About ${hits} get through. ${what}`),
+      h('p.muted.small', `Missiles falling on ${foe ? foe.name : 'them'} spread fear: stability falls, markets wobble and people flee the province. They also stir fury: the nation rallies, war-weariness drops and volunteers come forward (about ${Math.round(Math.min(60, 2 + hits * 0.4))}K).`));
   };
   slider.addEventListener('input', refresh);
   refresh();
   modal({
     title: `Missile strike on ${regionName(id)}`,
     body: h('div.stack',
+      targetIntel(ctx, id),
       picker(Object.entries(MISSILE_AIMS), aim, (k) => { aim = k; refresh(); }),
       h('div.field', h('span', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px' } }, h('span', 'Missiles'), count), slider, h('span.muted.small', `${num(me.missiles)} in stock`)),
       forecast),

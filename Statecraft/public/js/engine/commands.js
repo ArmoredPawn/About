@@ -10,11 +10,10 @@ import { nearestLand, holderAt } from './land.js';
 import { BUILD, PROJECT_WEEKS, maxOrders, maxProjects, costFactor, lineProblem, hasLine, LINE_SETUP } from './economy.js';
 import {
   createArmy, orderArmy, disbandArmy, reinforceArmy, mergeArmies, missileStrike, nuclearStrike, setAuto, prepareLanding,
-  setAirCampaign, settleMinor, checkOrder, setAssist, breakOut, setAirlift, surrenderArmy,
+  setAirCampaign, settleMinor, checkOrder, setAssist, breakOut, setAirlift, surrenderArmy, setSupplyLine, repairSupplyLine, cutSupplyLine,
 } from './military.js';
 import { formFleet, fleetOrder, reinforceFleet, mergeFleets, disbandFleet, renameFleet, recallFleets, setFleetRaid } from './navy.js';
 import { planDoctrine, cancelDoctrine } from './doctrine.js';
-import { openRoute, closeRoute, setRoutePrivacy } from './routes.js';
 import { setProvincePolicy, holdReferendum, setBorder } from './peoples.js';
 import { startAid, stopAid } from './proxy.js';
 import { setCarbonTax, makePledge } from './climate.js';
@@ -27,7 +26,9 @@ import {
 import { covertOp } from './events.js';
 import { setConscription, setSecurity, setPress, handleProtest, handleUprising, makeWarCase } from './government.js';
 import { buy, sellToWorld, setOffer, orderIntercept, setToll, setStraitPolicy, interceptProblem } from './trade.js';
-import { huntCargo, callOffHunt, orderCoastguard } from './shipping.js';
+import { huntCargo, callOffHunt } from './shipping.js';
+import { setDealRoute, exposeCargo, exposeSpiedDeal, exposeSpiedPact } from './cargo.js';
+import { saveDesign, deleteDesign, designStats } from './designs.js';
 import { plant, recall, setCounterIntel, sweep, intelAction } from './spies.js';
 import { startResearch, cancelResearch, buyLicence, extendRange } from './science.js';
 import { setAllianceSecrecy } from './diplomacy.js';
@@ -225,9 +226,14 @@ const HANDLERS = {
   },
 
   /* ---------- Military production ---------- */
-  build(s, c, { kind, batches = 1 }) {
+  build(s, c, { kind, batches = 1, design }) {
     const b = BUILD[kind];
     if (!b) return 'Pick something to build.';
+    // To one of our own designs: its parts set the price and the time
+    const d = design ? c.designs?.[design] : null;
+    if (design && !d) return 'That design is gone.';
+    if (d && d.kind !== kind) return `${d.name} is not a design for ${b.name.toLowerCase()}.`;
+    const st = d ? designStats(d.kind, d.parts) : { cost: 1, weeks: 1 };
     batches = Math.floor(num(batches));
     if (!(batches >= 1 && batches <= 20)) return 'Order 1 to 20 batches.';
     if (b.tech && c.tech[b.tech[0]] < b.tech[1]) return `Carriers need ${TECH_FIELDS[b.tech[0]].name} level ${b.tech[1]}.`;
@@ -238,16 +244,20 @@ const HANDLERS = {
     if (c.queue.length + batches > maxOrders(c)) return `Your industry can handle ${maxOrders(c)} orders at once (${c.queue.length} running).`;
     // A brand-new production line: the first batch pays for the tooling
     const tooling = hasLine(c, kind) ? 0 : b.cost * costFactor(c) * (LINE_SETUP - 1);
-    const cost = b.cost * costFactor(c) * batches + tooling;
+    const cost = b.cost * st.cost * costFactor(c) * batches + tooling;
     if (cost > c.milFunds + c.treasury) return `That costs ${money(cost)}; you have ${money(c.milFunds)} in defence funds and ${money(c.treasury)} in reserves.`;
     pay(c, cost);
     if (tooling) {
       c.lines = { ...(c.lines ?? {}), [kind]: true };
       news(s, `${c.name} opens its first ${b.name.toLowerCase()} factories.`, 'war', [c.id]);
     }
-    for (let i = 0; i < batches; i++) c.queue.push({ id: nextId(s, 'q'), kind, qty: b.batch, left: b.weeks, total: b.weeks, cost: cost / batches });
+    const weeks = Math.max(1, Math.round(b.weeks * st.weeks));
+    for (let i = 0; i < batches; i++) c.queue.push({ id: nextId(s, 'q'), kind, qty: b.batch, left: weeks, total: weeks, cost: cost / batches, design: d?.id ?? null });
     return null;
   },
+
+  designSave(s, c, { kind, name, parts, id }) { return saveDesign(s, c, { kind, name, parts: parts && typeof parts === 'object' ? parts : {}, id }); },
+  designDelete(s, c, { id }) { return deleteDesign(s, c, { id }); },
 
   cancelBuild(s, c, { id }) {
     const o = c.queue.find((x) => x.id === id);
@@ -296,6 +306,10 @@ const HANDLERS = {
   doctrine(s, c, { picks, name }) { return planDoctrine(s, c, { picks, name }); },
   doctrineCancel(s, c) { return cancelDoctrine(s, c); },
   armyLanding(s, c, { id }) { return prepareLanding(s, c, s.armies[id]); },
+  // Supply lines: pay for one or stop, rebuild one the enemy cut, or cut an enemy army's
+  armyLine(s, c, { id, on }) { return setSupplyLine(s, c, s.armies[id], Boolean(on)); },
+  armyLineRepair(s, c, { id }) { return repairSupplyLine(s, c, s.armies[id]); },
+  cutSupply(s, c, { army, how }) { return cutSupplyLine(s, c, s.armies[army], how === 'missile' ? 'missile' : 'air'); },
   armyReinforce(s, c, { id, troops, tanks }) { return reinforceArmy(s, c, s.armies[id], { troops, tanks }); },
   armyMerge(s, c, { ids }) { return Array.isArray(ids) ? mergeArmies(s, c, ids) : 'Pick armies to merge.'; },
   armyRename(s, c, { id, name }) {
@@ -322,7 +336,7 @@ const HANDLERS = {
   /* ---------- Diplomacy ---------- */
   war(s, c, { target, goal }) { return declareWar(s, c, target, goal, { leaveShared: true }); },
   propose(s, c, { to, kind, terms }) { return propose(s, c.id, to, kind, terms && typeof terms === 'object' ? terms : {}); },
-  respond(s, c, { id, accept }) { return respond(s, c.id, id, Boolean(accept)); },
+  respond(s, c, { id, accept, price }) { return respond(s, c.id, id, Boolean(accept), { price }); },
   allianceCreate(s, c, { name, kind, invite, secret }) {
     const result = createAlliance(s, c, { name, kind, secret: Boolean(secret) });
     if (typeof result === 'string') return result;
@@ -382,25 +396,26 @@ const HANDLERS = {
   asat(s, c, { target, kind }) { return antiSatellite(s, c, { target, kind }); },
 
   /* ---------- Market and shipping ---------- */
-  marketBuy(s, c, { res, qty, from, covert }) { return buy(s, c, { res, qty, from, covert: Boolean(covert) }); },
+  marketBuy(s, c, { res, qty, from, covert, private: quiet }) { return buy(s, c, { res, qty, from, covert: Boolean(covert), private: Boolean(quiet) }); },
+  pactExpose(s, c, { id }) { return exposeSpiedPact(s, c, id); },
   marketSell(s, c, { res, qty }) { return sellToWorld(s, c, { res, qty }); },
   marketOffer(s, c, { res, qty, markup }) { return setOffer(s, c, { res, qty, markup }); },
   // At sea a fleet has to sail out and meet the cargo; overland, a country it crosses seizes it at the border
-  // fleet: one of ours at sea, 'new' (warships in port put to sea from the best port), or 'coastguard' (in our own
-  // waters, for a secret line we have found)
+  // fleet: one of ours at sea, or 'new' (warships in port put to sea from the best port)
   intercept(s, c, { id, how, fleet, ships, carriers }) {
     const sh = (s.shipments ?? []).find((x) => x.id === id);
     if (sh?.mode !== 'sea') return orderIntercept(s, c, { id, how });
     const why = interceptProblem(s, c, sh);
     if (why) return why;
     how = how === 'sink' ? 'sink' : 'seize';
-    if (fleet === 'coastguard') return orderCoastguard(s, c, sh, how);
     return huntCargo(s, c, sh, fleet === 'new' ? 'new' : s.fleets?.[fleet], how, { ships, carriers });
   },
   huntCancel(s, c, { fleet }) { return callOffHunt(s, c, { fleet }); },
-  routeOpen(s, c, { from, to, private: secret, name }) { return openRoute(s, c, { from, to, private: Boolean(secret), name }); },
-  routeClose(s, c, { id }) { return closeRoute(s, c, { id }); },
-  routePrivacy(s, c, { id, private: secret }) { return setRoutePrivacy(s, c, { id, private: secret }); },
+  // The seller of a resource deal plans its convoys' route: checkpoints [[x, y], ...], or auto for the shortest way
+  dealRoute(s, c, { id, checkpoints, auto }) { return setDealRoute(s, c, { id, checkpoints: Array.isArray(checkpoints) ? checkpoints.slice(0, 12) : [], auto: Boolean(auto) }); },
+  // Tell the world about a private cargo we can see
+  cargoExpose(s, c, { id }) { return exposeCargo(s, c, (s.shipments ?? []).find((x) => x.id === id)); },
+  dealExpose(s, c, { id }) { return exposeSpiedDeal(s, c, id); },
   toll(s, c, { key, rate }) { return setToll(s, c, key, rate); },
   straitPolicy(s, c, { key, policy }) { return setStraitPolicy(s, c, key, policy); },
   // Patrols and blockades are fleets now; these call them off

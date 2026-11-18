@@ -72,15 +72,32 @@ every few seconds, armies glide across the map and front lines creep through con
   logistics, command), develop and train it in, and master it in battle. Each attack concept fares better against some
   defences than others; mastered combinations become new ways of war (Blitzkrieg, Deep operations, AirLand Battle…),
   and the first country to develop one is its pioneer.
-- **Shipping lines** (Economy → Routes): place two points on the map to open a line to a port abroad. All trade
-  between the two sails it, faster. Public lines lift both economies; private ones are hidden, but the countries whose
-  waters they cross are likely to find them, and can then board their cargoes there.
+- **Planned cargo routes** (Economy → Trade): the seller of a resource deal plans its convoys' route with up to 10
+  checkpoints on the map (straight lines between them, never over land by sea or over the sea by truck), or lets the
+  computer find the shortest, then sees what shipping costs per convoy and over the deal before going ahead. In a
+  private deal the seller names the price. A public cargo and its route are on every map; a private one is seen only
+  by the two countries, spies inside either, spy satellites, and warships that come very close (their leader can
+  seize it, sink it, broadcast it or let it pass). Neutral countries whose spies find a secret trade may broadcast it;
+  a sinking is heard by spies and satellites.
+- **Design bureau** (Research → Design): design your own tanks, armoured vehicles, aircraft and warships part by part
+  on a blueprint, name them and have the factories build them; each design's rating changes how good that arm is.
+- **Supplies and supply lines:** every army eats fuel, food and munitions; beyond its borders it lives at the end of a
+  supply line that costs money each week and that the enemy can bomb. With nothing getting through, it lasts two weeks,
+  then falls apart fast.
+- **The war bar** (bottom of the map): air strikes, missile strikes (fear, and nationalism), amphibious landings and
+  cutting supply lines, one click each. Spies inside an enemy show its output and troops while you aim.
+- **Spies and satellites:** a network inside a country shows its designs, army numbers and supplies, stockpiles, war
+  plans, secret trade and where some of its fleets are going; each spy satellite counts a share of the world's
+  armies and fleets exactly.
 - **Computer-run countries** trade, sign deals and pacts (some secret), spy on rivals and pick their own fights with
   weak neighbours. The smaller nations found regional trade blocs (the East African Community, the Caribbean
   Community…), ask friendly great powers for protection against a threatening rival, and fight old feuds (Armenia and
   Azerbaijan, Serbia and Kosovo, Venezuela and Guyana…). Invaded, they mobilise, conscript, draft every reservist, fortify, gather their armies for counter-offensives and call on their friends; allies send expeditionary armies to the front.
 - **Diplomacy:** public or secret alliances and trade blocs, free trade, non-aggression pacts, military access, resource
-  deals, loans, aid, sanctions, tariffs, UN resolutions with P5 vetoes.
+  deals, loans, money aid that arrives at once, sanctions, tariffs, UN resolutions with P5 vetoes. An alliance with
+  one other country is one proposal. Free trade, non-aggression pacts, military access, loans, alliances, resource
+  deals and market purchases can all be public or secret: a secret one is known only to the two sides and spies
+  inside either, and neutral spies who find it may broadcast it (secret military access comes out when the troops do).
 - **Spies:** plant agents abroad; once settled in they relay armies on the move, weapons being built, secret pacts and
   war plans, and show the target's armies on your map, until counter-intelligence catches (or turns) them.
 - **Research:** pay for a project and wait for it; the hardest work needs imported chips or uranium, or buy a licence

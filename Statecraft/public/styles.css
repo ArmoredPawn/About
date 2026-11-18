@@ -632,3 +632,82 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .map .target-dot.bad { fill: rgb(229 72 77 / 0.35); stroke: #e5484d; }
 .map .target-label { fill: #fff; font-weight: 700; paint-order: stroke; stroke: rgb(5 8 14 / 0.9); stroke-linejoin: round; dominant-baseline: central; pointer-events: none; }
 .map .battle.repulsed circle { stroke: #4cc38a; }
+
+/* ---------- Planned cargo routes ---------- */
+.map .route-leg { stroke: #7cc4ff; stroke-linecap: round; }
+.map .route-leg.bad { stroke: var(--bad); }
+.map .route-end.check { fill: #0b0f1a; stroke: #7cc4ff; }
+.map .route-num { fill: #fff; font-weight: 700; text-anchor: middle; pointer-events: none; }
+.map .route-check { fill: #0b0f1a; stroke: #c99bff; }
+.map .trade-lane.private { stroke-opacity: 0.85; }
+.map .trade-ship.land rect { fill-opacity: 0.85; }
+.route-status { font-size: 12px; max-width: 360px; }
+.target-bar .route-status .bad { color: var(--bad); }
+
+/* ---------- What our spies show while a strike is aimed ---------- */
+.map .intel-ring { fill: rgb(255 209 102 / 0.12); stroke: #ffd166; }
+.map .intel-label { fill: #ffe3a3; font-weight: 600; text-anchor: middle; paint-order: stroke; stroke: rgb(5 8 14 / 0.9); stroke-linejoin: round; }
+
+/* ---------- The war bar ---------- */
+.war-bar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: rgb(15 20 32 / 0.92); backdrop-filter: blur(6px); border: 1px solid var(--line-strong); border-radius: 999px; box-shadow: var(--shadow); z-index: 4; max-width: calc(100% - 24px); overflow-x: auto; }
+.war-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12.5px; white-space: nowrap; cursor: pointer; }
+.war-btn:hover:not(:disabled) { border-color: var(--bad); background: var(--bad-soft); }
+.war-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.war-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 900px) { .war-bar { bottom: 64px; } .war-btn span:last-child { display: none; } .war-btn { padding: 8px 12px; font-size: 16px; } }
+
+/* ---------- The design bureau ---------- */
+.design-studio { position: fixed; inset: var(--hud-h) 0 0 var(--rail-w); z-index: 25; background: var(--bg); display: grid; grid-template-rows: auto 1fr; }
+.ds-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.ds-head h2 { margin: 0; font-size: 17px; }
+.ds-close { font-size: 18px; width: 38px; height: 38px; }
+.ds-body { display: grid; grid-template-columns: 240px 1fr 340px; min-height: 0; }
+.ds-side, .ds-parts { overflow-y: auto; padding: 14px; background: var(--surface); }
+.ds-side { border-right: 1px solid var(--line); }
+.ds-parts { border-left: 1px solid var(--line); }
+.ds-side h3, .ds-slot h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); margin: 16px 0 8px; }
+.ds-slot:first-child h3 { margin-top: 0; }
+.ds-kinds { display: grid; gap: 6px; }
+.ds-kind { display: flex; gap: 8px; align-items: center; text-align: left; padding: 9px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit; cursor: pointer; }
+.ds-kind[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.ds-list { display: grid; gap: 8px; }
+.ds-saved { padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.ds-saved.on { border-color: var(--accent); }
+.ds-main { overflow-y: auto; padding: 18px; display: grid; gap: 16px; align-content: start; }
+.ds-blueprint { border-radius: var(--radius); overflow: hidden; border: 1px solid #1d3d6b; background: #0b2445; }
+.blueprint { display: block; width: 100%; height: auto; }
+.blueprint .bp-grid { stroke: rgb(140 190 255 / 0.13); stroke-width: 1; }
+.blueprint .bp > * { fill: rgb(160 205 255 / 0.08); stroke: #d6e8ff; stroke-width: 1.6; stroke-linejoin: round; }
+.blueprint .bp .bp-thin { fill: none; stroke-width: 1; stroke: #a9cbf5; }
+.blueprint .bp .bp-water { fill: none; stroke: #4c7fc0; stroke-dasharray: 6 5; }
+.blueprint .bp .bp-note { fill: #a9cbf5; stroke: none; font: 12px var(--mono); }
+.ds-stats { display: grid; gap: 8px; }
+.ds-stat { display: grid; grid-template-columns: 110px 1fr 40px; align-items: center; gap: 10px; font-size: 13px; }
+.ds-bar { height: 8px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
+.ds-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.ds-figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
+.ds-save { display: flex; gap: 8px; flex-wrap: wrap; }
+.ds-save input { flex: 1 1 220px; }
+.ds-options { display: grid; gap: 6px; }
+.ds-option { display: grid; gap: 2px; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+.ds-option span { color: var(--ink-soft); font-size: 12px; }
+.ds-option span.faint { color: var(--ink-faint); font-size: 11px; }
+.ds-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.ds-option.locked { opacity: 0.6; }
+.ds-option:focus-visible, .ds-kind:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 1100px) { .ds-body { grid-template-columns: 200px 1fr 280px; } }
+@media (max-width: 900px) {
+  .design-studio { inset: var(--hud-h) 0 0 0; }
+  .ds-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .ds-side, .ds-parts, .ds-main { overflow: visible; border: 0; }
+  .ds-kinds { grid-template-columns: repeat(2, 1fr); }
+  .ds-figures { grid-template-columns: 1fr; }
+  .ds-stat { grid-template-columns: 90px 1fr 36px; }
+}
+
+/* ---------- Supplies on an army's card ---------- */
+.needs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
+.need { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 12px; }
+.need b { display: block; font-size: 12.5px; }
+.need.out { border-color: var(--bad); background: var(--bad-soft); }
+.need.low { border-color: var(--warn); }

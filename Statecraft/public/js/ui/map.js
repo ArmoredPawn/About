@@ -99,7 +99,8 @@ export class WorldMap {
     this.gPockets = svg('g', { class: 'pockets', 'pointer-events': 'none' });
     this.gRoutes = svg('g', { class: 'routes' });
     this.gRoutePreview = svg('g', { class: 'route-preview', 'pointer-events': 'none' });
-    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gPockets, this.gLines, this.gTrade, this.gRoutes, this.gRes, this.gSeas, this.gCities, this.gLabels, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview, this.gRoutePreview);
+    this.gIntel = svg('g', { class: 'intel-overlay', 'pointer-events': 'none' });
+    el.append(this.gRegions, this.gOcc, this.gEnemy, this.gPockets, this.gLines, this.gTrade, this.gRoutes, this.gRes, this.gSeas, this.gCities, this.gLabels, this.gIntel, this.gArrows, this.gBattles, this.gFleets, this.gArmies, this.gSel, this.gPreview, this.gRoutePreview);
     for (const id of ORDER) {
       const u = svg('path', { d: this.d[id], class: 'region', 'data-id': id, fill: NEUTRAL });
       this.uses.set(id, u);
@@ -325,8 +326,7 @@ export class WorldMap {
     const unit = this.#unit();
     // Most updates change nothing about the lanes (they come every second in a war): then only the ships move
     const key = JSON.stringify([unit, s.me, this.tradeRoutes?.size ?? 0, s.trade,
-      s.shipments.map((sh) => [sh.id, sh.mode, sh.lane, sh.seller, sh.buyer, sh.res, sh.covert, sh.secret, sh.deal, sh.left, sh.hunter?.name, sh.x == null]),
-      (s.treaties ?? []).filter((t) => t.kind === 'deal').map((t) => [t.a, t.b, t.res, t.until])]);
+      s.shipments.map((sh) => [sh.id, sh.mode, sh.lane, sh.path?.length ?? 0, sh.seller, sh.buyer, sh.res, sh.private, sh.seen, sh.deal, sh.left, sh.hunter?.name, sh.x == null])]);
     if (key === this.tradeKey) { this.#moveShips(); return; }
     this.tradeKey = key;
     const portsOf = new Map();
@@ -364,6 +364,11 @@ export class WorldMap {
     };
     const wrap = (x) => ((x % W) + W) % W;
     const path = (r) => [0, -W, W].map((shift) => r.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
+    const pathGeom = (pts) => {
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      return { pts, cum };
+    };
     const lines = [];
     // The world's main trade: a lane per big flow, thicker for more, its dashes flowing toward the buyer
     const money = (v) => (v >= 1 ? `$${Math.round(v)}B` : `$${Math.round(v * 1000)}M`);
@@ -378,32 +383,36 @@ export class WorldMap {
       }, svg('title', {}, `${s.countries[from]?.name ?? from} → ${s.countries[to]?.name ?? to}: ${RESOURCE_INFO[res]?.name ?? res}, about ${money(value)} a year`)));
     }
     const seen = new Set();
-    // A cargo's own lane, as the game sails it (its ports), else the lane between the two countries
+    // A cargo's own way: the route its seller planned, else its lane between the two ports, else the lane between
+    // the two countries
     const ownLane = (sh) => {
+      if (sh.path?.length >= 2) return pathGeom(sh.path);
+      if (sh.mode !== 'sea') return null;
       if (!sh.lane || !PORTS[sh.lane.from] || !PORTS[sh.lane.to]) return lane(sh.seller, sh.buyer);
       const r = this.#seaLane(sh.lane.from, sh.lane.to);
       if (r === undefined) return null; // still being found
       return r ?? lane(sh.seller, sh.buyer);
     };
     for (const sh of s.shipments) {
-      if (sh.mode !== 'sea') continue;
+      if (sh.mode !== 'sea' && !sh.path) continue;
       const r = ownLane(sh);
       // A ship whose lane is still being found is shown where it is, and its lane joins it shortly
       if (!r && sh.x == null) continue;
       const ours = sh.buyer === s.me || sh.seller === s.me;
       const color = RES_COLORS[sh.res] ?? '#9aa4b8';
       const info = RESOURCE_INFO[sh.res];
-      const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.covert ? ' (covert)' : ''}${sh.secret ? ' (secret deal)' : sh.deal ? ' (deal convoy)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
+      const how = { spies: ', seen by our spies', satellite: ', seen from orbit', ships: ', spotted by our warships' }[sh.seen] ?? '';
+      const title = `${s.countries[sh.seller]?.name ?? sh.seller} → ${s.countries[sh.buyer]?.name ?? sh.buyer}: ${info?.name ?? sh.res}${sh.mode === 'land' ? ' by road and rail' : ''}${sh.private ? ` (private${how})` : sh.exposed ? ' (exposed secret)' : sh.deal ? ' (deal convoy)' : ''}, arriving in ${sh.left} week${sh.left === 1 ? '' : 's'}${sh.straits?.length ? `, via ${sh.straits.map((k) => CHOKEPOINTS[k]?.name ?? k).join(', ')}` : ''}`;
       if (r) lines.push(svg('path', {
-        class: `trade-lane${ours ? ' ours' : ''}`, d: path(r), stroke: color, 'stroke-width': (ours ? 1.8 : 1.1) / unit,
-        'stroke-dasharray': sh.covert ? `${2 / unit} ${3 / unit}` : `${5 / unit} ${4 / unit}`,
+        class: `trade-lane${ours ? ' ours' : ''}${sh.private ? ' private' : ''}${sh.path ? ' planned' : ''}`, d: path(r), stroke: color, 'stroke-width': (ours ? 1.8 : 1.1) / unit,
+        'stroke-dasharray': sh.private ? `${2 / unit} ${3 / unit}` : `${5 / unit} ${4 / unit}`,
       }, svg('title', {}, title)));
       // The ship, gliding along the route over the week
       seen.add(sh.id);
       const p = sh.x != null ? [sh.x, sh.y] : at(r, (sh.total - sh.left) / Math.max(1, sh.total));
       let n = this.tradeShips.get(sh.id);
       if (!n) {
-        n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}`, 'data-cargo': sh.id });
+        n = svg('g', { class: `trade-ship${ours ? ' ours' : ''}${sh.mode === 'land' ? ' land' : ''}`, 'data-cargo': sh.id });
         this.tradeShips.set(sh.id, n);
       }
       n.classList.toggle('hunted', Boolean(sh.hunter));
@@ -417,19 +426,14 @@ export class WorldMap {
         n.replaceChildren(
           ours ? null : svg('circle', { r: 9 / unit, fill: 'transparent' }), // easier to click
           sh.hunter ? svg('circle', { class: 'hunt-ring', r: 7 / unit, fill: 'none', stroke: '#ff5a5a', 'stroke-width': 1.4 / unit }) : null,
-          svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
+          sh.mode === 'land'
+            ? svg('rect', { x: -(ours ? 4 : 3) / unit, y: -(ours ? 3 : 2.2) / unit, width: (ours ? 8 : 6) / unit, height: (ours ? 6 : 4.4) / unit, rx: 1 / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit })
+            : svg('circle', { r: (ours ? 4 : 3) / unit, fill: color, stroke: '#0b0f1a', 'stroke-width': 1.2 / unit }),
+          sh.private ? svg('circle', { r: (ours ? 6.5 : 5.5) / unit, fill: 'none', stroke: '#ffd166', 'stroke-width': 0.9 / unit, 'stroke-dasharray': `${1.5 / unit} ${1.5 / unit}` }) : null,
           svg('title', {}, tip));
       }
     }
     for (const [id, n] of this.tradeShips) if (!seen.has(id)) { n.remove(); this.tradeShips.delete(id); }
-    // Our standing resource deals: the lanes their cargoes use
-    for (const t of s.treaties ?? []) {
-      if (t.kind !== 'deal' || !(t.a === s.me || t.b === s.me)) continue;
-      const r = lane(t.a, t.b);
-      if (!r) continue;
-      lines.push(svg('path', { class: 'trade-lane deal', d: path(r), stroke: RES_COLORS[t.res] ?? '#9aa4b8', 'stroke-width': 1.2 / unit },
-        svg('title', {}, `Standing deal: ${s.countries[t.a]?.name} sells ${s.countries[t.b]?.name} ${RESOURCE_INFO[t.res]?.name ?? t.res} until week ${t.until}`)));
-    }
     this.gTrade.replaceChildren(...lines, ...this.tradeShips.values());
   }
 
@@ -479,27 +483,29 @@ export class WorldMap {
     return undefined;
   }
 
-  // Shipping lines opened by countries (the ones this leader knows of), and one being placed
+  // The routes our resource deals' convoys follow, as their sellers planned them
   #drawRoutes() {
     const s = this.state;
     const unit = this.#unit();
     const out = [];
-    const all = [...(s.routes ?? []).map((r) => ({ ...r, kind: r.by === s.me || r.partner === s.me ? 'ours' : r.private ? 'found' : 'other' }))];
-    for (const r of all) {
-      if (!r.pts?.length) continue;
-      const d = [0, -W, W].map((shift) => r.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
-      const name = `${r.name}: ${s.countries[r.by]?.name ?? r.by} → ${s.countries[r.partner]?.name ?? r.partner}, ${Math.round(r.km).toLocaleString('en')} km${r.private ? ' (private)' : ''}`;
-      out.push(svg('path', { class: `route-line ${r.kind}${r.private ? ' private' : ''}`, d, 'stroke-width': (r.kind === 'ours' ? 2.4 : 1.6) / unit, 'stroke-dasharray': r.private ? `${1.5 / unit} ${3 / unit}` : `${8 / unit} ${3 / unit}` }, svg('title', {}, name)));
-      for (const [x, y] of [r.pts[0], r.pts[r.pts.length - 1]]) out.push(svg('circle', { class: `route-end ${r.kind}`, cx: ((x % W) + W) % W, cy: y, r: 3.2 / unit, 'stroke-width': 1 / unit }, svg('title', {}, name)));
+    for (const t of s.treaties ?? []) {
+      if (t.kind !== 'deal' || !t.route?.pts?.length || !(t.a === s.me || t.b === s.me)) continue;
+      const pts = t.route.pts;
+      const d = [0, -W, W].map((shift) => pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
+      const name = `${s.countries[t.a]?.name ?? t.a} → ${s.countries[t.b]?.name ?? t.b}: ${RESOURCE_INFO[t.res]?.name ?? t.res} deal, ${t.route.km.toLocaleString('en')} km ${t.route.mode === 'land' ? 'overland' : 'by sea'}${t.secret && !t.exposed ? ' (secret)' : ''}`;
+      out.push(svg('path', { class: `route-line ours${t.secret && !t.exposed ? ' private' : ''}`, d, stroke: RES_COLORS[t.res] ?? '#9aa4b8', 'stroke-width': 1.6 / unit, 'stroke-dasharray': t.secret && !t.exposed ? `${1.5 / unit} ${3 / unit}` : `${8 / unit} ${3 / unit}` }, svg('title', {}, name)));
+      for (const [x, y] of pts.slice(1, -1)) out.push(svg('circle', { class: 'route-check', cx: ((x % W) + W) % W, cy: y, r: 2.2 / unit, 'stroke-width': 0.8 / unit }, svg('title', {}, name)));
     }
     this.gRoutes.replaceChildren(...out);
     this.#drawRoutePreview();
   }
 
-  previewRoute(p) {
+  // A route being planned: { pts (unwrapped, from the start through the checkpoints to the end), bad (the number
+  // of the leg that doesn't work, or 0) }. fit: zoom the map to it.
+  previewRoute(p, fit = false) {
     this.routePreview = p;
     this.#drawRoutePreview();
-    if (p?.pts) {
+    if (fit && p?.pts?.length) {
       const xs = p.pts.map((q) => q[0]);
       const ys = p.pts.map((q) => q[1]);
       this.#fitBox(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys));
@@ -508,19 +514,44 @@ export class WorldMap {
 
   #drawRoutePreview() {
     const p = this.routePreview;
-    if (!p || !this.state) { this.gRoutePreview.replaceChildren(); return; }
+    if (!p?.pts?.length || !this.state) { this.gRoutePreview.replaceChildren(); return; }
     const unit = this.#unit();
     const out = [];
-    if (p.pts) {
-      const d = [0, -W, W].map((shift) => p.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x + shift} ${y}`).join('')).join('');
-      out.push(svg('path', { class: 'route-line preview', d, 'stroke-width': 3 / unit, 'stroke-dasharray': `${7 / unit} ${4 / unit}` }));
-    }
-    for (const id of [p.from, p.to]) {
-      if (!id || !PORTS[id]) continue;
-      const [x, y] = PORTS[id];
-      out.push(svg('circle', { class: 'route-end preview', cx: x, cy: y, r: 6 / unit, 'stroke-width': 2 / unit }));
+    const pts = p.pts;
+    for (const shift of [0, -W, W]) {
+      for (let i = 1; i < pts.length; i++) {
+        const bad = p.bad === i;
+        out.push(svg('line', { class: `route-leg${bad ? ' bad' : ''}`, x1: pts[i - 1][0] + shift, y1: pts[i - 1][1], x2: pts[i][0] + shift, y2: pts[i][1], 'stroke-width': (bad ? 3.2 : 2.6) / unit, 'stroke-dasharray': bad ? `${3 / unit} ${2 / unit}` : null }));
+      }
+      pts.forEach(([x, y], i) => {
+        const end = i === 0 || i === pts.length - 1;
+        out.push(svg('circle', { class: `route-end preview${end ? '' : ' check'}`, cx: x + shift, cy: y, r: (end ? 6 : 5) / unit, 'stroke-width': 1.6 / unit }));
+        out.push(svg('text', { class: 'route-num', x: x + shift, y: y + 2.6 / unit, 'font-size': 7 / unit }, end ? (i === 0 ? 'A' : 'B') : String(i)));
+      });
     }
     this.gRoutePreview.replaceChildren(...out);
+  }
+
+  // What our spies (or nothing) show of an enemy while a strike is being aimed: each province's output and the
+  // armies in it, as rings sized by output. info: [{ id, gdp, troops }] or null to clear it.
+  setIntel(info) {
+    this.intel = info;
+    this.#drawIntel();
+  }
+  #drawIntel() {
+    const list = this.intel;
+    if (!list?.length || !this.state) { this.gIntel.replaceChildren(); return; }
+    const unit = this.#unit();
+    const top = Math.max(1, ...list.map((r) => r.gdp));
+    const out = [];
+    for (const r of list) {
+      const g = GEO[r.id];
+      if (!g) continue;
+      const rad = (4 + 14 * Math.sqrt(r.gdp / top)) / unit;
+      out.push(svg('circle', { class: 'intel-ring', cx: g.x, cy: g.y, r: rad, 'stroke-width': 1.2 / unit }));
+      if (unit >= 0.6) out.push(svg('text', { class: 'intel-label', x: g.x, y: g.y - rad - 2 / unit, 'font-size': 7.5 / unit, 'stroke-width': 2.2 / unit }, `$${r.gdp >= 10 ? Math.round(r.gdp) : r.gdp.toFixed(1)}B${r.troops ? ` · ${Math.round(r.troops)}K troops` : ''}`));
+    }
+    this.gIntel.replaceChildren(...out);
   }
 
   focusRoutes(list) {
@@ -1132,7 +1163,7 @@ export class WorldMap {
         const unit = this.#unit();
         if (unit === this.drawnUnit) { this.#drawCities(); return; }
         this.drawnUnit = unit;
-        this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawCities();
+        this.#drawLabels(); this.#drawArmies(); this.#drawFleets(); this.#drawPipelines(); this.#drawTrade(); this.#drawRoutes(); this.#drawPockets(); this.#drawBattles(); this.#drawOverlays(); this.#drawIntel(); this.#drawCities();
         this.#drawFront(true);
       });
     }

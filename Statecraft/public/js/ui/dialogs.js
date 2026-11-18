@@ -7,7 +7,7 @@ export function modal({ title, body, actions = [], onClose }) {
   const dlg = $('modal');
   const close = () => { if (dlg.open) dlg.close(); };
   const foot = h('div.modal-foot', actions.map((a) => {
-    const btn = h('button.btn', { class: a.kind ?? '', type: 'button' }, a.label);
+    const btn = h('button.btn', { class: a.kind ?? '', type: 'button', disabled: Boolean(a.disabled) }, a.label);
     btn.addEventListener('click', async () => {
       if (!a.onClick) return close();
       btn.disabled = true;
@@ -15,7 +15,7 @@ export function modal({ title, body, actions = [], onClose }) {
         const keep = await a.onClick();
         if (keep !== false) close();
       } finally {
-        btn.disabled = false;
+        btn.disabled = Boolean(a.disabled);
       }
     });
     return btn;
