@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import { heightAt } from '../sim/waves.js';
+import { WEAPONS } from '../sim/boats.js';
 
 /* ---------- Particles ---------- */
 
@@ -71,7 +72,7 @@ class Particles {
       const k = Math.exp(-this.drag[i] * dt);
       this.vel[i * 3] *= k; this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * k - this.grav[i] * dt; this.vel[i * 3 + 2] *= k;
       this.pos[i * 3] += this.vel[i * 3] * dt; this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt; this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.size[i] += this.grow[i] * dt;
+      this.size[i] = Math.max(0.05, this.size[i] + this.grow[i] * dt);
       const f = this.age[i] / this.life[i];
       this.col[i * 4 + 3] = this.alpha0[i] * (1 - f) * Math.min(1, this.age[i] * 12 + 0.2);
     }
@@ -184,6 +185,7 @@ export class Effects {
     this.v = new THREE.Vector3();
     this.s = new THREE.Vector3();
     this.up = new THREE.Vector3(0, 0, 1);
+    this.p = new THREE.Vector3();
   }
 
   wake(b) {
@@ -236,68 +238,99 @@ export class Effects {
     const hurt = b.hp / b.k.hp;
     if (hurt < 0.5 && Math.random() < dt * (hurt < 0.25 ? 26 : 12)) {
       const g = hurt < 0.25 ? 0.07 : 0.32;
-      this.smoke.emit(b.x - fx * 1.5, b.y + 2.4, b.z - fz * 1.5, b.vx * 0.5 + (Math.random() - 0.5), 3 + Math.random() * 2, b.vz * 0.5 + (Math.random() - 0.5), { size: 1.8, grow: 3.5, life: 2.6, color: [g, g, g * 1.05], alpha: 0.6, drag: 0.6 });
-      if (hurt < 0.25) this.glow.emit(b.x - fx * 1.5, b.y + 2.2, b.z - fz * 1.5, b.vx * 0.6, 2.5, b.vz * 0.6, { size: 1.4, grow: -0.6, life: 0.45, color: [1, 0.45, 0.1], alpha: 0.9 });
+      // From somewhere along the deck (bigger ships, bigger fires)
+      const k = 1 + b.k.length / 30;
+      const along = (Math.random() - 0.5) * b.k.length * 0.6;
+      const sy = b.y + b.k.beam * 0.4 + 2;
+      this.smoke.emit(b.x + fx * along, sy, b.z + fz * along, b.vx * 0.5 + (Math.random() - 0.5), 3 + Math.random() * 2, b.vz * 0.5 + (Math.random() - 0.5), { size: 1.8 * k, grow: 3.5 * k, life: 2.6, color: [g, g, g * 1.05], alpha: 0.6, drag: 0.6 });
+      if (hurt < 0.25) this.glow.emit(b.x + fx * along, sy - 0.2, b.z + fz * along, b.vx * 0.6, 2.5, b.vz * 0.6, { size: 1.4 * k, grow: -0.6, life: 0.45, color: [1, 0.45, 0.1], alpha: 0.9 });
     }
   }
 
+  // A weapon fires: a flash at the muzzle (bigger for bigger guns), smoke from a launch cell, steam off a deck
   muzzle(x, y, z, w, dx, dz) {
-    const big = w === 'cannon';
-    for (let i = 0; i < (big ? 6 : 2); i++) this.glow.emit(x + dx * 0.5, y, z + dz * 0.5, dx * (8 + Math.random() * 10), Math.random() * 2, dz * (8 + Math.random() * 10), { size: big ? 1.6 : 0.7, grow: -1, life: 0.08, color: [1, 0.75, 0.35], alpha: 1 });
-    if (big) { this.smoke.emit(x, y, z, dx * 5, 1, dz * 5, { size: 1.5, grow: 4, life: 1.2, color: [0.6, 0.6, 0.6], alpha: 0.45, drag: 1.4 }); this.flash(x, y, z, 25, 0xffc27a); }
-    if (w === 'missile') {
-      for (let i = 0; i < 12; i++) this.smoke.emit(x, y, z, (Math.random() - 0.5) * 6, Math.random() * 3, (Math.random() - 0.5) * 6, { size: 2, grow: 5, life: 2, color: [0.85, 0.85, 0.85], alpha: 0.5, drag: 1.2 });
-      this.flash(x, y, z, 30, 0xffd08a);
+    const W = WEAPONS[w];
+    const slot = W?.slot;
+    const k = W?.size ?? 1;
+    if (slot === 'gun') {
+      for (let i = 0; i < 2; i++) this.glow.emit(x + dx * 0.5, y, z + dz * 0.5, dx * (8 + Math.random() * 10), Math.random() * 2, dz * (8 + Math.random() * 10), { size: w === 'ciws' ? 0.9 : 0.7, grow: -1, life: 0.07, color: [1, 0.75, 0.35], alpha: 1 });
+    } else if (slot === 'cannon') {
+      for (let i = 0; i < 6 * k; i++) this.glow.emit(x + dx, y, z + dz, dx * (10 + Math.random() * 12), Math.random() * 3, dz * (10 + Math.random() * 12), { size: 1.6 * k, grow: -1, life: 0.09, color: [1, 0.75, 0.35], alpha: 1 });
+      for (let i = 0; i < 3 * k; i++) this.smoke.emit(x, y, z, dx * 6 + (Math.random() - 0.5) * 2, 1, dz * 6 + (Math.random() - 0.5) * 2, { size: 1.5 * k, grow: 4 * k, life: 1.4, color: [0.62, 0.62, 0.62], alpha: 0.45, drag: 1.4 });
+      this.flash(x, y, z, 25 * k, 0xffc27a);
+    } else if (slot === 'missile') {
+      for (let i = 0; i < 14 * k; i++) this.smoke.emit(x, y, z, (Math.random() - 0.5) * 6 * k, (W.vertical ? 6 : 1) + Math.random() * 3, (Math.random() - 0.5) * 6 * k, { size: 2 * k, grow: 5 * k, life: 2.4, color: [0.86, 0.86, 0.86], alpha: 0.55, drag: 1.2 });
+      this.flash(x, y, z, 35 * k, 0xffd08a);
+    } else if (slot === 'air') {
+      // The catapult's steam
+      for (let i = 0; i < 16; i++) this.smoke.emit(x, y, z, dx * 10 + (Math.random() - 0.5) * 3, 1 + Math.random() * 2, dz * 10 + (Math.random() - 0.5) * 3, { size: 1.6, grow: 4, life: 1.2, color: [0.95, 0.96, 0.98], alpha: 0.5, drag: 1.6 });
     }
   }
 
-  // A missile's motor: flame and a long white trail
+  // Missiles trail flame and white smoke (thicker for a cruise missile); jets a faint vapour trail
   missileTrail(s, dt) {
-    if (Math.random() < dt * 90) this.smoke.emit(s.x, s.y, s.z, (Math.random() - 0.5) * 1.5, 0.6, (Math.random() - 0.5) * 1.5, { size: 1.1, grow: 2.6, life: 2.4, color: [0.9, 0.9, 0.9], alpha: 0.45, drag: 0.7 });
-    if (Math.random() < dt * 60) this.glow.emit(s.x, s.y, s.z, -s.vx * 0.05, 0, -s.vz * 0.05, { size: 1.2, grow: -2, life: 0.1, color: [1, 0.7, 0.3], alpha: 1 });
+    const k = WEAPONS[s.w]?.size ?? 1;
+    if (Math.random() < dt * 90) this.smoke.emit(s.x, s.y, s.z, (Math.random() - 0.5) * 1.5, 0.6, (Math.random() - 0.5) * 1.5, { size: 1.1 * k, grow: 2.6 * k, life: 2.6, color: [0.9, 0.9, 0.9], alpha: 0.45, drag: 0.7 });
+    if (Math.random() < dt * 60) this.glow.emit(s.x, s.y, s.z, -s.vx * 0.05, 0, -s.vz * 0.05, { size: 1.2 * k, grow: -2, life: 0.1, color: [1, 0.7, 0.3], alpha: 1 });
   }
 
-  explode(x, y, z, w, onBoat, sea) {
-    if (w === 'hmg') {
+  contrail(s, dt) {
+    if (Math.random() < dt * 30) this.smoke.emit(s.x - s.vx * 0.05, s.y, s.z - s.vz * 0.05, 0, 0, 0, { size: 0.8, grow: 1.6, life: 1.6, color: [0.96, 0.97, 1], alpha: 0.25, drag: 0.2 });
+  }
+
+  // How big a blast each weapon makes
+  #power(w) {
+    if (w === 'boat') return 2.4;
+    return { c30: 1, c57: 1.3, c76: 1.6, asm: 1.8, cruise: 2.8, bomb: 2.2, heavybomb: 2.8, drone: 1.1, jet: 1.5 }[w] ?? 1;
+  }
+
+  explode(x, y, z, w, onBoat, sea, power = null) {
+    if (WEAPONS[w]?.slot === 'gun') {
       if (onBoat) for (let i = 0; i < 5; i++) this.glow.emit(x, y, z, (Math.random() - 0.5) * 14, Math.random() * 8, (Math.random() - 0.5) * 14, { size: 0.35, life: 0.25, color: [1, 0.8, 0.45], gravity: 20 });
-      else for (let i = 0; i < 4; i++) this.smoke.emit(x, sea + 0.1, z, (Math.random() - 0.5) * 2, 4 + Math.random() * 5, (Math.random() - 0.5) * 2, { size: 0.5, grow: 1, life: 0.7, color: [0.95, 0.97, 1], alpha: 0.7, gravity: 14 });
+      else if (y < sea + 2) for (let i = 0; i < 4; i++) this.smoke.emit(x, sea + 0.1, z, (Math.random() - 0.5) * 2, 4 + Math.random() * 5, (Math.random() - 0.5) * 2, { size: 0.5, grow: 1, life: 0.7, color: [0.95, 0.97, 1], alpha: 0.7, gravity: 14 });
+      else for (let i = 0; i < 3; i++) this.glow.emit(x, y, z, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, { size: 0.5, life: 0.15, color: [1, 0.85, 0.5] });
       return;
     }
-    const big = w === 'missile' ? 1.8 : w === 'boat' ? 2.4 : 1;
-    const onWater = !onBoat && y < sea + 1.5;
+    const big = power ?? this.#power(w);
+    const inAir = y > sea + 8;
+    const onWater = !onBoat && !inAir;
     // The fireball
     for (let i = 0; i < 26 * big; i++) {
       const a = Math.random() * Math.PI * 2;
-      const e = Math.random() * 0.9;
+      const e = (Math.random() - (inAir ? 0.5 : 0)) * 0.9;
       const sp = (6 + Math.random() * 14) * big;
       this.glow.emit(x, y + 0.5, z, Math.cos(a) * Math.cos(e) * sp, Math.sin(e) * sp + 3, Math.sin(a) * Math.cos(e) * sp, { size: 2.2 * big, grow: 2.5 * big, life: 0.35 + Math.random() * 0.35, color: [1, 0.55 + Math.random() * 0.25, 0.18], alpha: 1, drag: 3.5 });
     }
     // Black smoke rising
-    for (let i = 0; i < 16 * big; i++) this.smoke.emit(x + (Math.random() - 0.5) * 3, y + 1, z + (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 5, 4 + Math.random() * 6, (Math.random() - 0.5) * 5, { size: 3 * big, grow: 4.5 * big, life: 3 + Math.random() * 2, color: [0.1, 0.09, 0.09], alpha: 0.7, drag: 0.9 });
+    for (let i = 0; i < 16 * big; i++) this.smoke.emit(x + (Math.random() - 0.5) * 3 * big, y + 1, z + (Math.random() - 0.5) * 3 * big, (Math.random() - 0.5) * 5, (inAir ? 1 : 4) + Math.random() * 6, (Math.random() - 0.5) * 5, { size: 3 * big, grow: 4.5 * big, life: 3 + Math.random() * 2, color: [0.1, 0.09, 0.09], alpha: 0.7, drag: 0.9 });
     // A column of white water
     if (onWater || w === 'boat') {
       for (let i = 0; i < 40 * big; i++) this.smoke.emit(x + (Math.random() - 0.5) * 2 * big, sea + 0.2, z + (Math.random() - 0.5) * 2 * big, (Math.random() - 0.5) * 6 * big, (10 + Math.random() * 16) * Math.sqrt(big), (Math.random() - 0.5) * 6 * big, { size: 1.6 * big, grow: 2.5, life: 1.6 + Math.random() * 0.8, color: [0.93, 0.96, 1], alpha: 0.8, gravity: 13, drag: 0.3 });
       this.ring(x, sea, z, 14 * big);
     }
-    // Debris
-    for (let i = 0; i < 10 * big; i++) this.smoke.emit(x, y + 0.5, z, (Math.random() - 0.5) * 30, 8 + Math.random() * 14, (Math.random() - 0.5) * 30, { size: 0.35, life: 1.4, color: [0.12, 0.11, 0.1], alpha: 1, gravity: 18 });
+    // Debris (falling burning wreckage, for an aircraft)
+    for (let i = 0; i < 10 * big; i++) this.smoke.emit(x, y + 0.5, z, (Math.random() - 0.5) * 30, 8 + Math.random() * 14, (Math.random() - 0.5) * 30, { size: 0.35 * big, life: 1.4, color: [0.12, 0.11, 0.1], alpha: 1, gravity: 18 });
     this.flash(x, y + 2, z, 90 * big);
   }
 
-  // Shots in the air: tracers for machine-gun rounds, glowing shells for the cannon (missiles are meshes)
-  shots(list, camera) {
+  // Shots in the air: tracers for gun rounds, glowing shells for the naval guns (sized by calibre). Missiles,
+  // aircraft and bombs are models of their own.
+  shots(list) {
     let t = 0;
     let s = 0;
     for (const p of list) {
-      if (p.w === 'hmg' && t < this.tracers.count + 600) {
+      const W = WEAPONS[p.w];
+      if (W?.slot === 'gun' && t < 600) {
         const sp = Math.hypot(p.vx, p.vy, p.vz) || 1;
         this.v.set(p.vx / sp, p.vy / sp, p.vz / sp);
         this.q.setFromUnitVectors(this.up, this.v);
-        this.s.set(1, 1, 14);
-        this.m4.compose(new THREE.Vector3(p.x - this.v.x * 7, p.y - this.v.y * 7, p.z - this.v.z * 7), this.q, this.s);
-        if (t < 600) this.tracers.setMatrixAt(t++, this.m4);
-      } else if (p.w === 'cannon' && s < 200) {
-        this.m4.makeTranslation(p.x, p.y, p.z);
+        const k = W.tracer ?? 1;
+        this.s.set(k, k, 14 * k);
+        this.m4.compose(this.p.set(p.x - this.v.x * 7, p.y - this.v.y * 7, p.z - this.v.z * 7), this.q, this.s);
+        this.tracers.setMatrixAt(t++, this.m4);
+      } else if (W?.slot === 'cannon' && s < 200) {
+        this.s.setScalar(W.size ?? 1);
+        this.m4.compose(this.p.set(p.x, p.y, p.z), this.q.identity(), this.s);
         this.shells.setMatrixAt(s++, this.m4);
       }
     }
@@ -305,7 +338,6 @@ export class Effects {
     this.shells.count = s;
     this.tracers.instanceMatrix.needsUpdate = true;
     this.shells.instanceMatrix.needsUpdate = true;
-    void camera;
   }
 
   update(dt) {

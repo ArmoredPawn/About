@@ -4,7 +4,8 @@
 
 import * as THREE from 'three';
 import { makeOcean } from './ocean.js';
-import { makeBoat, makePylon, makeStartBanner, makeIsland, makeRock, makeCrate, makeMissile } from './models.js';
+import { makeBoat, makePylon, makeStartBanner, makeIsland, makeRock, makeCrate, makeMissile, makeBomb, makeJet, makeDrone } from './models.js';
+import { WEAPONS } from '../sim/boats.js';
 import { Effects } from './fx.js';
 import { GATE_HALF } from '../sim/track.js';
 import { heightAt } from '../sim/waves.js';
@@ -76,18 +77,25 @@ export class View {
   #boat(b) {
     let v = this.boats.get(b.id);
     if (!v) {
-      const group = makeBoat(b.cls, b.k, b.color);
+      const group = makeBoat(b.cls, b.k, b.color, (b.slot ?? 0) + 1);
       const bubble = new THREE.Mesh(new THREE.SphereGeometry(b.k.length * 0.62, 20, 14), this.shield);
-      bubble.scale.set(0.45, 0.35, 1);
+      bubble.scale.set(Math.max(0.45, (b.k.beam * 1.6) / b.k.length), 0.35, 1);
       bubble.visible = false;
       group.add(bubble);
       const tag = b.id === this.me ? null : nameTag(b.name, b.color);
-      if (tag) { tag.position.y = 7; group.add(tag); }
+      // The name floats above the ship, bigger over bigger ships so it can be read at the same distance
+      if (tag) { tag.position.y = 7 + b.k.beam * 1.1; tag.scale.multiplyScalar(1 + b.k.length / 60); group.add(tag); }
       this.stage.scene.add(group);
       v = { group, bubble, tag };
       this.boats.set(b.id, v);
     }
     return v;
+  }
+
+  #drop(id) {
+    const m = this.missiles.get(id);
+    if (m) this.stage.scene.remove(m);
+    this.missiles.delete(id);
   }
 
   removeBoat(id) {
@@ -107,9 +115,10 @@ export class View {
       } else if (e.t === 'impact') {
         const sea = heightAt(w.waves, e.x, e.z, w.t);
         this.fx.explode(e.x, e.y, e.z, e.w, Boolean(e.boat), sea);
+        if (e.downed) this.#drop(e.downed);
       } else if (e.t === 'sunk') {
         const b = w.boats.get(e.id);
-        if (b) this.fx.explode(b.x, b.y + 1, b.z, 'boat', true, heightAt(w.waves, b.x, b.z, w.t));
+        if (b) this.fx.explode(b.x, b.y + 1, b.z, 'boat', true, heightAt(w.waves, b.x, b.z, w.t), 1.6 + b.k.length / 30);
       } else if (e.t === 'crash' && e.hard > 6) {
         const sea = heightAt(w.waves, e.x, e.z, w.t);
         for (let i = 0; i < 14; i++) this.fx.smoke.emit(e.x, sea + 0.5, e.z, (Math.random() - 0.5) * 8, 5 + Math.random() * 6, (Math.random() - 0.5) * 8, { size: 1.4, grow: 2, life: 1.2, color: [0.95, 0.97, 1], alpha: 0.7, gravity: 12 });
@@ -136,23 +145,38 @@ export class View {
       g.userData.hmg.rotation.y = b.aim?.yaw ?? 0;
       g.userData.cannon.rotation.y = b.aim?.yaw ?? 0;
       g.userData.radar.rotation.y = t * 4;
+      // A rotary gun's barrels spin while it fires
+      if (g.userData.spin) g.userData.spin.rotation.z += (b.input?.gun || b.aim?.air ? 40 : 2) * dt;
       v.bubble.visible = t < b.shieldUntil && Math.floor(t * 8) % 2 === 0;
       this.fx.boat(b, w.waves, t, dt);
     }
     for (const id of [...this.boats.keys()]) if (!w.boats.has(id)) this.removeBoat(id);
-    // Missiles in flight
+    // Missiles, aircraft and bombs in flight: pointing where they are going, aircraft banking into their turns
     const seen = new Set();
     for (const s of w.shots.values()) {
-      if (s.w !== 'missile') continue;
+      const W = WEAPONS[s.w];
+      if (!W || W.slot === 'gun' || W.slot === 'cannon') continue;
       seen.add(s.id);
       let m = this.missiles.get(s.id);
-      if (!m) { m = makeMissile(); this.stage.scene.add(m); this.missiles.set(s.id, m); }
+      if (!m) {
+        m = W.slot === 'missile' ? makeMissile(W.size) : s.w === 'jet' ? makeJet(w.boats.get(s.owner)?.color) : s.w === 'drone' ? makeDrone(w.boats.get(s.owner)?.color) : makeBomb(W.size);
+        m.rotation.order = 'YXZ';
+        m.userData.yaw = Math.atan2(s.vx, s.vz);
+        this.stage.scene.add(m);
+        this.missiles.set(s.id, m);
+      }
+      const yaw = Math.atan2(s.vx, s.vz);
+      const turn = Math.atan2(Math.sin(yaw - m.userData.yaw), Math.cos(yaw - m.userData.yaw)) / Math.max(dt, 0.001);
+      m.userData.yaw = yaw;
+      m.userData.bank = (m.userData.bank ?? 0) + ((W.slot === 'air' ? -turn * 0.5 : 0) - (m.userData.bank ?? 0)) * Math.min(1, dt * 4);
       m.position.set(s.x, s.y, s.z);
-      m.rotation.set(0, Math.atan2(s.vx, s.vz), 0);
-      this.fx.missileTrail(s, dt);
+      m.rotation.set(-Math.atan2(s.vy, Math.hypot(s.vx, s.vz)), yaw, Math.max(-1.1, Math.min(1.1, m.userData.bank)));
+      if (W.slot === 'missile') this.fx.missileTrail(s, dt);
+      else if (s.w === 'jet') { this.fx.contrail(s, dt); if (m.userData.flame) m.userData.flame.scale.setScalar(0.8 + Math.random() * 0.4); }
+      else if (s.w === 'drone' && m.userData.prop) m.userData.prop.rotation.z += dt * 60;
     }
-    for (const [id, m] of this.missiles) if (!seen.has(id)) { this.stage.scene.remove(m); this.missiles.delete(id); }
-    this.fx.shots(w.shots.values(), this.stage.camera);
+    for (const id of [...this.missiles.keys()]) if (!seen.has(id)) this.#drop(id);
+    this.fx.shots(w.shots.values());
     // Crates bob and turn; taken ones are gone until they come back
     for (const [id, m] of this.crates) {
       const p = w.pickups.get(id);

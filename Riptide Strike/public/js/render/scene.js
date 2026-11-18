@@ -9,6 +9,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
+// The sky shader draws the sun's disc thousands of times brighter than anything else. Past 65,504 that overflows
+// the half-precision buffers the bloom and the reflections use, the overflow spreads through the blur, and the
+// whole frame goes black whenever the camera looks toward the sun. Capped here, the sun is still blinding white.
+function capSky(sky) {
+  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( clamp( retColor, 0.0, 60.0 ), 1.0 );');
+  return sky;
+}
+
 export class Stage {
   constructor(canvas, { quality = 'high' } = {}) {
     this.quality = quality;
@@ -23,7 +31,7 @@ export class Stage {
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.3, 40000);
     this.camera.position.set(0, 10, -30);
 
-    this.sky = new Sky();
+    this.sky = capSky(new Sky());
     this.sky.scale.setScalar(30000);
     this.scene.add(this.sky);
     this.sun = new THREE.DirectionalLight(0xffffff, 3);
@@ -48,6 +56,9 @@ export class Stage {
     }
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // If the graphics card resets (a driver hiccup, too many tabs), say so, and start again once it is back
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; this.onLost?.(); });
+    canvas.addEventListener('webglcontextrestored', () => location.reload());
   }
 
   resize() {
@@ -81,7 +92,7 @@ export class Stage {
     // The sky's light, for reflections and ambient light
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const envScene = new THREE.Scene();
-    const skyCopy = new Sky();
+    const skyCopy = capSky(new Sky());
     skyCopy.scale.setScalar(1000);
     for (const k of Object.keys(u)) skyCopy.material.uniforms[k].value = u[k].value?.clone ? u[k].value.clone() : u[k].value;
     envScene.add(skyCopy);
@@ -109,6 +120,7 @@ export class Stage {
   }
 
   render() {
+    if (this.lost) return;
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
   }
 }
@@ -142,15 +154,17 @@ export class ChaseCamera {
     let want;
     let at;
     if (this.mode === 'helm') {
-      want = new THREE.Vector3(b.x - Math.sin(b.h) * L * 0.18, b.y + 3.1 + b.pitch * 2, b.z - Math.cos(b.h) * L * 0.18);
+      // On the bridge: low in a racing cockpit, high up in a warship's
+      const bridge = L > 20 ? b.k.beam * 0.34 + (L > 60 ? 15 : 8) : 3.1;
+      want = new THREE.Vector3(b.x - Math.sin(b.h) * L * (L > 60 ? 0.06 : 0.18), b.y + bridge + b.pitch * 2, b.z - Math.cos(b.h) * L * (L > 60 ? 0.06 : 0.18));
       at = new THREE.Vector3(b.x + fx * 60, b.y + 1.5, b.z + fz * 60);
       this.pos.copy(want);
     } else {
       const far = this.mode === 'high';
-      const back = (far ? 38 : 17) + L * 0.6 + speed * (far ? 0.25 : 0.18);
-      const up = (far ? 22 : 6.5) + speed * 0.05;
+      const back = (far ? 38 : 17) + L * 0.62 + speed * (far ? 0.25 : 0.18);
+      const up = (far ? 22 : 5) + L * (far ? 0.3 : 0.2) + speed * 0.05;
       want = new THREE.Vector3(b.x - fx * back, b.y + up, b.z - fz * back);
-      at = new THREE.Vector3(b.x + fx * 18, b.y + (far ? 0 : 2.4), b.z + fz * 18);
+      at = new THREE.Vector3(b.x + fx * (18 + L * 0.3), b.y + (far ? 0 : 2.4 + L * 0.05), b.z + fz * (18 + L * 0.3));
       this.pos.lerp(want, Math.min(1, dt * 6));
       this.pos.y = Math.max(this.pos.y, b.y + 2.5);
     }
@@ -171,7 +185,8 @@ export class ChaseCamera {
   // Before the start: a slow orbit round our boat on the grid
   orbit(dt, b, t) {
     const a = b.h + Math.PI + Math.sin(t * 0.25) * 0.9;
-    this.pos.set(b.x + Math.sin(a) * 26, b.y + 7, b.z + Math.cos(a) * 26);
+    const r = 22 + b.k.length * 0.9;
+    this.pos.set(b.x + Math.sin(a) * r, b.y + 5 + b.k.length * 0.18, b.z + Math.cos(a) * r);
     this.look.set(b.x, b.y + 2, b.z);
     this.camera.position.copy(this.pos);
     this.camera.lookAt(this.look);

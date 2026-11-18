@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>Riptide Strike</title>
-  <meta name="description" content="A 3-D speedboat combat racer: machine guns, cannons and missiles, room-code multiplayer and computer racers.">
+  <meta name="description" content="A 3-D naval combat racer: fast warships and strike carriers, guns, cruise missiles and air strikes, room-code multiplayer and computer racers.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@600;800&display=swap">
   <link rel="stylesheet" href="css/style.css">
   <script type="importmap">
     { "imports": {
-      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
     } }
   </script>
 </head>
@@ -21,109 +21,125 @@
   <canvas id="view" aria-label="The race"></canvas>
 
   <!-- ============ Menu ============ -->
-  <section id="menu" class="screen">
-    <div class="panel">
+  <section id="menu" class="screen" hidden>
+    <div class="menu-left glass">
       <header class="brand">
-        <h1>RIPTIDE <span>STRIKE</span></h1>
-        <p>Speedboat racing with machine guns, cannons and missiles.</p>
+        <div class="mark">⚓</div>
+        <div><h1>RIPTIDE<span>STRIKE</span></h1><p>Naval combat racing. Fast warships, carriers, missiles and air strikes.</p></div>
       </header>
-      <label class="field"><span>Your name</span><input id="name" maxlength="18" placeholder="Captain" autocomplete="nickname"></label>
-      <div class="field"><span>Your boat</span><div id="boats" class="cards"></div></div>
-      <div class="field"><span>Course</span><div id="tracks" class="cards tracks"></div></div>
-      <div class="row">
-        <label class="field small"><span>Laps</span><select id="laps"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
-        <label class="field small"><span>Computer racers</span><select id="bots"><option>0</option><option>1</option><option>2</option><option selected>3</option><option>5</option><option>7</option></select></label>
-        <label class="field small"><span>Graphics</span><select id="quality"><option value="high">High</option><option value="low">Fast</option></select></label>
-      </div>
-      <div class="actions">
-        <button id="solo" class="btn primary">Race the computer</button>
-        <button id="host" class="btn">Create a room</button>
-      </div>
-      <div class="join">
-        <input id="code" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Room code">
-        <button id="join" class="btn">Join room</button>
+      <label class="field"><span>Captain</span><input id="name" maxlength="18" placeholder="Your name" autocomplete="nickname"></label>
+      <div class="play">
+        <button id="solo" class="btn primary big"><b>Quick race</b><small>Against computer warships</small></button>
+        <button id="host" class="btn big"><b>Create a room</b><small>Up to 8 captains, share a code</small></button>
+        <div class="join">
+          <input id="code" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Room code">
+          <button id="join" class="btn">Join</button>
+        </div>
       </div>
       <p id="menu-msg" class="msg" role="status"></p>
+      <div class="settings">
+        <label><span>Laps</span><select id="laps"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
+        <label><span>Computer ships</span><select id="bots"><option>0</option><option>1</option><option>3</option><option selected>5</option><option>7</option></select></label>
+        <label><span>Graphics</span><select id="quality"><option value="high">High</option><option value="low">Fast</option></select></label>
+      </div>
       <details class="controls">
         <summary>Controls</summary>
-        <table>
-          <tr><td>W / ↑</td><td>Throttle</td><td>S / ↓</td><td>Reverse</td></tr>
-          <tr><td>A D / ← →</td><td>Steer</td><td>C</td><td>Camera</td></tr>
-          <tr><td>Space / left click</td><td>12.7 mm machine gun</td><td>E / right click</td><td>30 mm cannon</td></tr>
-          <tr><td>Q / R</td><td>Missile (hold a target ahead to lock)</td><td>V (hold)</td><td>Look back</td></tr>
-          <tr><td>M</td><td>Sound on or off</td><td>Esc</td><td>Leave the race</td></tr>
-        </table>
-        <p>The guns swing to track a boat ahead of you. Weapons lock until you pass the first gate. Green crates repair the hull; gold ones refill shells and missiles.</p>
+        <div class="keys">
+          <div><kbd>W</kbd><kbd>S</kbd> throttle and reverse</div>
+          <div><kbd>A</kbd><kbd>D</kbd> steer</div>
+          <div><kbd>Space</kbd> / left click: gun</div>
+          <div><kbd>E</kbd> / right click: naval gun</div>
+          <div><kbd>Q</kbd> missile (lock a ship ahead first)</div>
+          <div><kbd>F</kbd> air strike</div>
+          <div><kbd>C</kbd> camera · <kbd>V</kbd> look back</div>
+          <div><kbd>M</kbd> sound · <kbd>Esc</kbd> pause</div>
+        </div>
+        <p>Your guns swing to track a ship ahead, and shoot down incoming missiles and aircraft on their own. Weapons arm at the first gate. Green crates repair the hull; gold ones rearm.</p>
       </details>
+    </div>
+    <div class="menu-right">
+      <div class="glass pick">
+        <h2>Choose your ship</h2>
+        <div id="ships" class="ships"></div>
+      </div>
+      <div class="glass pick">
+        <h2>Course</h2>
+        <div id="tracks" class="tracks"></div>
+      </div>
     </div>
   </section>
 
   <!-- ============ Lobby ============ -->
   <section id="lobby" class="screen" hidden>
-    <div class="panel">
+    <div class="menu-left glass">
       <header class="lobby-head">
-        <div><span class="faint">Room code</span><div id="lobby-code" class="code">----</div></div>
+        <div><span class="label">Room code</span><div id="lobby-code" class="code">----</div></div>
         <button id="copy" class="btn small">Copy invite link</button>
       </header>
       <ul id="players" class="players"></ul>
-      <div id="lobby-host" class="row">
-        <label class="field small"><span>Course</span><select id="l-track"></select></label>
-        <label class="field small"><span>Laps</span><select id="l-laps"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
-        <label class="field small"><span>Computer racers</span><select id="l-bots"><option>0</option><option>1</option><option>2</option><option selected>3</option><option>5</option><option>7</option></select></label>
+      <div id="lobby-host" class="settings">
+        <label><span>Course</span><select id="l-track"></select></label>
+        <label><span>Laps</span><select id="l-laps"><option>1</option><option>2</option><option selected>3</option><option>5</option></select></label>
+        <label><span>Computer ships</span><select id="l-bots"><option>0</option><option>1</option><option>3</option><option selected>5</option><option>7</option></select></label>
       </div>
-      <div class="field"><span>Your boat</span><div id="l-boats" class="cards"></div></div>
       <p id="lobby-msg" class="msg" role="status"></p>
-      <div class="actions">
+      <div class="play row">
         <button id="start" class="btn primary">Start the race</button>
         <button id="leave" class="btn">Leave</button>
       </div>
     </div>
+    <div class="menu-right">
+      <div class="glass pick">
+        <h2>Your ship</h2>
+        <div id="l-ships" class="ships"></div>
+      </div>
+    </div>
   </section>
 
-  <!-- ============ HUD ============ -->
-  <div id="hud" hidden>
-    <div class="hud-tl">
-      <div class="pos" id="h-pos">1<small>/1</small></div>
-      <div class="lap"><span id="h-lap">Lap 1/3</span><span id="h-time" class="mono">0:00.0</span></div>
-      <ol id="h-board" class="board"></ol>
-    </div>
-    <canvas id="minimap" width="220" height="220"></canvas>
-    <ul id="feed" class="feed"></ul>
-    <div class="gatebox"><div id="h-arrow" class="arrow">▲</div><div id="h-gate" class="gate-label"></div></div>
-    <div id="h-warn" class="warn" hidden></div>
-    <div id="h-aim" class="aim"></div>
-    <div id="h-reticle" class="reticle"></div>
-    <div class="hud-bl">
-      <div class="speed"><b id="h-speed">0</b><span>knots</span></div>
-      <div class="bar"><span>Hull</span><div class="track"><div id="h-hull" class="fill"></div></div><b id="h-hull-n" class="mono">100</b></div>
-    </div>
-    <div class="hud-br">
-      <div class="weapon"><span>12.7 mm MG <kbd>Space</kbd></span><div class="track"><div id="h-heat" class="fill hot"></div></div></div>
-      <div class="weapon"><span>30 mm cannon <kbd>E</kbd></span><b id="h-shells" class="mono">0</b></div>
-      <div class="weapon"><span>Missiles <kbd>Q</kbd></span><b id="h-missiles" class="mono">0</b><div class="track thin"><div id="h-reload" class="fill"></div></div></div>
-      <div id="h-lock" class="lock">NO LOCK</div>
-    </div>
-    <div id="countdown" class="countdown" hidden>3</div>
-    <div id="toast" class="toast"></div>
-    <div id="vignette" class="vignette"></div>
-    <div id="touch" class="touch" hidden>
-      <div class="pad left"><button data-k="left">◀</button><button data-k="right">▶</button></div>
-      <div class="pad right"><button data-k="back">▼</button><button data-k="gas">▲</button></div>
-      <div class="pad fire"><button data-k="gun">MG</button><button data-k="cannon">30</button><button data-k="missile">🚀</button></div>
-    </div>
+  <!-- ============ In the race ============ -->
+  <div id="hud" hidden></div>
+  <div id="touch" class="touch" hidden>
+    <div class="pad steer"><button data-k="left" aria-label="Steer left">◀</button><button data-k="right" aria-label="Steer right">▶</button></div>
+    <div class="pad gas"><button data-k="gas" aria-label="Throttle">▲</button><button data-k="back" aria-label="Reverse">▼</button></div>
+    <div class="pad fire"><button data-k="gun">GUN</button><button data-k="cannon">NAV</button><button data-k="missile">MSL</button><button data-k="air">AIR</button><button data-k="pause" aria-label="Pause">II</button></div>
   </div>
 
-  <!-- ============ Results ============ -->
-  <section id="results" class="screen overlay" hidden>
-    <div class="panel">
-      <h2>Results</h2>
-      <table class="results"><thead><tr><th></th><th>Boat</th><th>Time</th><th>Sank</th><th>Sunk</th></tr></thead><tbody id="results-rows"></tbody></table>
-      <p id="results-msg" class="msg"></p>
-      <div class="actions"><button id="results-again" class="btn primary">Race again</button><button id="results-menu" class="btn">Menu</button></div>
+  <section id="pause" class="screen overlay" hidden>
+    <div class="glass dialog">
+      <h2>Paused</h2>
+      <p class="faint" id="pause-note">The race carries on for everyone else.</p>
+      <div class="play">
+        <button id="resume" class="btn primary">Resume</button>
+        <button id="pause-cam" class="btn">Camera: chase</button>
+        <button id="pause-sound" class="btn">Sound: on</button>
+        <button id="quit" class="btn danger">Leave the race</button>
+      </div>
     </div>
   </section>
 
-  <div id="loading" class="loading">Loading the sea…</div>
+  <section id="results" class="screen overlay" hidden>
+    <div class="glass dialog wide">
+      <h2>Results</h2>
+      <div id="podium" class="podium"></div>
+      <table class="results"><thead><tr><th></th><th>Captain</th><th>Ship</th><th>Time</th><th>Sank</th><th>Sunk</th></tr></thead><tbody id="results-rows"></tbody></table>
+      <p id="results-msg" class="msg"></p>
+      <div class="play row"><button id="results-again" class="btn primary">Race again</button><button id="results-menu" class="btn">Menu</button></div>
+    </div>
+  </section>
+
+  <div id="error" class="error" hidden role="alert">
+    <b>Something went wrong</b>
+    <span id="error-text"></span>
+    <div class="row"><button id="error-reload" class="btn small">Reload</button><button id="error-close" class="btn small">Dismiss</button></div>
+  </div>
+  <div id="loading" class="loading"><div class="spinner"></div><span>Loading the sea…</span></div>
+  <script>
+    // Anything that breaks says so here, instead of leaving a blank screen
+    window.addEventListener('error', (e) => { const box = document.getElementById('error'); document.getElementById('error-text').textContent = e.message || 'A script failed to load.'; box.hidden = false; });
+    window.addEventListener('unhandledrejection', (e) => { const box = document.getElementById('error'); document.getElementById('error-text').textContent = String(e.reason?.message ?? e.reason); box.hidden = false; });
+    document.getElementById('error-reload').onclick = () => location.reload();
+    document.getElementById('error-close').onclick = () => { document.getElementById('error').hidden = true; };
+  </script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

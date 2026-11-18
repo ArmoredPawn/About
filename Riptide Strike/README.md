@@ -1,17 +1,20 @@
 # Riptide Strike
 
-A 3-D speedboat combat racer for the browser. Race offshore powerboats round a course of gates on the open sea
-while you fight it out with machine guns, cannons and missiles. Play against computer racers, or with up to seven
-friends by sharing a four-letter room code.
+A 3-D naval combat racer for the browser. Race fast warships round a course of gates on the open sea, from a 16 m
+interceptor to a 72 m strike carrier, while you fight it out with guns, naval guns, missiles and air strikes. Play
+against computer ships, or with up to seven friends by sharing a four-letter room code.
 
 - **The sea:** rolling Gerstner swell that the boats really ride (the water you see and the water they float on are
   the same waves), a physically based surface that reflects a scattered-light sky, foam on the crests, ripples, and
   foaming wakes, bow spray and haze toward the horizon.
-- **Boats:** a 12 m Interceptor (fastest, thinnest armour), a 14 m Gunboat (balanced) and a 16 m Armoured Patrol
-  boat (slow, tough, most ammunition), each with a deep-V hull, cockpit, twin outboards and its weapons on deck.
-- **Weapons:** a 12.7 mm heavy machine gun (tracers, overheats on long bursts), a 30 mm autocannon (explosive shells
-  on a ballistic arc, splash damage) and fire-and-forget anti-ship missiles (hold a target ahead to lock on; they
-  skim the water and turn onto it). The guns swing to track a boat ahead of you. Weapons arm at the first gate.
+- **Ships:** the Interceptor (16 m racing powerboat, the fastest), the Corvette (30 m stealth warship), the Destroyer
+  (48 m, a 76 mm gun and launch cells for cruise missiles) and the Strike Carrier (72 m, a flight deck of strike jets).
+  Bigger ships are tougher and hit harder, but are slower to get going and to turn, and ride the swell more steadily.
+- **Weapons, four per ship:** a gun (12.7 mm machine gun, or a 30 mm rotary close-in gun that also shoots down
+  incoming missiles and aircraft on its own); a naval gun (30, 57 or 76 mm explosive shells on a ballistic arc);
+  missiles (anti-ship, or heavy cruise missiles that climb out of their cells; hold a ship ahead to lock on); and an
+  air strike (a drone, or from the carrier a jet, that flies out to the target, drops its bombs and comes home).
+  Weapons arm at the first gate.
 - **Racing:** pass every gate in order (the next one glows); laps; standings; sink a boat and it is back three
   seconds later at its last gate, shielded for a moment. Green crates repair the hull, gold ones refill shells and
   missiles. Rocks and islands hurt.
@@ -27,9 +30,10 @@ friends by sharing a four-letter room code.
 |---|---|---|---|
 | W / ↑ | Throttle | S / ↓ | Reverse |
 | A D / ← → | Steer | C | Camera (chase, high, helm) |
-| Space / left click | Machine gun | E / right click | Cannon |
-| Q / R | Missile | V (hold) | Look back |
-| M | Sound on or off | Esc | Leave the race |
+| Space / left click | Gun | E / right click | Naval gun |
+| Q / R | Missile | F | Air strike |
+| V (hold) | Look back | M | Sound on or off |
+| Esc | Pause | | |
 
 Phones and tablets get on-screen buttons.
 
@@ -50,6 +54,9 @@ Publish.
 
 Direct browser-to-browser connections work on most home and mobile networks. Some school and office networks
 block them; the game then says so. (A TURN relay server would get round that, but isn't included.)
+
+three.js (0.170, MIT licence) is bundled in `public/vendor/three/`, so the game doesn't depend on a CDN that a
+network might block. Anything that goes wrong in the page shows an error box instead of a blank screen.
 
 ## Running it on this computer
 

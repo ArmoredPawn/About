@@ -1,6 +1,9 @@
-// Sound, made on the fly with the Web Audio API (no sound files): our engine's roar and the water rushing past,
-// the machine gun's hammer, the cannon's thump, a missile's launch, explosions near and far, the lock tone, the
-// countdown and pickups. Sounds of other boats fade with distance.
+// Sound, made on the fly with the Web Audio API (no sound files): our engines and the water rushing past, the
+// guns' hammer (a rotary cannon's buzz), the naval guns' thump (deeper for bigger calibres), missile launches, jets
+// taking off, explosions near and far (bigger for bigger warheads), the lock tone, the incoming-missile warning,
+// the countdown and pickups. Other ships' sounds fade with distance.
+
+import { WEAPONS } from './sim/boats.js';
 
 export class Sound {
   constructor() {
@@ -104,15 +107,23 @@ export class Sound {
   }
 
   shot(w, dist) {
+    const W = WEAPONS[w];
+    const k = W?.size ?? 1;
     if (w === 'hmg') { this.#burst({ freq: 1800, q: 0.8, gain: 0.22, decay: 0.07, dist }); this.#burst({ freq: 180, type: 'lowpass', gain: 0.25, decay: 0.09, dist }); }
-    else if (w === 'cannon') { this.#burst({ freq: 260, type: 'lowpass', gain: 0.7, decay: 0.35, dist, pitch: 0.4 }); this.#burst({ freq: 2500, gain: 0.15, decay: 0.08, dist }); }
-    else { this.#burst({ freq: 700, q: 0.5, gain: 0.45, decay: 1.4, dist, pitch: 2.4 }); this.#burst({ freq: 120, type: 'lowpass', gain: 0.4, decay: 0.5, dist }); }
+    else if (w === 'ciws') { this.#burst({ freq: 2600, q: 1.2, gain: 0.14, decay: 0.045, dist }); this.#burst({ freq: 300, type: 'lowpass', gain: 0.14, decay: 0.05, dist }); }
+    else if (W?.slot === 'cannon') { this.#burst({ freq: 260 / k, type: 'lowpass', gain: 0.6 + 0.2 * k, decay: 0.3 + 0.15 * k, dist, pitch: 0.4 }); this.#burst({ freq: 2500, gain: 0.15, decay: 0.08, dist }); }
+    else if (W?.slot === 'missile') { this.#burst({ freq: 700 / Math.sqrt(k), q: 0.5, gain: 0.45, decay: 1.4 + 0.3 * k, dist, pitch: 2.4 }); this.#burst({ freq: 120, type: 'lowpass', gain: 0.4, decay: 0.5, dist }); }
+    else if (W?.slot === 'air') { this.#burst({ freq: w === 'jet' ? 500 : 900, q: 0.4, gain: 0.35, decay: 2.2, dist, pitch: 3 }); }
+    else if (W) this.#burst({ freq: 1500, q: 2, gain: 0.08, decay: 0.8, dist, pitch: 0.5 }); // a bomb falling
   }
 
-  explosion(big, dist) {
-    this.#burst({ freq: 140 * (big ? 0.7 : 1), type: 'lowpass', gain: big ? 1 : 0.6, decay: big ? 1.8 : 0.9, dist, pitch: 0.35 });
-    this.#burst({ freq: 900, gain: 0.25, decay: 0.4, dist });
+  explosion(w, dist) {
+    const p = { c30: 0.8, c57: 1, c76: 1.2, asm: 1.4, cruise: 2, bomb: 1.6, heavybomb: 2, drone: 1, jet: 1.3, boat: 2.2 }[w] ?? 1;
+    this.#burst({ freq: 150 / Math.sqrt(p), type: 'lowpass', gain: Math.min(1, 0.45 + 0.3 * p), decay: 0.7 + 0.6 * p, dist, pitch: 0.35 });
+    this.#burst({ freq: 900, gain: 0.2 + 0.05 * p, decay: 0.4, dist });
   }
+
+  warning() { this.#tone(1560, 0.09, 0.1, 'square'); }
 
   splash(dist) { this.#burst({ freq: 1200, q: 0.4, gain: 0.12, decay: 0.25, dist }); }
   hit() { this.#burst({ freq: 3200, q: 3, gain: 0.18, decay: 0.05 }); }

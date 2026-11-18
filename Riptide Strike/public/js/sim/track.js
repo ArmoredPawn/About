@@ -2,8 +2,9 @@
 // and rocks around it, the floating supply crates, and the starting grid. Everything is built from a seed, so every
 // player in a room gets the same course.
 
-export const GATE_HALF = 34; // half the width of a gate, in metres: pass within this of its centre
-export const LANE = 26; // how far either side of the racing line counts as on the course
+// Wide enough for a 72 m carrier and a pack of smaller ships beside it
+export const GATE_HALF = 60; // half the width of a gate, in metres: pass within this of its centre
+export const LANE = 50; // how far either side of the racing line counts as on the course
 
 export const TRACKS = {
   atoll: {
@@ -112,21 +113,21 @@ export function buildCourse(id) {
     const z = box.z0 + r() * (box.z1 - box.z0);
     const rad = 28 + r() ** 1.6 * 140;
     const gap = clearOf(x, z, rad);
-    if (gap < 70 || (islands.length < 10 && gap > 260)) continue;
+    if (gap < 120 || (islands.length < 10 && gap > 300)) continue;
     if (islands.some((o) => Math.hypot(o.x - x, o.z - z) < o.r + rad + 40)) continue;
-    if (gates.some((g) => Math.hypot(g.x - x, g.z - z) < rad + 110)) continue;
+    if (gates.some((g) => Math.hypot(g.x - x, g.z - z) < rad + 160)) continue;
     islands.push({ x, z, r: rad, h: rad * (0.25 + r() * 0.5) * def.island.height * 2, seed: Math.floor(r() * 1e9) });
   }
-  // Rocks: a few out on the course, never in a gate, always with room to pass
+  // Rocks: a few toward the edges of the course, never near a gate, always with room to pass
   const rocks = [];
   for (let tries = 0; tries < 400 && rocks.length < def.rocks; tries++) {
     const p = line.pts[Math.floor(r() * line.pts.length)];
-    if (gates.some((g) => Math.hypot(g.x - p.x, g.z - p.z) < 90)) continue;
-    const off = (r() < 0.5 ? -1 : 1) * (6 + r() * 16);
+    if (gates.some((g) => Math.hypot(g.x - p.x, g.z - p.z) < 150)) continue;
+    const off = (r() < 0.5 ? -1 : 1) * (32 + r() * 16);
     const x = p.x + p.dz * off;
     const z = p.z - p.dx * off;
     const rad = 3.5 + r() * 4;
-    if (rocks.some((o) => Math.hypot(o.x - x, o.z - z) < 70)) continue;
+    if (rocks.some((o) => Math.hypot(o.x - x, o.z - z) < 120)) continue;
     rocks.push({ x, z, r: rad, h: 2 + r() * 5, seed: Math.floor(r() * 1e9) });
   }
   // Supply crates: repairs and ammunition, spread round the loop, either side of the line
@@ -135,21 +136,21 @@ export function buildCourse(id) {
   for (let k = 0; k < n; k++) {
     const p = line.pts[Math.floor(((k + 0.5) / n) * line.pts.length)];
     for (const side of [-1, 1]) {
-      const off = side * 14;
+      const off = side * 24;
       pickups.push({ id: `pk${pickups.length}`, kind: (k + (side > 0 ? 1 : 0)) % 2 ? 'ammo' : 'repair', x: p.x + p.dz * off, z: p.z - p.dx * off });
     }
   }
   return { id, def, gates, line, islands, rocks, pickups, box };
 }
 
-// The starting grid: two abreast, just past the start gate, front row first
+// The starting grid: two abreast, just past the start gate, front row first, with room for the longest ship
 export function gridSlot(course, slot) {
   const pts = course.line.pts;
   const row = Math.floor(slot / 2);
-  const back = 25 + (7 - row) * 22;
+  const back = 50 + (3 - row) * 86;
   let i = 0;
   while (i < pts.length - 1 && pts[i].s < back) i++;
   const p = pts[i];
-  const off = (slot % 2 ? 1 : -1) * 11;
+  const off = (slot % 2 ? 1 : -1) * 24;
   return { x: p.x + p.dz * off, z: p.z - p.dx * off, h: Math.atan2(p.dx, p.dz) };
 }

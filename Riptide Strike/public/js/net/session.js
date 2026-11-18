@@ -125,11 +125,11 @@ export class HostSession extends Emitter {
   start(botNames) {
     const humans = [...this.players.values()];
     const roster = humans.map((p, i) => ({ id: p.id, name: p.name, cls: p.cls, color: p.color, slot: i, bot: false }));
-    const classes = ['interceptor', 'gunboat', 'patrol'];
+    const classes = ['interceptor', 'corvette', 'destroyer', 'carrier'];
     const used = new Set(roster.map((r) => r.color));
     const free = BOAT_COLORS.filter((c) => !used.has(c));
     for (let i = 0; i < Math.min(this.settings.bots, MAX_PLAYERS - humans.length); i++) {
-      roster.push({ id: `bot${i}`, name: botNames[i % botNames.length], cls: classes[i % 3], color: free[i % free.length] ?? '#cccccc', slot: roster.length, bot: true });
+      roster.push({ id: `bot${i}`, name: botNames[i % botNames.length], cls: classes[Math.floor(Math.random() * classes.length)], color: free[i % free.length] ?? '#cccccc', slot: roster.length, bot: true });
     }
     // Shuffle the grid
     const slots = roster.map((_, i) => i).sort(() => Math.random() - 0.5);

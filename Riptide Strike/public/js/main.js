@@ -1,8 +1,9 @@
 // The game: menus, the lobby, and the race loop that ties the simulation, the 3-D view, the HUD, the sound and the
-// network together. Behind the menu, computer racers race the course for show.
+// network together. Behind the menu, computer warships race the course for show, with the camera on the ship
+// you have picked.
 
 import { World } from './sim/world.js';
-import { BOATS, BOAT_COLORS } from './sim/boats.js';
+import { BOATS, BOAT_COLORS, WEAPONS } from './sim/boats.js';
 import { TRACKS } from './sim/track.js';
 import { botBrain, botInput, BOT_NAMES } from './sim/ai.js';
 import { Stage, ChaseCamera } from './render/scene.js';
@@ -11,65 +12,105 @@ import { Hud } from './hud.js';
 import { Sound } from './audio.js';
 import { HostSession, ClientSession } from './net/session.js';
 import { usingLocal } from './net/signal.js';
+import { SHIPS } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const STEP = 1 / 60;
 const SEND = 1 / 15; // positions sent fifteen times a second
+const CLASSES = Object.keys(BOATS);
 const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
+const randomClass = () => CLASSES[Math.floor(Math.random() * CLASSES.length)];
 
 const app = {
-  cls: store.get('rs.cls', 'gunboat'),
-  track: store.get('rs.track', 'atoll'),
+  cls: BOATS[store.get('rs.cls', 'corvette')] ? store.get('rs.cls', 'corvette') : 'corvette',
+  track: TRACKS[store.get('rs.track', 'atoll')] ? store.get('rs.track', 'atoll') : 'atoll',
   session: null,
   race: null,
   stage: null,
   sound: new Sound(),
+  paused: false,
 };
+
+function showError(text) {
+  $('error-text').textContent = text;
+  $('error').hidden = false;
+}
 
 /* ---------- Input ---------- */
 
 const keys = new Set();
 const mouse = { gun: false, cannon: false };
 const touch = new Set();
-let missilePress = false;
+const press = { missile: false, air: false };
 addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   app.sound.start();
   const k = e.key.toLowerCase();
   if (k === ' ' || k.startsWith('arrow')) e.preventDefault();
-  if ((k === 'q' || k === 'r') && !e.repeat) missilePress = true;
-  if (k === 'c' && !e.repeat && app.race?.cam) { const m = ['chase', 'high', 'helm']; app.race.cam.mode = m[(m.indexOf(app.race.cam.mode) + 1) % m.length]; }
-  if (k === 'm' && !e.repeat) app.sound.setOn(!app.sound.on);
-  if (k === 'escape' && app.race && !app.race.attract) leaveRace();
+  if ((k === 'q' || k === 'r') && !e.repeat) press.missile = true;
+  if (k === 'f' && !e.repeat) press.air = true;
+  if (k === 'c' && !e.repeat) cycleCamera();
+  if (k === 'm' && !e.repeat) toggleSound();
+  if (k === 'escape' && !e.repeat && app.race && !app.race.attract) togglePause();
   keys.add(k);
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { keys.clear(); mouse.gun = mouse.cannon = false; });
-$('view').addEventListener('pointerdown', (e) => { app.sound.start(); if (e.button === 0) mouse.gun = true; if (e.button === 2) mouse.cannon = true; if (e.button === 1) missilePress = true; });
+$('view').addEventListener('pointerdown', (e) => { app.sound.start(); if (e.button === 0) mouse.gun = true; if (e.button === 2) mouse.cannon = true; if (e.button === 1) press.missile = true; });
 addEventListener('pointerup', (e) => { if (e.button === 0) mouse.gun = false; if (e.button === 2) mouse.cannon = false; });
 $('view').addEventListener('contextmenu', (e) => e.preventDefault());
 for (const b of document.querySelectorAll('#touch button')) {
   const k = b.dataset.k;
-  b.addEventListener('pointerdown', (e) => { e.preventDefault(); app.sound.start(); touch.add(k); if (k === 'missile') missilePress = true; });
+  b.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    app.sound.start();
+    if (k === 'pause') { togglePause(); return; }
+    touch.add(k);
+    if (k === 'missile') press.missile = true;
+    if (k === 'air') press.air = true;
+  });
   for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => touch.delete(k));
 }
 const isTouch = matchMedia('(pointer: coarse)').matches;
 
 function readInput() {
   const has = (...k) => k.some((x) => keys.has(x));
-  // Heading increases to the left as seen from behind the boat, so left steers +1
+  // Heading increases to the left as seen from behind the ship, so left steers +1
   const steer = (has('a', 'arrowleft') || touch.has('left') ? 1 : 0) - (has('d', 'arrowright') || touch.has('right') ? 1 : 0);
   const throttle = (has('w', 'arrowup') || touch.has('gas') ? 1 : 0) - (has('s', 'arrowdown') || touch.has('back') ? 1 : 0);
-  const out = { throttle, steer, gun: has(' ') || mouse.gun || touch.has('gun'), cannon: has('e') || mouse.cannon || touch.has('cannon'), missile: missilePress };
-  missilePress = false;
+  const out = { throttle, steer, gun: has(' ') || mouse.gun || touch.has('gun'), cannon: has('e') || mouse.cannon || touch.has('cannon'), missile: press.missile, air: press.air };
+  press.missile = false;
+  press.air = false;
   return out;
+}
+
+const CAMS = ['chase', 'high', 'helm'];
+const CAM_NAMES = { chase: 'chase', high: 'high', helm: 'bridge' };
+function cycleCamera() {
+  if (!app.race?.cam) return;
+  const c = app.race.cam;
+  c.mode = CAMS[(CAMS.indexOf(c.mode) + 1) % CAMS.length];
+  store.set('rs.cam', c.mode);
+  $('pause-cam').textContent = `Camera: ${CAM_NAMES[c.mode]}`;
+}
+function toggleSound() {
+  app.sound.setOn(!app.sound.on);
+  $('pause-sound').textContent = `Sound: ${app.sound.on ? 'on' : 'off'}`;
+}
+function togglePause(force) {
+  if (!app.race || app.race.attract || app.race.world.phase === 'over') return;
+  app.paused = force ?? !app.paused;
+  $('pause').hidden = !app.paused;
+  $('pause-note').textContent = app.race.session ? 'The race carries on for everyone else while you are here.' : 'The race is paused.';
+  keys.clear();
+  mouse.gun = mouse.cannon = false;
 }
 
 /* ---------- A race ---------- */
 
 class Race {
-  // roster: [{ id, name, cls, color, slot, bot }]; me: our boat's id (or, watching, the boat the camera follows)
+  // roster: [{ id, name, cls, color, slot, bot }]; me: our ship's id (or, watching, the ship the camera follows)
   constructor({ track, laps, seed, roster, me, session = null, host = true, attract = false }) {
     this.attract = attract;
     this.me = me;
@@ -86,10 +127,13 @@ class Race {
     stage.clear();
     this.view = new View(stage, this.world, me);
     this.cam = new ChaseCamera(stage.camera);
+    this.cam.mode = store.get('rs.cam', 'chase');
+    $('pause-cam').textContent = `Camera: ${CAM_NAMES[this.cam.mode] ?? 'chase'}`;
     this.hud = attract ? null : new Hud(this.world, me, stage.camera);
     this.acc = 0;
     this.sendT = 0;
     this.lastLock = 0;
+    this.lastWarn = 0;
     this.overAt = null;
     this.firstFinish = null;
     this.alive = true;
@@ -120,7 +164,7 @@ class Race {
     s.on('over', () => { if (this.alive) this.finish(); });
   }
 
-  // A boat of ours (or one of our computer racers) did something the others need to see
+  // A ship of ours (or one of our computer ships) did something the others need to see
   forward(e) {
     if (!this.session || !e.net) return;
     const w = this.world;
@@ -136,18 +180,29 @@ class Race {
 
   frame(t) {
     if (!this.alive) return;
+    try { this.tick(t); } catch (err) {
+      // Keep going: one bad frame shouldn't end the race. Say what happened, once.
+      if (!this.errShown) { this.errShown = true; showError(`${err.message} (the race carries on)`); console.error(err); }
+    }
+    if (this.alive) requestAnimationFrame((x) => this.frame(x));
+  }
+
+  tick(t) {
     const dt = Math.min(0.05, (t - this.prev) / 1000);
     this.prev = t;
     const w = this.world;
     const me = w.boats.get(this.me);
-    if (me && !this.attract) w.setInput(this.me, readInput());
-    this.acc += dt;
-    while (this.acc >= STEP) {
-      for (const [id, brain] of this.brains) { const b = w.boats.get(id); if (b) w.setInput(id, botInput(w, b, brain, STEP)); }
-      w.step(STEP, performance.now() / 1000);
-      this.acc -= STEP;
+    const frozen = app.paused && !this.session && !this.attract;
+    if (me && !this.attract) w.setInput(this.me, app.paused ? { throttle: 0, steer: 0, gun: false, cannon: false, missile: false, air: false } : readInput());
+    if (!frozen) {
+      this.acc += dt;
+      while (this.acc >= STEP) {
+        for (const [id, brain] of this.brains) { const b = w.boats.get(id); if (b) w.setInput(id, botInput(w, b, brain, STEP)); }
+        w.step(STEP, performance.now() / 1000);
+        this.acc -= STEP;
+      }
     }
-    // Send our boats' positions
+    // Send our ships' positions
     this.sendT += dt;
     if (this.session && this.sendT >= SEND) {
       this.sendT = 0;
@@ -163,33 +218,36 @@ class Race {
     // The camera, the scene, the HUD
     if (me) {
       if (this.attract || w.phase === 'countdown') this.cam.orbit(dt, me, w.t);
-      else this.cam.update(dt, me, keys.has('v'));
+      else this.cam.update(frozen ? 0 : dt, me, keys.has('v'));
     }
-    this.view.update(dt);
+    this.view.update(frozen ? 0 : dt);
     app.stage.render();
     this.hud?.update(dt);
     if (me && !this.attract) {
-      app.sound.engine(me.throttle, me.speed, !me.dead);
-      // The lock tone
+      app.sound.engine(app.paused ? 0 : me.throttle, frozen ? 0 : me.speed, !me.dead && !frozen);
+      // The lock tone, and the warning tone for a missile coming for us
       if (me.lock.target && !me.lock.locked && t - this.lastLock > 220) { this.lastLock = t; app.sound.lock(false); }
       if (me.lock.locked && !this.wasLocked) app.sound.lock(true);
       this.wasLocked = me.lock.locked;
+      if (this.hud?.inbound && t - this.lastWarn > 330) { this.lastWarn = t; app.sound.warning(); }
       if (w.phase === 'countdown' && Math.ceil(w.countdown) < this.lastBeep) { this.lastBeep = Math.ceil(w.countdown); if (this.lastBeep <= 3) app.sound.beep(false); }
     }
     this.checkEnd(me);
-    if (this.attract && me?.finished) { startAttract(); return; }
-    requestAnimationFrame((x) => this.frame(x));
+    if (this.attract && me?.finished) startAttract();
   }
 
   noise(e, me) {
+    if (this.attract) return;
     const s = app.sound;
     const far = (x, z) => (me ? Math.hypot(x - me.x, z - me.z) : 300);
-    if (this.attract) return;
+    const slot = WEAPONS[e.w]?.slot;
     if (e.t === 'fire') s.shot(e.w, far(e.x, e.z));
-    else if (e.t === 'impact') { if (e.w === 'hmg') { if (e.boat === this.me) s.hit(); else if (!e.boat) s.splash(far(e.x, e.z)); } else s.explosion(e.w === 'missile', far(e.x, e.z)); }
-    else if (e.t === 'sunk') { const b = this.world.boats.get(e.id); s.explosion(true, b ? far(b.x, b.z) : 200); }
-    else if (e.t === 'damaged' && e.id === this.me) { this.cam.shake(e.amount > 10 ? 1.6 : 0.5); s.hit(); }
-    else if (e.t === 'impact' || e.t === 'crash') { if (e.id === this.me) this.cam.shake(0.8); }
+    else if (e.t === 'impact') {
+      if (slot === 'gun' && !e.downed) { if (e.boat === this.me) s.hit(); else if (!e.boat) s.splash(far(e.x, e.z)); } else s.explosion(e.w, far(e.x, e.z));
+      if (me && e.w !== 'hmg' && e.w !== 'ciws' && far(e.x, e.z) < 80) this.cam.shake(1.2);
+    } else if (e.t === 'sunk') { const b = this.world.boats.get(e.id); s.explosion('boat', b ? far(b.x, b.z) : 200); }
+    else if (e.t === 'damaged' && e.id === this.me) { this.cam.shake(e.amount > 20 ? 2 : e.amount > 8 ? 1.1 : 0.4); s.hit(); }
+    else if (e.t === 'crash' && e.id === this.me) this.cam.shake(0.9);
     else if (e.t === 'go') s.beep(true);
     else if (e.t === 'pickup' && e.boat === this.me) s.pickup();
   }
@@ -216,14 +274,16 @@ class Race {
     const w = this.world;
     if (w.phase === 'over') return;
     w.phase = 'over';
-    const list = w.standings().map((b) => ({ id: b.id, name: b.name, color: b.color, finished: b.finished, finishTime: b.finishTime, kills: b.kills, deaths: b.deaths }));
+    togglePause(false);
+    const list = w.standings().map((b) => ({ id: b.id, name: b.name, cls: b.cls, color: b.color, finished: b.finished, finishTime: b.finishTime, kills: b.kills, deaths: b.deaths }));
     const inRoom = Boolean(this.session);
-    $('results-again').textContent = inRoom ? (this.host ? 'Back to the lobby' : 'Waiting for the host…') : 'Race again';
-    $('results-again').disabled = inRoom && !this.host;
-    $('results-msg').textContent = inRoom && !this.host ? 'The host will take everyone back to the lobby.' : '';
-    this.hud.results(list, () => {
-      if (!inRoom) { const opts = this.opts; leaveRace(false); startSolo(opts); }
-      else if (this.host) { leaveRace(false); this.session.backToLobby(); showLobby(); }
+    this.hud.results(list, {
+      againText: inRoom ? (this.host ? 'Back to the lobby' : 'Waiting for the host…') : 'Race again',
+      again: inRoom && !this.host ? null : () => {
+        if (!inRoom) { const opts = this.opts; leaveRace(false); startSolo(opts); } else { leaveRace(false); this.session.backToLobby(); showLobby(); }
+      },
+      menu: () => leaveRace(true),
+      note: inRoom && !this.host ? 'The host will take everyone back to the lobby.' : '',
     });
   }
 
@@ -235,6 +295,8 @@ class Race {
 }
 
 function leaveRace(toMenu = true) {
+  app.paused = false;
+  $('pause').hidden = true;
   app.race?.stop();
   app.race = null;
   if (toMenu) {
@@ -257,19 +319,41 @@ function showMenu() {
   startAttract();
 }
 
-// Behind the menu: computer racers on the chosen course
+// Behind the menu: computer warships on the chosen course, the camera on one of the ship you have picked
 function startAttract() {
   app.race?.stop();
-  const roster = Array.from({ length: 6 }, (_, i) => ({ id: `bot${i}`, name: BOT_NAMES[i], cls: ['interceptor', 'gunboat', 'patrol'][i % 3], color: BOAT_COLORS[i], slot: i, bot: true }));
+  const roster = Array.from({ length: 6 }, (_, i) => ({ id: `bot${i}`, name: BOT_NAMES[i], cls: i === 0 ? app.cls : CLASSES[i % CLASSES.length], color: BOAT_COLORS[i], slot: i, bot: true }));
   app.race = new Race({ track: app.track, laps: 3, seed: 1, roster, me: 'bot0', attract: true });
 }
 
-function cards(el, items, selected, onPick) {
-  el.innerHTML = items.map(([k, title, sub]) => `<button class="card${k === selected ? ' on' : ''}" data-k="${k}"><b>${esc(title)}</b><span>${sub}</span></button>`).join('');
-  for (const b of el.querySelectorAll('.card')) b.onclick = () => { for (const o of el.querySelectorAll('.card')) o.classList.toggle('on', o === b); onPick(b.dataset.k); };
+function shipCards(el, selected, onPick) {
+  el.innerHTML = Object.entries(BOATS).map(([k, b]) => `
+    <button class="ship${k === selected ? ' on' : ''}" data-k="${k}">
+      ${SHIPS[k]}
+      <span class="role">${esc(b.role)} · ${b.length} m</span>
+      <b>${esc(b.name)}</b>
+      <span class="note">${esc(b.note)}</span>
+      ${[['Speed', b.stats.speed], ['Armour', b.stats.armour], ['Guns', b.stats.guns], ['Air power', b.stats.air]].map(([n, v]) => `<span class="stat">${n}<i style="--v:${v * 10}%"></i></span>`).join('')}
+      <span class="loadout">${['gun', 'cannon', 'missile', 'air'].map((s) => esc(WEAPONS[b.loadout[s]].name)).join(' · ')}</span>
+    </button>`).join('');
+  for (const c of el.querySelectorAll('.ship')) c.onclick = () => { for (const o of el.querySelectorAll('.ship')) o.classList.toggle('on', o === c); onPick(c.dataset.k); };
 }
-const boatCards = () => Object.entries(BOATS).map(([k, b]) => [k, b.name, `${esc(b.note)}<em>Hull ${b.hp} · ${Math.round(b.top * 1.944)} knots · ${b.missiles} missiles</em>`]);
-const trackCards = () => Object.entries(TRACKS).map(([k, t]) => [k, t.name, esc(t.blurb)]);
+
+function trackCards(el, selected, onPick) {
+  el.innerHTML = Object.entries(TRACKS).map(([k, t]) => `
+    <button class="track${k === selected ? ' on' : ''}" data-k="${k}">
+      <div class="sky" style="background: linear-gradient(180deg, ${t.fog} 0%, ${t.fog} 45%, ${t.water.shallow} 46%, ${t.water.deep} 100%)"></div>
+      <div class="txt"><b>${esc(t.name)}</b><span>${esc(t.blurb)}</span></div>
+    </button>`).join('');
+  for (const c of el.querySelectorAll('.track')) c.onclick = () => { for (const o of el.querySelectorAll('.track')) o.classList.toggle('on', o === c); onPick(c.dataset.k); };
+}
+
+function pickShip(k) {
+  app.cls = k;
+  store.set('rs.cls', k);
+  app.session?.setClass?.(k);
+  if (app.race?.attract) startAttract();
+}
 
 function name() {
   const n = $('name').value.trim() || 'Captain';
@@ -284,7 +368,7 @@ function startSolo(opts) {
   app.session = null;
   const o = opts ?? { track: app.track, laps: Number($('laps').value), bots: Number($('bots').value) };
   const roster = [{ id: 'me', name: name(), cls: app.cls, color: BOAT_COLORS[0], slot: 0, bot: false }];
-  for (let i = 0; i < o.bots; i++) roster.push({ id: `bot${i}`, name: BOT_NAMES[i], cls: ['interceptor', 'gunboat', 'patrol'][i % 3], color: BOAT_COLORS[i + 1], slot: i + 1, bot: true });
+  for (let i = 0; i < o.bots; i++) roster.push({ id: `bot${i}`, name: BOT_NAMES[i], cls: randomClass(), color: BOAT_COLORS[i + 1], slot: i + 1, bot: true });
   const slots = roster.map((_, i) => i).sort(() => Math.random() - 0.5);
   roster.forEach((r, i) => { r.slot = slots[i]; });
   app.race?.stop();
@@ -338,15 +422,15 @@ function showLobby() {
   const host = s instanceof HostSession;
   $('lobby-host').hidden = !host;
   $('start').hidden = !host;
-  cards($('l-boats'), boatCards(), app.cls, (k) => { app.cls = k; store.set('rs.cls', k); s.setClass(k); });
+  shipCards($('l-ships'), app.cls, pickShip);
 }
 
 function renderLobby(m) {
   const s = app.session;
   if (!s) return;
   $('lobby-code').textContent = m.code;
-  $('players').innerHTML = m.players.map((p) => `<li><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b><span class="faint">${esc(BOATS[p.cls]?.name ?? '')}</span>${p.host ? '<span class="chip">host</span>' : ''}${p.id === s.id ? '<span class="chip">you</span>' : ''}</li>`).join('')
-    + (m.settings.bots ? `<li class="faint">+ up to ${m.settings.bots} computer racer${m.settings.bots === 1 ? '' : 's'}</li>` : '');
+  $('players').innerHTML = m.players.map((p) => `<li><span class="dot" style="background:${p.color}"></span>${SHIPS[p.cls] ?? ''}<b>${esc(p.name)}</b><span class="faint">${esc(BOATS[p.cls]?.name ?? '')}</span>${p.host ? '<span class="chip">host</span>' : ''}${p.id === s.id ? '<span class="chip">you</span>' : ''}</li>`).join('')
+    + (m.settings.bots ? `<li class="bots">+ up to ${m.settings.bots} computer ship${m.settings.bots === 1 ? '' : 's'}</li>` : '');
   const t = TRACKS[m.settings.track];
   $('lobby-msg').textContent = `${t.name}, ${m.settings.laps} lap${m.settings.laps === 1 ? '' : 's'}. ${s instanceof HostSession ? 'Share the code; start when everyone is in.' : 'Waiting for the host to start…'}`;
   if (s instanceof HostSession) {
@@ -367,8 +451,8 @@ function raceFrom(m) {
 
 function setup() {
   $('name').value = store.get('rs.name', '');
-  cards($('boats'), boatCards(), app.cls, (k) => { app.cls = k; store.set('rs.cls', k); });
-  cards($('tracks'), trackCards(), app.track, (k) => { app.track = k; store.set('rs.track', k); if (app.race?.attract) startAttract(); });
+  shipCards($('ships'), app.cls, pickShip);
+  trackCards($('tracks'), app.track, (k) => { app.track = k; store.set('rs.track', k); if (app.race?.attract) startAttract(); });
   $('l-track').innerHTML = Object.entries(TRACKS).map(([k, t]) => `<option value="${k}">${esc(t.name)}</option>`).join('');
   $('solo').onclick = () => startSolo();
   $('host').onclick = () => hostRoom();
@@ -385,7 +469,10 @@ function setup() {
   for (const [id, key] of [['l-track', 'track'], ['l-laps', 'laps'], ['l-bots', 'bots']]) {
     $(id).onchange = (e) => app.session?.setSettings({ [key]: key === 'track' ? e.target.value : Number(e.target.value) });
   }
-  $('results-menu').onclick = () => leaveRace(true);
+  $('resume').onclick = () => togglePause(false);
+  $('pause-cam').onclick = () => cycleCamera();
+  $('pause-sound').onclick = () => toggleSound();
+  $('quit').onclick = () => leaveRace(true);
   $('quality').value = store.get('rs.quality', 'high');
   $('quality').onchange = (e) => { store.set('rs.quality', e.target.value); location.reload(); };
   if (usingLocal) menuMsg('Local test mode: rooms run through the dev server, between tabs on this computer (add ?firebase to use Firebase).');
@@ -395,14 +482,16 @@ function boot() {
   try {
     app.stage = new Stage($('view'), { quality: store.get('rs.quality', 'high') });
   } catch (e) {
-    $('loading').textContent = `This browser can't show 3-D graphics (WebGL): ${e.message}`;
+    $('loading').innerHTML = `<span>This browser can't show 3-D graphics (WebGL is off or unsupported).</span><span class="faint">${esc(e.message)}</span>`;
     return;
   }
+  app.stage.onLost = () => showError('The graphics card reset. The game will reload when it comes back.');
   setup();
-  $('loading').hidden = true;
-  const room = new URLSearchParams(location.search).get('room');
   showMenu();
-  if (room) { $('code').value = room.toUpperCase(); menuMsg(`Invited to room ${room.toUpperCase()}: pick a boat and press Join room.`); }
+  // Hide the loading screen once the first frames are drawn
+  requestAnimationFrame(() => requestAnimationFrame(() => { $('loading').hidden = true; }));
+  const room = new URLSearchParams(location.search).get('room');
+  if (room) { $('code').value = room.toUpperCase(); menuMsg(`Invited to room ${room.toUpperCase()}: pick a ship and press Join.`); }
 }
 
 boot();
