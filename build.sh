@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 
 rm -rf _site
-mkdir -p _site/games/countries-game _site/games/ww2-map _site/games/ear-trainer _site/games/outlier _site/games/speedboat-racing _site/games/statecraft
+mkdir -p _site/games/countries-game _site/games/ww2-map _site/games/ear-trainer _site/games/outlier _site/games/speedboat-racing _site/games/statecraft _site/games/riptide-strike
 
 cp -R site/. _site/
 
@@ -27,5 +27,8 @@ cp -R "Speedboat Racing/public/." _site/games/speedboat-racing/
 
 # Statecraft: only its front end (public/). The multiplayer server runs on Render.
 cp -R "Statecraft/public/." _site/games/statecraft/
+
+# Riptide Strike: static front end (public/). Multiplayer is browser to browser; Firestore only pairs players.
+cp -R "Riptide Strike/public/." _site/games/riptide-strike/
 
 echo "Built _site/"

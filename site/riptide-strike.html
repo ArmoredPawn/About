@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Riptide Strike — Speedboat Combat Racing</title>
+  <link rel="icon" href="games/riptide-strike/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body class="game-page">
+  <nav class="backbar">
+    <a class="back" href="fun-projects.html">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Back
+    </a>
+  </nav>
+  <iframe class="game-frame" id="game" src="games/riptide-strike/" title="Riptide Strike — Speedboat Combat Racing"
+          allow="clipboard-write; fullscreen; autoplay" onload="this.contentWindow.focus()"></iframe>
+  <script>
+    // An invite link (?room=CODE) opens the game with the code filled in
+    const room = new URLSearchParams(location.search).get('room');
+    if (room) document.getElementById('game').src = `games/riptide-strike/?room=${encodeURIComponent(room)}`;
+  </script>
+</body>
+</html>

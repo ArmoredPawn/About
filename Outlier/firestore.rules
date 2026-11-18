@@ -1,9 +1,13 @@
 rules_version = '2';
 
 // Paste this into Firebase console > Firestore Database > Rules, then Publish.
-// Browsers may open today's or an earlier daily puzzle, any Unlimited prompt and the Unlimited list.
-// Nothing else can be read, and nothing can be written: the seed script and the server use an admin key,
-// which these rules don't apply to.
+// These are the rules for the whole Firebase project, which two games share:
+// - Deep Dive (this folder): browsers may open today's or an earlier daily puzzle, any Unlimited prompt and the
+//   Unlimited list. Nothing else of it can be read, and nothing written: the seed script and the server use an
+//   admin key, which these rules don't apply to.
+// - Riptide Strike (../Riptide Strike): boatRooms holds the room codes players use to find each other. A host
+//   claims a four-letter code; a joiner leaves a connection offer under it; the host answers it. Once the two
+//   browsers are connected the documents are deleted. Nothing else is stored, and sizes are capped.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /daily/{day} {
@@ -14,6 +18,29 @@ service cloud.firestore {
     }
     match /meta/public {
       allow get: if true;
+    }
+
+    match /boatRooms/{code} {
+      function room(d) {
+        return d.keys().hasOnly(['host', 'created', 'open']) && d.host is string && d.host.size() <= 16
+          && d.created is int && d.open is bool;
+      }
+      allow get: if true;
+      allow create: if code.matches('^[A-Z]{4}$') && room(request.resource.data);
+      // The host opens and closes its room; a room abandoned for six hours can be claimed again
+      allow update: if room(request.resource.data)
+        && (request.resource.data.host == resource.data.host || resource.data.created < request.time.toMillis() - 21600000);
+      allow delete: if true;
+
+      match /peers/{peer} {
+        allow get, list: if true;
+        allow create: if peer.size() <= 16 && request.resource.data.keys().hasOnly(['offer', 'name', 'created'])
+          && request.resource.data.offer is string && request.resource.data.offer.size() < 16000
+          && request.resource.data.name is string && request.resource.data.name.size() <= 30;
+        allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer'])
+          && request.resource.data.answer is string && request.resource.data.answer.size() < 16000;
+        allow delete: if true;
+      }
     }
   }
 }

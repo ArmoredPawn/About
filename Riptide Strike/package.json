@@ -1,0 +1,11 @@
+{
+  "name": "riptide-strike",
+  "version": "1.0.0",
+  "description": "A 3-D speedboat combat racer with room-code multiplayer over WebRTC (Firebase for matchmaking).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.js",
+    "test": "node --test --test-force-exit"
+  }
+}
