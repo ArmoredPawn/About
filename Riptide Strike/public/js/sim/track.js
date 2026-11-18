@@ -9,7 +9,7 @@ export const LANE = 50; // how far either side of the racing line counts as on t
 export const TRACKS = {
   atoll: {
     name: 'Coral Atoll', blurb: 'Turquoise lagoon, palm islands and a fast sweeping loop. Calm water, high sun.',
-    waves: 'calm', seed: 11,
+    waves: 'calm', seed: 11, hdri: 'kloofendal_48d_partly_cloudy_puresky',
     sky: { elevation: 38, azimuth: 135, turbidity: 4, rayleigh: 1.1, mie: 0.004 },
     water: { deep: '#0a4f63', shallow: '#1aa3a8' }, fog: '#bcd8e6', fogDensity: 0.00038,
     island: { sand: '#e8d6a8', grass: '#3f7a35', rock: '#7b6f60', palms: true, height: 0.35 },
@@ -18,7 +18,7 @@ export const TRACKS = {
   },
   fjord: {
     name: 'Fjord Run', blurb: 'Grey cliffs, cold choppy water and tight turns between granite islands.',
-    waves: 'choppy', seed: 23,
+    waves: 'choppy', seed: 23, hdri: 'kloofendal_overcast_puresky',
     sky: { elevation: 14, azimuth: 200, turbidity: 9, rayleigh: 2.2, mie: 0.008 },
     water: { deep: '#14323d', shallow: '#2c5560' }, fog: '#aeb8bf', fogDensity: 0.00085,
     island: { sand: '#8b8f86', grass: '#405238', rock: '#5d6266', palms: false, height: 0.9 },
@@ -27,7 +27,7 @@ export const TRACKS = {
   },
   harbor: {
     name: 'Sunset Harbour', blurb: 'Golden-hour swells off a rocky coast, with a long back straight for missiles.',
-    waves: 'rough', seed: 37,
+    waves: 'rough', seed: 37, hdri: 'belfast_sunset_puresky',
     sky: { elevation: 4.5, azimuth: 250, turbidity: 10, rayleigh: 3, mie: 0.01 },
     water: { deep: '#1a2f45', shallow: '#3c5a6e' }, fog: '#e0b48c', fogDensity: 0.00055,
     island: { sand: '#c9a77a', grass: '#56622e', rock: '#6e5b4d', palms: true, height: 0.55 },

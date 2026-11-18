@@ -4,9 +4,17 @@ A 3-D naval combat racer for the browser. Race fast warships round a course of g
 interceptor to a 72 m strike carrier, while you fight it out with guns, naval guns, missiles and air strikes. Play
 against computer ships, or with up to seven friends by sharing a four-letter room code.
 
-- **The sea:** rolling Gerstner swell that the boats really ride (the water you see and the water they float on are
-  the same waves), a physically based surface that reflects a scattered-light sky, foam on the crests, ripples, and
-  foaming wakes, bow spray and haze toward the horizon.
+- **The sea and sky:** each course has a real photographed sky (a high-dynamic-range panorama) that is the
+  background and lights everything; the sun's direction and strength, the horizon haze and the exposure are read
+  from the photo. Rolling Gerstner swell that the boats really ride (the water you see and the water they float on
+  are the same waves), foam on the crests, ripples, foaming wakes with V-shaped Kelvin arms, bow spray.
+- **The look:** bloom, a lens flare, a filmic colour grade, film grain, vignetting, colour fringes when you are hit,
+  a blur toward the edges at speed. Textured smoke and fire, flying wreckage, fires that keep burning on a damaged
+  ship, which lists as it takes on water and rolls over when it sinks. Weathered hulls, railings, navigation lights.
+- **Action:** a crane shot down over the grid during the countdown; when you sink someone the camera cuts to the
+  wreck (in slow motion when racing the computer; a shared online race can't slow down).
+- **Graphics:** Auto (chosen to suit the graphics chip), Fast, High or Ultra; the resolution adapts to keep the
+  frame rate up.
 - **Ships:** the Interceptor (16 m racing powerboat, the fastest), the Corvette (30 m stealth warship), the Destroyer
   (48 m, a 76 mm gun and launch cells for cruise missiles) and the Strike Carrier (72 m, a flight deck of strike jets).
   Bigger ships are tougher and hit harder, but are slower to get going and to turn, and ride the swell more steadily.
@@ -22,7 +30,8 @@ against computer ships, or with up to seven friends by sharing a four-letter roo
   Harbour (golden hour, rough swell).
 - **Multiplayer:** create a room, share the code or the invite link, pick boats, and the host starts the race.
   Computer racers fill the grid if the host wants them.
-- **Sound:** made on the fly (engine, water, guns, explosions, the lock tone); no sound files.
+- **Sound:** made on the fly (engine, water, guns, explosions, the lock tone); no sound files. Sounds are placed in
+  3-D where they happen, heard from the camera, dulled and delayed with distance, with an open-water echo.
 
 ## Controls
 
@@ -54,6 +63,9 @@ Publish.
 
 Direct browser-to-browser connections work on most home and mobile networks. Some school and office networks
 block them; the game then says so. (A TURN relay server would get round that, but isn't included.)
+
+The skies are from [Poly Haven](https://polyhaven.com/hdris) (CC0): Kloofendal 48d Partly Cloudy and Kloofendal
+Overcast (Greg Zaal, sky edits by Jarod Guest) and Belfast Sunset, in `public/assets/sky/`.
 
 three.js (0.170, MIT licence) is bundled in `public/vendor/three/`, so the game doesn't depend on a CDN that a
 network might block. Anything that goes wrong in the page shows an error box instead of a blank screen.

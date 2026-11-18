@@ -188,7 +188,11 @@ class Race {
   }
 
   tick(t) {
-    const dt = Math.min(0.05, (t - this.prev) / 1000);
+    const real = (t - this.prev) / 1000;
+    app.stage.adapt(real * 1000);
+    // Slow motion for a moment after we sink someone (racing the computer only: a shared race can't slow down)
+    this.slowT = Math.max(0, (this.slowT ?? 0) - Math.min(0.05, real));
+    const dt = Math.min(0.05, real) * (this.slowT > 0 ? 0.3 : 1);
     this.prev = t;
     const w = this.world;
     const me = w.boats.get(this.me);
@@ -217,11 +221,15 @@ class Race {
     });
     // The camera, the scene, the HUD
     if (me) {
-      if (this.attract || w.phase === 'countdown') this.cam.orbit(dt, me, w.t);
+      if (this.attract) this.cam.orbit(dt, me, w.t);
+      else if (w.phase === 'countdown') this.cam.intro(dt, me, 1 - w.countdown / 4);
       else this.cam.update(frozen ? 0 : dt, me, keys.has('v'));
+      // The edges blur at speed
+      if (!this.attract) app.stage.lens({ blur: me.dead ? 0 : Math.max(0, Math.min(1, (Math.abs(me.speed) / me.k.top - 0.55) / 0.45)) * 2.4 });
     }
     this.view.update(frozen ? 0 : dt);
-    app.stage.render();
+    app.stage.render(Math.min(0.05, real));
+    app.sound.listen(app.stage.camera);
     this.hud?.update(dt);
     if (me && !this.attract) {
       app.sound.engine(app.paused ? 0 : me.throttle, frozen ? 0 : me.speed, !me.dead && !frozen);
@@ -241,12 +249,27 @@ class Race {
     const s = app.sound;
     const far = (x, z) => (me ? Math.hypot(x - me.x, z - me.z) : 300);
     const slot = WEAPONS[e.w]?.slot;
-    if (e.t === 'fire') s.shot(e.w, far(e.x, e.z));
+    if (e.t === 'fire') s.shot(e.w, e.x, e.y, e.z);
     else if (e.t === 'impact') {
-      if (slot === 'gun' && !e.downed) { if (e.boat === this.me) s.hit(); else if (!e.boat) s.splash(far(e.x, e.z)); } else s.explosion(e.w, far(e.x, e.z));
-      if (me && e.w !== 'hmg' && e.w !== 'ciws' && far(e.x, e.z) < 80) this.cam.shake(1.2);
-    } else if (e.t === 'sunk') { const b = this.world.boats.get(e.id); s.explosion('boat', b ? far(b.x, b.z) : 200); }
-    else if (e.t === 'damaged' && e.id === this.me) { this.cam.shake(e.amount > 20 ? 2 : e.amount > 8 ? 1.1 : 0.4); s.hit(); }
+      if (slot === 'gun' && !e.downed) { if (e.boat === this.me) s.hit(); else if (!e.boat) s.splash(e.x, e.y, e.z); } else s.explosion(e.w, e.x, e.y, e.z);
+      if (me && slot !== 'gun') {
+        const d = far(e.x, e.z);
+        if (d < 120) this.cam.shake(1.4 * (1 - d / 120) + 0.3);
+        if (d < 90) app.stage.lens({ flash: 0.22 * (1 - d / 90) });
+      }
+    } else if (e.t === 'sunk') {
+      const b = this.world.boats.get(e.id);
+      if (b) s.explosion('boat', b.x, b.y, b.z);
+      // The kill cam: we sank them, so watch it go (in slow motion, racing the computer)
+      if (e.by === this.me && b && !this.session) {
+        this.slowT = 1.1;
+        this.cam.cut({ x: b.x, y: b.y, z: b.z, r: b.k.length, t: 1.2 });
+      }
+    } else if (e.t === 'damaged' && e.id === this.me) {
+      this.cam.shake(e.amount > 20 ? 2 : e.amount > 8 ? 1.1 : 0.4);
+      app.stage.lens({ aberr: Math.min(1, e.amount / 25) });
+      s.hit();
+    }
     else if (e.t === 'crash' && e.id === this.me) this.cam.shake(0.9);
     else if (e.t === 'go') s.beep(true);
     else if (e.t === 'pickup' && e.boat === this.me) s.pickup();
@@ -473,14 +496,20 @@ function setup() {
   $('pause-cam').onclick = () => cycleCamera();
   $('pause-sound').onclick = () => toggleSound();
   $('quit').onclick = () => leaveRace(true);
-  $('quality').value = store.get('rs.quality', 'high');
+  $('quality').value = savedQuality();
   $('quality').onchange = (e) => { store.set('rs.quality', e.target.value); location.reload(); };
   if (usingLocal) menuMsg('Local test mode: rooms run through the dev server, between tabs on this computer (add ?firebase to use Firebase).');
 }
 
+// The graphics level chosen on the menu (the old 'low' is now 'fast')
+function savedQuality() {
+  const q = store.get('rs.quality', 'auto');
+  return q === 'low' ? 'fast' : q;
+}
+
 function boot() {
   try {
-    app.stage = new Stage($('view'), { quality: store.get('rs.quality', 'high') });
+    app.stage = new Stage($('view'), { quality: savedQuality() });
   } catch (e) {
     $('loading').innerHTML = `<span>This browser can't show 3-D graphics (WebGL is off or unsupported).</span><span class="faint">${esc(e.message)}</span>`;
     return;

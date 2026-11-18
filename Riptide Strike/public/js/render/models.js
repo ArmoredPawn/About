@@ -101,6 +101,69 @@ export function makeBoat(cls, k, color, number = 1) {
   return cls === 'interceptor' ? makeRacer(cls, k, color) : makeWarship(cls, k, color, number);
 }
 
+// Wear and tear on a warship's hull: grime streaking down from the deck edge, rust weeping from the scuppers and
+// anchor, darker salt-stained paint near the waterline, and slightly uneven plating. Baked into the colours.
+function weather(geometry, L, H) {
+  const p = geometry.attributes.position;
+  const c = geometry.attributes.color;
+  const hash = (n) => { const v = Math.sin(n * 91.3458) * 47453.5453; return v - Math.floor(v); };
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const u = (z / L + 0.5) * 60;
+    const cell = Math.floor(u);
+    const streak = hash(cell + (x > 0 ? 100 : 0));
+    const fromTop = Math.max(0, Math.min(1, 1 - (H - y) / (H * 0.8)));
+    let k = 1 - 0.07 * (hash(Math.floor(u * 0.5) * 7 + Math.floor(y * 2)) - 0.5);
+    if (streak > 0.72) k *= 1 - 0.22 * fromTop * (streak - 0.72) / 0.28;
+    if (y < H * 0.12 && y > -H * 0.2) k *= 0.88;
+    let r = c.getX(i) * k;
+    let g = c.getY(i) * k;
+    let b = c.getZ(i) * k;
+    if (streak > 0.93 && fromTop > 0.2) { r = r * 0.85 + 0.09; g *= 0.85; b *= 0.75; }
+    c.setXYZ(i, r, g, b);
+  }
+  c.needsUpdate = true;
+}
+
+// Railings round the deck edge, and navigation lights: red to port, green to starboard, white at the masthead
+// and the stern (they glow in the bloom, and show which way a ship is heading at a distance)
+const navLight = (color) => mat(`nav${color}`, () => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(6) }));
+function dress(group, hull, L, B, { rails = true, mastY = null } = {}) {
+  if (rails) {
+    const pts = [];
+    const post = [];
+    for (const s of [-1, 1]) {
+      for (let i = 1; i < 40; i++) {
+        const a = hull.deckAt((i - 1) / 40);
+        const b2 = hull.deckAt(i / 40);
+        for (const h of [0.55, 1.05]) pts.push(s * (a.half - 0.15), a.y + h, a.z, s * (b2.half - 0.15), b2.y + h, b2.z);
+        if (i % 2 === 0) post.push(s * (b2.half - 0.15), b2.y, b2.z, s * (b2.half - 0.15), b2.y + 1.05, b2.z);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([...pts, ...post], 3));
+    group.add(new THREE.LineSegments(g, mat('rail', () => new THREE.LineBasicMaterial({ color: 0x9aa3ab }))));
+  }
+  const ball = new THREE.SphereGeometry(Math.max(0.18, B * 0.02), 8, 6);
+  const mid = hull.deckAt(0.62);
+  for (const [s, color] of [[-1, 0xff2a1a], [1, 0x22ff5a]]) {
+    const m = new THREE.Mesh(ball, navLight(color));
+    m.position.set(s * (mid.half + 0.1), mid.y + 1.4, mid.z);
+    group.add(m);
+  }
+  const stern = new THREE.Mesh(ball, navLight(0xffffff));
+  const st = hull.deckAt(0.02);
+  stern.position.set(0, st.y + 1.2, st.z - 0.2);
+  group.add(stern);
+  if (mastY) {
+    const top = new THREE.Mesh(ball, navLight(0xffffff));
+    top.position.set(0, mastY, mastY > 0 ? hull.deckAt(0.5).z : 0);
+    group.add(top);
+  }
+}
+
 function makeRacer(cls, k, color) {
   const L = k.length;
   const B = k.beam;
@@ -200,6 +263,7 @@ function makeRacer(cls, k, color) {
     pod.castShadow = true;
     group.add(pod);
   }
+  dress(group, hull, L, B, { rails: false });
   // A racing number panel on each side of the cabin
   group.userData = { hmg, cannon, radar, length: L, beam: B };
   return group;
@@ -359,10 +423,12 @@ function makeWarship(cls, k, color, number) {
   const group = new THREE.Group();
   const hull = hullGeometry(L, B, D, H, color, 'navy');
   const hullMat = mat('navyHull', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.15, side: THREE.DoubleSide }));
+  weather(hull.geometry, L, H);
   const hullMesh = new THREE.Mesh(hull.geometry, hullMat);
   hullMesh.castShadow = true;
   hullMesh.receiveShadow = true;
   group.add(hullMesh);
+  dress(group, hull, L, B, { rails: cls !== 'carrier' });
   const deck = new THREE.Mesh(deckGeometry(hull, L), deckMat());
   deck.receiveShadow = true;
   group.add(deck);

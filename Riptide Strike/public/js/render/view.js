@@ -140,8 +140,15 @@ export class View {
       const g = v.group;
       const sunkFor = b.dead ? t - (b.respawnAt - 3) : 0;
       g.visible = !(b.dead && sunkFor > 2.7);
-      g.position.set(b.x, b.y, b.z);
-      g.rotation.set(-b.pitch, b.h, b.roll, 'YXZ');
+      // A badly damaged ship lists to one side as it takes on water; a sunk one rolls over, its bow lifts and it
+      // goes down
+      v.listSide ??= Math.random() < 0.5 ? -1 : 1;
+      const hurt = b.hp / b.k.hp;
+      const listTo = b.dead ? 0 : hurt < 0.4 ? ((0.4 - hurt) / 0.4) * 0.09 * v.listSide : 0;
+      v.list = (v.list ?? 0) + (listTo - (v.list ?? 0)) * Math.min(1, dt * 0.8);
+      const down = b.dead ? Math.min(2.7, sunkFor) : 0;
+      g.position.set(b.x, b.y - down * down * (0.6 + b.k.length * 0.012), b.z);
+      g.rotation.set(-b.pitch - down * 0.09, b.h, b.roll + v.list + v.listSide * down * 0.22, 'YXZ');
       g.userData.hmg.rotation.y = b.aim?.yaw ?? 0;
       g.userData.cannon.rotation.y = b.aim?.yaw ?? 0;
       g.userData.radar.rotation.y = t * 4;
@@ -195,7 +202,7 @@ export class View {
         p.userData.lamp.material.color.set(next ? 0x6bff8f : 0xffffff);
       }
     }
-    this.fx.setScale(this.stage.height);
+    this.fx.setScale(this.stage.height * (this.stage.ratio ?? 1));
     this.fx.update(dt);
     if (me) this.stage.follow(me.x, me.z);
   }
