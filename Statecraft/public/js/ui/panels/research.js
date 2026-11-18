@@ -6,8 +6,8 @@ import { TECH_FIELDS } from '../../engine/data/world.js';
 import { projectCost, projectWeeks, projectNeeds, researchSpeed, maxResearch, MAX_TECH } from '../../engine/science.js';
 import { confirmBox, modal, selectField } from '../dialogs.js';
 import { space } from './space.js';
-import { DESIGN_KINDS, designStats } from '../../engine/designs.js';
-import { blueprint, orderDialog } from '../design.js';
+import { DESIGN_KINDS, MAX_DESIGNS } from '../../engine/designs.js';
+import { designCard, kindIcon } from '../design.js';
 
 const NEED_NAMES = { chip: 'semiconductors', uran: 'uranium' };
 
@@ -59,26 +59,54 @@ export function research(ctx) {
   );
 }
 
-// Our own tanks, vehicles, aircraft and warships
+// Our own tanks, vehicles, aircraft and warships: the bureau's front desk
 function design(ctx) {
   const me = ctx.state.you;
   const mine = Object.values(me.designs ?? {});
   const kinds = Object.entries(DESIGN_KINDS);
-  return h('div',
-    h('p.muted.small', 'Design our own weapons part by part: hull, gun, armour, engines, radar and more. The best parts need research in the fields shown. Save and name a design, then order the factories to build it (here, or in Military, Weapons). The better the design, the more every unit built to it is worth.'),
-    h('div.row.wrap.gap', { style: { margin: '10px 0' } }, kinds.map(([k, d]) => h('button.btn.small', { onclick: () => ctx.openDesigner({ kind: k }) }, `＋ New ${d.name.toLowerCase()}`))),
-    h('button.btn.primary', { onclick: () => ctx.openDesigner({}) }, 'Open the design bureau'),
-    h('div.section', h('h3', `Our designs (${mine.length})`),
-      mine.length ? h('div.list', mine.map((d) => h('div.item',
-        h('div.item-head', h('span.name', d.name), h('span.mono.small', `×${designStats(d.kind, d.parts).edge.toFixed(2)}`)),
-        h('div.meta', `${DESIGN_KINDS[d.kind].name}${d.built ? ` · ${d.built.toLocaleString('en')} built` : ' · not built yet'}`),
-        h('div.spied-blueprint', blueprint(d.kind, d.parts, { small: true })),
-        h('div.actions',
-          h('button.btn.small.primary', { onclick: () => orderDialog(ctx, d) }, 'Build…'),
-          h('button.btn.small', { onclick: () => ctx.openDesigner({ design: d }) }, d.built ? 'Improve…' : 'Edit…'))))) : h('div.empty', 'None yet.')),
-    h('div.section', h('h3', 'In service'),
-      h('table.tbl', h('tbody', kinds.map(([k, d]) => h('tr', h('td', d.name), h('td.num', `×${(me.edge?.[k] ?? 1).toFixed(2)}`), h('td.faint.small', k === 'vehicles' ? `${(me.vehicles ?? 0).toLocaleString('en')} vehicles` : 'rating of the force')))))));
+  const filter = mine.some((d) => d.kind === ctx.ui.designKind) ? ctx.ui.designKind : 'all';
+  const shown = mine.filter((d) => filter === 'all' || d.kind === filter).sort((a, b) => (b.built ?? 0) - (a.built ?? 0) || a.name.localeCompare(b.name));
+  const present = kinds.filter(([k]) => mine.some((d) => d.kind === k));
+  const setFilter = (k) => { ctx.ui.designKind = k; ctx.setSub('research', 'design'); };
+  return h('div.dz',
+    h('div.dz-hero',
+      h('div.dz-hero-text',
+        h('h3', 'Design bureau'),
+        h('p', 'Draw up our own weapons part by part, then have the factories build them. The better the design, the more every unit built to it is worth.')),
+      h('div.dz-hero-foot',
+        h('span.dz-count', h('b', String(mine.length)), ` of ${MAX_DESIGNS} designs`),
+        h('button.btn.primary.small', { onclick: () => ctx.openDesigner({ kind: filter === 'all' ? 'tanks' : filter }) }, 'Open the bureau'))),
+    h('div.section',
+      h('h3', 'Start a new design'),
+      h('div.dz-kinds', kinds.map(([k, d]) => {
+        const n = mine.filter((x) => x.kind === k).length;
+        return h('button.dz-kind', { type: 'button', onclick: () => ctx.openDesigner({ kind: k }) },
+          kindIcon(k), h('span.dz-kind-name', d.name), h('span.dz-kind-sub', n ? `${n} saved` : 'none yet'), h('span.dz-plus', { 'aria-hidden': 'true' }, '＋'));
+      }))),
+    h('div.section',
+      h('div.dz-sec-head', h('h3', 'Our designs'), mine.length ? h('span.faint.small', `${mine.length}`) : null),
+      present.length > 1 ? h('div.seg.dz-filter', { role: 'group', 'aria-label': 'Show' },
+        h('button', { 'aria-pressed': String(filter === 'all'), onclick: () => setFilter('all') }, 'All'),
+        present.map(([k, d]) => h('button', { 'aria-pressed': String(filter === k), title: d.name, onclick: () => setFilter(k) }, kindIcon(k)))) : null,
+      shown.length ? h('div.dz-list', shown.map((d) => designCard(ctx, d)))
+        : h('div.dz-empty',
+          h('div.dz-empty-art', kindIcon('tanks'), kindIcon('aircraft'), kindIcon('ships')),
+          h('b', 'No designs yet'),
+          h('p.muted.small', 'Pick what to design above. Parts with a lock need more research in the field shown.'))),
+    h('div.section',
+      h('h3', 'Forces in service'),
+      h('div.dz-service', kinds.map(([k, d]) => {
+        const e = me.edge?.[k] ?? 1;
+        const pos = (v) => `${Math.max(0, Math.min(100, ((v - 0.75) / 0.65) * 100))}%`;
+        return h('div.dz-svc',
+          h('div.dz-svc-head', kindIcon(k), h('span', SHORT_KIND[k]), h('b.mono', { class: e > 1.005 ? 'good' : e < 0.995 ? 'bad' : '' }, `×${e.toFixed(2)}`)),
+          h('div.dz-gauge', { title: 'From ×0.75 to ×1.40; the mark is the standard model' }, h('i.dz-gauge-std', { style: { left: pos(1) } }), h('i.dz-gauge-dot', { style: { left: pos(e) } })),
+          h('span.faint.tiny', k === 'vehicles' ? `${(me.vehicles ?? 0).toLocaleString('en')} vehicles` : e > 1.005 ? 'better than standard' : e < 0.995 ? 'below standard' : 'standard model'));
+      })),
+      h('p.faint.small', { style: { marginTop: '8px' } }, 'Each arm\'s rating moves toward its designs as new units are built to them. Order more from here or from Military, Weapons.')));
 }
+
+const SHORT_KIND = { tanks: 'Tanks', vehicles: 'Vehicles', aircraft: 'Aircraft', ships: 'Warships' };
 
 function licence(ctx, field, leaders) {
   const s = ctx.state;

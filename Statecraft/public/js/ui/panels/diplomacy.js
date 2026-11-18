@@ -10,7 +10,7 @@ import { warNotice, caseMade, justifyDialog } from '../attack.js';
 import { armAndFund, aidDialog as armDialog } from './proxy.js';
 import { fmtQty } from '../../engine/trade.js';
 import { DESIGN_KINDS, designStats } from '../../engine/designs.js';
-import { blueprint } from '../design.js';
+import { blueprintFrame } from '../design.js';
 
 const TARIFFS = [0, 10, 25, 50, 100];
 
@@ -252,7 +252,7 @@ function spiedSection(ctx, id, c) {
       h('div.list', { style: { marginTop: '6px' } }, sp.designs.map((d) => h('div.item',
         h('div.item-head', h('span.name', d.name), h('span.mono.small', `×${designStats(d.kind, d.parts).edge.toFixed(2)}`)),
         h('div.meta', `${DESIGN_KINDS[d.kind].name} · ${d.built ? `${num(d.built)} built` : 'not built yet'}`),
-        h('div.spied-blueprint', blueprint(d.kind, d.parts, { small: true })))))) : h('p.muted.small', { style: { marginTop: '6px' } }, 'No weapons of their own design.'),
+        blueprintFrame(d.kind, d.parts, { small: true }))))) : h('p.muted.small', { style: { marginTop: '6px' } }, 'No weapons of their own design.'),
     deals.length ? h('div', { style: { marginTop: '8px' } }, h('b.small', 'Secret deals'), h('div.list', { style: { marginTop: '6px' } }, deals.map((t) => h('div.item', h('div.meta', { style: { color: 'var(--ink)' } }, `${nationName(s, t.a)} sells ${nationName(s, t.b)} ${RESOURCE_INFO[t.res].name.toLowerCase()}${t.exposed ? ' (now public)' : ''}`), t.exposed ? null : h('div.actions', h('button.btn.small.ghost', { title: t.neutral ? 'As a neutral country we can broadcast it: it makes the news and every country sees its convoys. Both countries will resent it. To warn just one country, use the chat.' : 'Broadcast it: it makes the news and every country sees its convoys. Both countries will resent it.', onclick: async () => { if (await confirmBox('Broadcast this secret deal?', `${nationName(s, t.a)} is secretly selling ${RESOURCE_INFO[t.res].name.toLowerCase()} to ${nationName(s, t.b)}. Broadcasting it puts it in the news and its convoys on every map; both countries will hold it against us.`, { ok: 'Broadcast it' })) ctx.send({ type: 'dealExpose', id: t.id }); } }, 'Broadcast it')))))) : null,
     pactsSpied(ctx, (s.spiedPacts ?? []).filter((t) => t.a === id || t.b === id)),
     h('p.faint.small', { style: { marginTop: '6px' } }, 'Their armies on the map show exact numbers, and what each is running short of; some of their fleets show where they are headed.'));
